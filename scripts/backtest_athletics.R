@@ -17,7 +17,11 @@ MAX_PER_RUN <- as.integer(Sys.getenv("CITIUS_BT_MEETS", "25"))
 
 champs      <- readRDS(file.path(OUT, "championship_results.rds"))
 calibration <- readRDS(file.path(OUT, "calibration.rds"))
-half_life   <- readRDS(file.path(OUT, "half_life.rds"))
+# Half-life tuned on ranking skill rather than next-result MAE. fit_half_life()
+# optimises point prediction, which favours recency (180 days) and leaves
+# w_total below 1 for most athletes - so ability_se dominates and favourites are
+# under-rated. 730 days costs no measurable skill and halves the calibration gap.
+half_life   <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "730"))
 
 clean <- flag_implausible(champs)[!is.na(event_id) & !is.na(perf)]
 finals <- clean[!is.na(place) &
