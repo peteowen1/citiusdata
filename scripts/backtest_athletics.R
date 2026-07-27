@@ -36,7 +36,11 @@ finals <- clean[!is.na(place) &
 pool <- unique(finals[, .(competition_id, comp_start)])[!is.na(comp_start) &
                                                           comp_start >= as.Date("2016-01-01")]
 setorder(pool, comp_start)
-TARGET <- 250L
+# All meets with finals, not a sample. The old 250 cap dated from when each
+# refit took 17s; restricting history to the meet's own events made it 2.5s, so
+# the full set is ~35 minutes rather than four hours. At 250 meets the backtest
+# used only 13% of the 13,108 available finals.
+TARGET <- as.integer(Sys.getenv("CITIUS_BT_TARGET", "900"))
 if (nrow(pool) > TARGET) pool <- pool[round(seq(1, .N, length.out = TARGET))]
 
 todo <- pool[!file.exists(file.path(BT_CACHE, paste0(competition_id, ".rds")))]

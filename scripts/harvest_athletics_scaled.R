@@ -60,9 +60,21 @@ todo_c <- comps[!file.exists(file.path(COMP_CACHE, paste0(competition_id, ".rds"
 if (nrow(todo_c)) {
   n <- min(nrow(todo_c), MAX_COMPS)
   cli::cli_alert_info("Stage 1: {n} of {nrow(todo_c)} competition{?s} remaining.")
+  # Page only the days the meet actually ran. 603 of 1,120 known meets are one
+  # day long, so a blanket 1:12 wasted 84% of requests — 13,440 day-pages issued
+  # against 2,161 needed. Sampling 30 meets found none with events beyond its
+  # listed duration, so the bound is safe; +1 covers a listing off by a day.
+  #
+  # Deliberately NOT an early stop on the first empty day: day pages are not
+  # contiguous (competition 7134069 has events on days 1, 9, 11 and 12), so
+  # stopping at a gap would silently lose most of a championship.
+  todo_c[, dur := as.integer(end - start) + 1L]
+  todo_c[is.na(dur) | dur < 1L, dur := 12L]   # unknown duration: sweep fully
+  todo_c[, dur := pmin(dur + 1L, 12L)]        # +1 buffer, capped
   for (i in seq_len(n)) {
     cid <- todo_c$competition_id[i]
-    r <- tryCatch(competition_results(cid), error = function(e) NULL)
+    r <- tryCatch(competition_results(cid, days = seq_len(todo_c$dur[i])),
+                  error = function(e) NULL)
     if (!is.null(r) && nrow(r)) {
       r[, `:=`(comp_name = todo_c$name[i], comp_start = todo_c$start[i],
                comp_tier = todo_c$tier[i])]
