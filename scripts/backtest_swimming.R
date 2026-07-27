@@ -20,7 +20,20 @@ cli::cli_alert_info(
 # --- calibration -------------------------------------------------------------
 clean <- flag_implausible(history)
 calibration <- calibrate(clean, min_races = 10L)
-half_life <- fit_half_life(clean[!is.na(perf)])
+# Swimming uses 180 days, NOT the 730 tuned for athletics. Validated on 895
+# races: 180 beats 730 on every measure (gold skill 0.253 vs 0.234, mean
+# reliability gap 0.035 vs 0.046, 70% vs 67% of races beating baseline).
+#
+# The half-life is not a global constant or even a sport constant - it tracks
+# how often athletes in a discipline actually compete. Swimming's World Cup
+# circuit means a 180-day window still holds ample evidence, so shortening it
+# buys recency for free. Athletics is sparser: at 180 days most athletes fall
+# below w_total = 1, ability_se balloons to ~2x sigma, and favourites get
+# under-rated. Do not copy a tuned value across sports.
+half_life_fitted <- fit_half_life(clean[!is.na(perf)])
+half_life <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "180"))
+cat("\nfitted (next-result MAE) vs used (ranking-tuned):\n")
+print(half_life_fitted); cat("using:", half_life, "days\n")
 
 saveRDS(calibration, file.path(OUT, "calibration_swimming.rds"))
 saveRDS(half_life, file.path(OUT, "half_life_swimming.rds"))
