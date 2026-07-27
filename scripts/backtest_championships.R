@@ -60,13 +60,13 @@ for (cid in unique(finals_all$competition_id)) {
                           calibration = calibration, seed = 11L)
     mp <- medal_probs(sim)
     key <- paste(cid, ev)
-    mp[, `:=`(event_id = key, championship = ch_name, cut_date = cut_date)]
+    mp[, `:=`(race_id = key, championship = ch_name, cut_date = cut_date)]
     all_pred[[length(all_pred) + 1L]] <- mp
 
     won <- field[place == 1L]$athlete_id
     medalled <- field[place <= 3L]$athlete_id
     all_out[[length(all_out) + 1L]] <- data.table(
-      event_id = key, championship = ch_name,
+      race_id = key, championship = ch_name,
       athlete_id = mp$athlete_id,
       hit = mp$athlete_id %in% as.character(won),
       hit_medal = mp$athlete_id %in% as.character(medalled))
@@ -77,7 +77,7 @@ pred <- rbindlist(all_pred, fill = TRUE)
 outc <- rbindlist(all_out, fill = TRUE)
 
 gold <- score_predictions(pred, outc, prob_col = "p_gold")
-medal <- score_predictions(pred, outc[, .(event_id, athlete_id, hit = hit_medal)],
+medal <- score_predictions(pred, outc[, .(race_id, athlete_id, hit = hit_medal)],
                            prob_col = "p_medal")
 
 cli::cli_h2("Gold")
