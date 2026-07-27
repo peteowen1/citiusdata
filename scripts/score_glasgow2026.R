@@ -88,6 +88,26 @@ if (!nrow(finals)) {
       top[, called := athlete_id == winner]
       cat(sprintf("favourite won %d of %d final%s (%.0f%%)\n", sum(top$called), nrow(top),
                   if (nrow(top) == 1) "" else "s", 100 * mean(top$called)))
+      # Where did the winner rank in our list? "Favourite won" is a harsh binary
+      # in a 12-strong field; rank shows whether a miss was a near-miss.
+      rk <- p[race_id %in% keep][order(race_id, -p_gold)][, .(rank = which(athlete_id ==
+              o[race_id == .BY$race_id & hit == TRUE]$athlete_id[1]), n = .N), by = race_id]
+      cat("winner's rank in our list:",
+          paste(sprintf("%s of %d", rk$rank, rk$n), collapse = ", "), "\n")
+
+      # Predictions come from entry lists, and athletes withdraw. Probability
+      # mass sitting on non-starters is a FIELD error, not a model error, and
+      # inflates apparent miscalibration -- so report it rather than absorb it.
+      cat("\n=== probability mass on athletes who never appeared ===\n")
+      appeared <- unique(finals[event_id %in% keep, .(race_id = event_id, athlete_id)])
+      ghost <- p[race_id %in% keep][!appeared, on = .(race_id, athlete_id)]
+      if (nrow(ghost)) {
+        gs <- ghost[, .(lost_gold = sum(p_gold), n = .N), by = race_id][order(-lost_gold)]
+        print(gs)
+        cat(sprintf("total: %.2f of %d gold probability (%.0f%%) on non-starters\n",
+                    sum(gs$lost_gold), length(keep), 100 * sum(gs$lost_gold) / length(keep)))
+        cat("Re-predict against actual start lists once published.\n")
+      } else cat("none - every predicted athlete started\n")
     }
   }
 }
