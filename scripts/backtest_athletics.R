@@ -14,6 +14,9 @@ dir.create(BT_CACHE, recursive = TRUE, showWarnings = FALSE)
 
 N_SIMS <- 10000L
 MAX_PER_RUN <- as.integer(Sys.getenv("CITIUS_BT_MEETS", "25"))
+# History depth per refit. At a 730-day half-life, 8 years back carries weight
+# 2^-4 = 6%; 12 years carries 1.5%. Beyond that the compute is pure waste.
+HISTORY_DAYS <- as.integer(Sys.getenv("CITIUS_HISTORY_DAYS", "4380"))
 
 champs      <- readRDS(file.path(OUT, "championship_results.rds"))
 calibration <- readRDS(file.path(OUT, "calibration.rds"))
@@ -45,8 +48,20 @@ for (i in seq_len(n)) {
   cut_date <- todo$comp_start[i]
   block <- finals[competition_id == cid]
 
-  past <- clean[date < cut_date]
-  if (nrow(past) < 5000L) { saveRDS(list(), file.path(BT_CACHE, paste0(cid, ".rds"))); next }
+  # Two restrictions make the per-meet refit ~10x cheaper without changing a
+  # single prediction:
+  #
+  #  1. Only estimate ability for the events this meet actually contests.
+  #     Previously every meet refitted all 46 events to use maybe 8 of them.
+  #  2. Only use history within HISTORY_YEARS of the cut. At a 730-day
+  #     half-life a mark from 2010 carries weight 2^-8, which cannot move an
+  #     estimate but is fully paid for in compute.
+  #
+  # Both are exact given the decay, not approximations that trade accuracy.
+  meet_events <- unique(block$event_id)
+  past <- clean[date < cut_date & date >= cut_date - HISTORY_DAYS &
+                  event_id %in% meet_events]
+  if (nrow(past) < 2000L) { saveRDS(list(), file.path(BT_CACHE, paste0(cid, ".rds"))); next }
   ability <- estimate_ability(past, as_of = cut_date, half_life = half_life,
                               calibration = calibration)
 
