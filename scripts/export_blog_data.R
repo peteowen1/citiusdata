@@ -400,15 +400,19 @@ cli::cli_alert_info(
 # because they answer different questions and each lies in its own way:
 #
 #   z         - standard deviations above the event mean. Keeps the elite tail
-#               legible, which percentile crushes. Negative for half the field,
-#               and its spread depends on how deep the event is.
-#   pct       - percentile within event, 0-100. Instantly readable and always
-#               positive, but compresses exactly where the interest is: the gap
-#               between 99.5 and 99.9 is the whole medal race.
+#               legible. Negative for half the field, and its spread depends on
+#               how deep the event is.
 #   pct_best  - predicted mark as a share of the best mark ON RECORD IN THIS
-#               DATASET. Deliberately NOT "% of world record": we do not hold
-#               ratified records, and claiming one we cannot verify would be
-#               worse than a slightly humbler denominator that is exactly true.
+#               DATASET. Always available, because the denominator is data we
+#               actually hold.
+#   pct_wr    - predicted mark as a share of the ratified WORLD RECORD, joined
+#               from data/world_records.csv. NA wherever that file has no entry
+#               for the event, and the site hides the option rather than showing
+#               a dash for every row.
+#
+# Percentile was dropped (2026-07-28, Pete): in the men's 100m the top six read
+# 100.0, 100.0, 99.9, 99.9, 99.9, 99.9 - it crushes the only part of the table
+# anyone cares about.
 #
 # A fourth scale Pete asked for - expected medal chance against a reference
 # field - is NOT here on purpose. It needs the package's own simulation
@@ -435,12 +439,68 @@ ratings <- ratings[!is.na(last_date) & as.numeric(AS_OF - last_date) <= RATING_A
 
 # Comparable scales, computed WITHIN event over the active population.
 ratings[, `:=`(z = (ability - mean(ability)) / stats::sd(ability),
-               pct = 100 * (frank(ability, ties.method = "average") - 0.5) / .N,
                pct_best = 100 * exp(ability - max(ability))), by = event_id]
-# sd() is NA for a single-athlete event, and exp(0)=100 for its lone member —
-# report the scales as missing rather than as a perfect score.
-ratings[is.na(z), z := NA_real_]
 ratings[, n_event := .N, by = event_id]
+# An event with ONE active athlete has no field to rank against. sd() is NA so z
+# takes care of itself, but pct would read 50 (a median percentile in a field of
+# one) and pct_best exactly 100 ("matched the best mark on record" — which is
+# their own). Both are arithmetically fine and editorially false, so all three
+# are reported missing. The earlier version of this guard only nulled z, which
+# left the two fabricated numbers shipping under a comment claiming otherwise.
+ratings[n_event <= 1L, `:=`(z = NA_real_, pct_best = NA_real_)]
+
+# --- % of world record -------------------------------------------------------
+# Records are HAND-MAINTAINED reference data, which is the category most likely
+# to be quietly wrong, so they live in one reviewable file with a source and a
+# checked-on date per row rather than being embedded here. Any event without an
+# entry gets NA and the site hides the option for it; a missing record shows as
+# nothing, never as a made-up denominator.
+#
+# Do NOT populate this from a general web scrape. An attempt on 2026-07-28
+# returned the WOMEN'S 100m as 10.61 when the record is 10.49 (Griffith-Joyner,
+# 1988, verified), along with stale marks for the 5000m, 10000m and 100m hurdles.
+# The failure mode is a summariser mis-reading a large table, and it is silent:
+# a wrong denominator makes every athlete in that event read wrong with nothing
+# erroring.
+#
+# Note on the men's marathon, because it caught this session out: 1:59:30 IS the
+# ratified record (Sabastian Sawe, London, 26 Apr 2026). It was wrongly dismissed
+# as Kipchoge's INEOS exhibition — which was 1:59:40, a different time. Do not
+# "correct" a fetched record from memory; check it.
+WR_FILE <- file.path(OUT, "world_records.csv")
+wr <- if (file.exists(WR_FILE)) fread(WR_FILE) else NULL
+if (!is.null(wr)) {
+  need <- c("event_id", "mark")
+  if (!all(need %in% names(wr))) {
+    cli::cli_abort("{.file world_records.csv} must have columns {.field {need}}.")
+  }
+  wr <- wr[!is.na(event_id) & !is.na(mark)]
+  # A header-only file reads back with LOGICAL columns, so the merge below fails
+  # on a type mismatch rather than simply matching nothing. Treat it as absent.
+  if (!nrow(wr)) wr <- NULL else wr[, event_id := as.character(event_id)]
+}
+if (!is.null(wr)) {
+  # parse_mark() handles the sexagesimal forms a records list actually uses
+  # ("1:59:30", "3:50.07") as well as plain "9.58"/"8.95"/"9126", and strips WA
+  # annotation suffixes. as.numeric() would silently NA every time-based record.
+  wr <- merge(wr[, .(event_id, wr_mark = parse_mark(mark))],
+              citius_events()[, .(event_id, orientation)], by = "event_id")
+  if (anyNA(wr$wr_mark)) {
+    cli::cli_abort(c("Unparseable mark in {.file world_records.csv}.",
+                     i = "Rows: {.val {wr[is.na(wr_mark)]$event_id}}"))
+  }
+  wr[, wr_perf := to_perf(wr_mark, orientation)]
+  ratings <- merge(ratings, wr[, .(event_id, wr_perf)], by = "event_id", all.x = TRUE)
+  # Same ratio-to-reference as pct_best, against the record instead of our best.
+  ratings[, pct_wr := 100 * exp(ability - wr_perf)]
+  ratings[, wr_perf := NULL]
+  cli::cli_alert_info(
+    "World records: {uniqueN(wr$event_id)} event{?s} have one; {uniqueN(ratings[is.na(pct_wr)]$event_id)} do not.")
+} else {
+  ratings[, pct_wr := NA_real_]
+  cli::cli_alert_warning(
+    "{.file world_records.csv} is {if (file.exists(WR_FILE)) 'empty' else 'missing'} - the % of WR scale is absent and the site will hide it.")
+}
 
 # Scales are computed over the FULL active population above — that is what makes
 # a percentile a percentile — but only the top slice is published. The full set
@@ -459,7 +519,7 @@ ratings <- merge(ratings, names_lk, by = "athlete_id", all.x = TRUE)
 ratings <- merge(ratings, citius_events()[, .(event_id, sport, discipline, sex)],
                  by = "event_id", all.x = TRUE)
 RATING_COLS <- c("athlete_id", "athlete_name", "event_id", "sport", "discipline", "sex",
-                 "ability", "ability_se", "z", "pct", "pct_best", "n", "w_total",
+                 "ability", "ability_se", "z", "pct_best", "pct_wr", "n", "w_total",
                  "n_event", "last_date")
 for (nm in setdiff(RATING_COLS, names(ratings))) ratings[, (nm) := NA]
 ratings <- ratings[, ..RATING_COLS]
