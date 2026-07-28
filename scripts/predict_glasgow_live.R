@@ -35,7 +35,13 @@ CUT <- min(res$date, na.rm = TRUE)
 champs <- readRDS(file.path(OUT, "championship_results.rds"))
 cal <- readRDS(file.path(OUT, "calibration.rds"))
 clean <- flag_implausible(champs)[!is.na(event_id) & !is.na(perf)]
-past <- clean[date < CUT & date >= CUT - 4380 & event_id %in% unique(res$event_id)]
+# Excluded by ID as well as by date (citiusdata#1). This script is the one most
+# exposed: it runs DURING the Games, so any re-harvest between now and the final
+# would put the heats it is predicting from into the ability estimates too.
+past <- clean[date < CUT & date >= CUT - 4380 & event_id %in% unique(res$event_id) &
+                (is.na(competition_id) | competition_id != GLASGOW)]
+stopifnot("history must not contain the competition being predicted" =
+            !any(past$competition_id == GLASGOW, na.rm = TRUE))
 ability <- estimate_ability(past, as_of = CUT, half_life = HALF_LIFE, calibration = cal)
 
 out <- list()

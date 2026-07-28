@@ -137,7 +137,14 @@ CUT <- min(results$date, na.rm = TRUE)
 champs <- readRDS(file.path(OUT, "championship_results.rds"))
 cal <- readRDS(file.path(OUT, "calibration.rds"))
 clean <- flag_implausible(champs)[!is.na(event_id) & !is.na(perf)]
-past <- clean[date < CUT & date >= CUT - 4380 & event_id %in% unique(results$event_id)]
+# Excluded by ID as well as by date. The date cut here is correct (CUT is the
+# Games' own first day), but citiusdata#1 showed how easily a date cut goes
+# wrong, and a leak would make this script score the model against races it had
+# already seen — while looking better, not worse.
+past <- clean[date < CUT & date >= CUT - 4380 & event_id %in% unique(results$event_id) &
+                (is.na(competition_id) | competition_id != GLASGOW)]
+stopifnot("history must not contain the competition being scored" =
+            !any(past$competition_id == GLASGOW, na.rm = TRUE))
 ab <- estimate_ability(past, as_of = CUT, half_life = HALF_LIFE, calibration = cal)
 
 scored <- results[!is.na(place) & place > 0L]

@@ -14,6 +14,9 @@ library(data.table); library(jsonlite)
 
 OUT <- here::here("citiusdata", "data")
 GAMES_DATE <- as.Date("2026-07-30")
+# The competition being forecast, excluded from its own history by ID. Glasgow
+# runs 27 Jul - 1 Aug, so GAMES_DATE alone does not cover it (citiusdata#1).
+GLASGOW_2026 <- 7187518L
 HALF_LIFE <- 730          # tuned on ranking skill, not next-result MAE
 N_SIMS <- 20000L
 
@@ -47,7 +50,31 @@ entries <- merge(entries, lookup, by = "key", all.x = TRUE)
 cli::cli_alert_info("Resolved {sum(!is.na(entries$athlete_id))} of {nrow(entries)} entries to an athlete id.")
 
 # --- ability -----------------------------------------------------------------
-clean <- flag_implausible(champs)[!is.na(event_id) & !is.na(perf) & date < GAMES_DATE]
+# Exclude the competition being predicted BY ID, not by date (citiusdata#1).
+#
+# The date cut alone was wrong and only safe by accident: GAMES_DATE is
+# 2026-07-30 while Glasgow runs 27 Jul - 1 Aug, so `date < GAMES_DATE` admits
+# days 1-3 of the very meet being forecast. It has never leaked because the
+# harvest happens to stop at 2026-07-26 -- the moment anyone re-harvests
+# mid-Games, finals enter the ability estimates and score_glasgow2026.R starts
+# scoring the model against races it has already seen, silently.
+#
+# An ID exclusion cannot be defeated by a date being off by a few days, and the
+# assertion below turns any future leak into a loud failure rather than a
+# quietly excellent-looking forecast.
+clean <- flag_implausible(champs)[!is.na(event_id) & !is.na(perf) &
+                                    date < GAMES_DATE &
+                                    (is.na(competition_id) | competition_id != GLASGOW_2026)]
+leak <- champs[competition_id == GLASGOW_2026 & date < GAMES_DATE]
+if (nrow(leak)) {
+  cli::cli_alert_warning(
+    "Excluded {nrow(leak)} in-Games result{?s} that the date cut would have admitted."
+  )
+}
+stopifnot(
+  "history must not contain the competition being predicted" =
+    !any(clean$competition_id == GLASGOW_2026, na.rm = TRUE)
+)
 ability <- estimate_ability(clean, as_of = GAMES_DATE, half_life = HALF_LIFE,
                             calibration = calibration)
 
