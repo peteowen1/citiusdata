@@ -30,6 +30,18 @@ if (is.null(res) || !nrow(res)) {
 }
 res[, athlete_id := as.character(athlete_id)]
 res[, rc := citius:::.round_class(round)]
+# A combined-events leg is NOT a round of the standalone event. The heptathlon
+# 200m is contested by heptathletes, and treating it as the 200m's first round
+# builds the final's field out of the wrong athletes entirely -- it put the
+# women's 200m, 100m hurdles and shot put finals on heptathlon fields. The
+# reporting of unraced entrants is what surfaced this: those three events showed
+# ~100% of gold probability sitting on athletes who had supposedly not raced,
+# because every athlete who HAD "raced" was in a different competition.
+n_comb <- sum(grepl("combined", res$round, ignore.case = TRUE))
+if (n_comb) {
+  cli::cli_alert_info("Dropping {n_comb} combined-events result{?s}; a heptathlon leg is not a round of the standalone event.")
+  res <- res[!grepl("combined", round, ignore.case = TRUE)]
+}
 
 CUT <- min(res$date, na.rm = TRUE)
 # Read only the events and window needed, from the partitioned store.
@@ -60,13 +72,50 @@ stopifnot("history must not contain the competition being predicted" =
             !any(past$competition_id == GLASGOW, na.rm = TRUE))
 ability <- estimate_ability(past, as_of = CUT, half_life = HALF_LIFE, calibration = cal)
 
+# --- entrants who have not raced yet ----------------------------------------
+# Top seeds receive a BYE straight into the semi-finals, so a field built from
+# round-1 contestants alone structurally excludes exactly the best athletes.
+# Measured at Glasgow: 7 byes in each 100m, including Omanyala, Ackeem Blake,
+# Zoe Hobbs and Amy Hunt -- and BOTH eventual champions, Emmanuel Eseme and Zoe
+# Hobbs, were dropped from the field of the race they went on to win.
+#
+# The gap closes on its own once semis are run, because byes appear there. It
+# only bites in the window after round 1 and before the semi, which is precisely
+# when a live re-prediction is most useful.
+entries <- tryCatch({
+  j <- jsonlite::fromJSON(file.path(OUT, "glasgow2026_entries.json"), simplifyVector = FALSE)
+  evs <- unlist(j$events)
+  nz <- function(z) if (is.null(z) || !length(z)) NA_character_ else as.character(z)
+  e <- rbindlist(lapply(j$rows, function(r) data.table(
+    event = evs[r[[1]] + 1], nation = nz(r[[2]]), athlete = nz(r[[3]]))), fill = TRUE)
+  e <- e[!grepl("Relay|T1[0-9]|T2[0-9]|T3[0-9]|T4[0-9]|T5[0-9]|F[0-9]{2}|SM[0-9]", event)]
+  e[, sex := fifelse(grepl("^Women", event), "W", fifelse(grepl("^Men", event), "M", NA_character_))]
+  e[, event_id := match_event(sub("^(Men's|Women's|Mixed)\\s+", "", event), sex)]
+  e <- e[!is.na(event_id)]
+  norm <- function(z) gsub("[^A-Z]", "", toupper(z))
+  src <- if (!is.null(champs)) champs else readRDS(file.path(OUT, "championship_results.rds"))
+  lk <- unique(as.data.table(src)[!is.na(athlete_name) & !is.na(athlete_id),
+                                  .(key = norm(athlete_name), athlete_id = as.character(athlete_id))])
+  lk <- lk[, .(athlete_id = athlete_id[1]), by = key]
+  e[, key := norm(athlete)]
+  merge(e, lk, by = "key", all.x = TRUE)[!is.na(athlete_id)]
+}, error = function(e) { cli::cli_alert_warning("No entry list; byes cannot be recovered."); NULL })
+
 out <- list()
 for (ev in sort(unique(res$event_id))) {
   if (is.na(ev)) next
   x <- res[event_id == ev]
   if (any(x$rc == "final")) next                       # already decided
   # Everyone who contested the earlier round, marks or not.
-  field <- unique(x$athlete_id)
+  raced <- unique(x$athlete_id)
+  # Plus entrants who have not raced at all: byes, and unavoidably also any
+  # withdrawals, which are indistinguishable until a later round is run. Keeping
+  # them costs some probability mass on non-starters; dropping them cost two
+  # gold medals at Glasgow, so the trade is clearly worth taking. The mass on
+  # unraced athletes is reported per event rather than absorbed silently.
+  unraced <- if (!is.null(entries))
+    setdiff(entries[event_id == ev]$athlete_id, raced) else character()
+  field <- union(raced, unraced)
   ent <- ability[event_id == ev & athlete_id %in% field]
   if (nrow(ent) < 4L) next
 
@@ -112,7 +161,13 @@ for (ev in sort(unique(res$event_id))) {
     max_position = n_final, wide = TRUE)
   r <- merge(r, pos, by = "athlete_id", all.x = TRUE)
   r[, `:=`(event_id = ev, contested_round = x$round[1], n_heats = n_heats,
-           field_size = length(field))]
+           field_size = length(field), n_unraced = length(unraced))]
+  r[, unraced := athlete_id %in% unraced]
+  if (length(unraced)) {
+    cli::cli_alert_info(
+      "{ev}: {length(unraced)} entrant{?s} carried in unraced (byes or withdrawals), holding {round(100 * sum(r[unraced == TRUE]$p_gold))}% of gold probability."
+    )
+  }
   out[[length(out) + 1L]] <- r
 }
 

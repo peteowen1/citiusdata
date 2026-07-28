@@ -49,10 +49,50 @@ pred <- setDT(arrow::read_parquet(latest))
 pred[, athlete_id := as.character(athlete_id)]
 cli::cli_alert_info("Scoring against {.file {basename(latest)}} ({nrow(pred)} row{?s}, {uniqueN(pred$event_id)} event{?s}).")
 
+# The two sides key athletes in DISJOINT namespaces. Entry-list predictions carry
+# a name-derived id (`athlete_key()` of the entry name, e.g. "HOBBSZOE"); the
+# results feed carries World Athletics numeric ids ("14499691"). Joining them on
+# `athlete_id` matched 0 of 110 finalists, and every downstream check then read
+# that absence as a MODELLING result: the winner was reported "not in our list"
+# and 45% of gold probability as sitting on non-starters. Both were false --
+# Eseme and Hobbs were predicted, at 1.6% and 1.3%.
+#
+# `athlete_key()` sorts name tokens, so it is invariant to given-first vs
+# surname-first and reproduces the prediction id exactly. This is a lossless
+# remap, not fuzzy matching.
+# The remap is confined to the finals-scoring block. `results$athlete_id` must
+# stay numeric: the ranking check further down joins it against ability estimates
+# from the World Athletics harvest, which is the numeric namespace.
+results[, athlete_id := as.character(athlete_id)]
+results[, pred_key := athlete_key(athlete_name)]
+pred_is_name_keyed <- !any(grepl("^[0-9]+$", pred$athlete_id))
+if (!pred_is_name_keyed) results[, pred_key := athlete_id]
+
 finals <- results[!is.na(place) & place > 0L &
                     grepl("final", round, ignore.case = TRUE) &
                     !grepl("semi", round, ignore.case = TRUE)]
-finals[, athlete_id := as.character(athlete_id)]
+# From here on `athlete_id` within `finals` is whatever the predictions use.
+finals[, athlete_id := as.character(pred_key)]
+
+# Fail loudly on a namespace mismatch. The previous silent failure produced a
+# confident wrong answer rather than an error, which is strictly worse: a
+# scoreboard that says the model missed every winner is indistinguishable from a
+# model that did.
+if (nrow(finals)) {
+  shared_ev <- intersect(unique(finals$event_id), unique(pred$event_id))
+  fin_ev <- finals[event_id %in% shared_ev]
+  hit_rate <- if (nrow(fin_ev)) mean(fin_ev$athlete_id %in% pred$athlete_id) else NA_real_
+  cli::cli_alert_info(
+    "Finalist->prediction id match: {round(100 * hit_rate)}% ({sum(fin_ev$athlete_id %in% pred$athlete_id)} of {nrow(fin_ev)})."
+  )
+  if (!is.na(hit_rate) && hit_rate < 0.5) {
+    cli::cli_abort(c(
+      "Only {round(100 * hit_rate)}% of finalists match a prediction by id.",
+      x = "Scores computed on this join would measure the join, not the model.",
+      i = "Check that predictions and results use the same athlete id namespace."
+    ))
+  }
+}
 
 cli::cli_h2("Finals")
 if (!nrow(finals)) {
@@ -107,12 +147,12 @@ if (!nrow(finals)) {
       contested <- unique(results[grepl("final", round, ignore.case = TRUE) &
                                     !grepl("semi", round, ignore.case = TRUE) &
                                     event_id %in% keep,
-                                  .(race_id = event_id, athlete_id)])
+                                  .(race_id = event_id, athlete_id = pred_key)])
       ghost <- p[race_id %in% keep][!contested, on = .(race_id, athlete_id)]
       # Split what remains: an athlete seen elsewhere at these Games was
       # eliminated earlier (a round-progression question, which simulate_rounds
       # handles), not a withdrawal.
-      at_games <- unique(results$athlete_id)
+      at_games <- unique(results$pred_key)
       ghost[, eliminated := athlete_id %in% at_games]
       cat(sprintf("  eliminated earlier : %.2f gold prob (%d athlete%s)\n",
                   sum(ghost[eliminated == TRUE]$p_gold), nrow(ghost[eliminated == TRUE]),
