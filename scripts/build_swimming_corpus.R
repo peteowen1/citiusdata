@@ -30,6 +30,20 @@ if (file.exists(f)) {
   say("worldaquatics: %s rows", format(nrow(wa), big.mark = ","))
 }
 
+# The MEET harvest, which the career harvest cannot replace. Athlete pages give
+# a swimmer's results but no competition id, no race grouping and no meet start
+# date -- so whole fields, race effects and any competition-level backtest all
+# depend on this source specifically. The same swims appear in both routes and
+# are merged below.
+f <- file.path(D, "swimming_history.rds")
+if (file.exists(f)) {
+  wm <- setDT(readRDS(f))
+  wm[, `:=`(source = "worldaquatics", is_best = FALSE)]
+  parts$wm <- wm
+  say("worldaquatics (meets): %s rows, %s competitions",
+      format(nrow(wm), big.mark = ","), format(uniqueN(wm$competition_id), big.mark = ","))
+}
+
 f <- file.path(D, "swimengland_rankings.rds")
 if (file.exists(f)) {
   se <- setDT(readRDS(f))
@@ -87,13 +101,19 @@ all[is.na(person_id), person_id := paste(source, athlete_id, sep = "|")]
 # the sense that a short-course and long-course swim are different performances.
 before <- nrow(all)
 all[, mark_r := round(mark, 2)]
-setorder(all, person_id, date, event_id, mark_r, -is_best)   # prefer full results
+# When the same swim arrives by two routes, KEEP THE RICHEST ROW. The meet
+# harvest carries competition_id, comp_start and race_key; the athlete harvest
+# carries none of them. Sorting only by is_best kept whichever happened to come
+# first and silently discarded the race structure.
+all[, richness := (!is.na(race_key)) + (!is.na(competition_id)) +
+                  (!is.na(comp_start)) + (is.na(is_best) | !is_best)]
+setorder(all, person_id, date, event_id, mark_r, -richness)
 all <- unique(all, by = c("person_id", "date", "event_id", "mark_r", "course"))
 say("deduped: %s -> %s rows (%s duplicate performance%s removed)",
     format(before, big.mark = ","), format(nrow(all), big.mark = ","),
     format(before - nrow(all), big.mark = ","),
     if (before - nrow(all) == 1) "" else "s")
-all[, mark_r := NULL]
+all[, c('mark_r', 'richness') := NULL]
 
 # ---- put every mark on a long-course footing -------------------------------
 # 53% of the corpus is short course, which is measurably faster. Leaving the two

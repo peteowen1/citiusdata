@@ -15,6 +15,9 @@ N_SIMS <- 20000L
 # single-source history with nothing else changed. Any other difference between
 # the two runs would be uninterpretable.
 HISTORY <- Sys.getenv("CITIUS_SWIM_HISTORY", "swimming_history.rds")
+# 1825 days = 10 half-lives at 180 days; the oldest retained swim carries ~0.1%
+# of the weight of a fresh one.
+HISTORY_DAYS <- as.integer(Sys.getenv("CITIUS_HISTORY_DAYS", "1825"))
 history <- readRDS(file.path(OUT, HISTORY))
 cli::cli_alert_info("Input: {HISTORY}")
 history <- history[!is.na(event_id) & !is.na(athlete_id)]
@@ -24,6 +27,9 @@ cli::cli_alert_info(
 
 # --- calibration -------------------------------------------------------------
 clean <- flag_implausible(history)
+# Key on the column the per-competition filter uses, so each of those filters is
+# a binary search rather than a scan of every row.
+if ("comp_start" %in% names(clean)) data.table::setkey(clean, comp_start)
 calibration <- calibrate(clean, min_races = 10L)
 # Swimming uses 180 days, NOT the 730 tuned for athletics. Validated on 895
 # races: 180 beats 730 on every measure (gold skill 0.253 vs 0.234, mean
@@ -79,7 +85,14 @@ for (cid in score_cids) {
   block <- finals[competition_id == cid]
   cut_date <- min(block$comp_start, na.rm = TRUE)
 
-  past <- clean[comp_start < cut_date & !is.na(perf)]
+  # Bound the history window, as backtest_athletics.R already does. Without it
+  # every one of the scored competitions re-scans the corpus back to 1959. With
+  # a 180-day half-life a swim four years old carries weight 0.5^8 ~ 0.004, so
+  # nearly all of that work is arithmetic on numbers that round to nothing.
+  # This is exact given the recency decay, not an approximation -- raise
+  # CITIUS_HISTORY_DAYS if the half-life is ever lengthened.
+  past <- clean[comp_start < cut_date & comp_start >= cut_date - HISTORY_DAYS &
+                  !is.na(perf)]
   if (nrow(past) < 500L) next
   ability <- estimate_ability(past, as_of = cut_date, half_life = half_life,
                               calibration = calibration)
