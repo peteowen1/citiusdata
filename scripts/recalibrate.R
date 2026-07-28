@@ -1,20 +1,24 @@
-# Recalibrate athletics on the v2 harvest (heats separated by raceNumber).
+# Recalibrate athletics from the live harvest.
 #
-# Writes *_v2.rds alongside the v1 artefacts rather than over them, so the two
-# can be compared and so nothing downstream breaks mid-run. Promote by renaming
-# once the comparison looks right.
+# Writes *_new.rds alongside the existing artefacts rather than over them, so
+# the two can be diffed before promotion. Override the inputs with
+# CITIUS_CAL_INPUT / CITIUS_CAL_BASELINE when staging a harvest.
 #
-# What to expect if the race_key fix did what it should: heats were previously
-# pooled into one race per round, so between-heat variation had nowhere to go
-# but the residual. Separating them should RAISE condition_sd and LOWER
-# sigma_within. If neither moves, the pooling was immaterial and that is worth
-# knowing too.
+# Labels below read v1 (baseline) vs v2 (new).
 
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
 
 OUT <- here::here("citiusdata", "data")
-champs <- setDT(readRDS(file.path(OUT, "championship_results_v2.rds")))[!is.na(date)]
+# Parameterised, and defaulting to the LIVE file. A hardcoded "_v2" suffix here
+# silently recalibrated the superseded harvest after v3 was promoted and the old
+# data inherited that name -- the tell was aging peaks identical to the run
+# before. Suffixed filenames are for staging only; nothing should read them by
+# default.
+IN  <- Sys.getenv("CITIUS_CAL_INPUT", "championship_results.rds")
+PREV <- Sys.getenv("CITIUS_CAL_BASELINE", "calibration.rds")
+champs <- setDT(readRDS(file.path(OUT, IN)))[!is.na(date)]
+cli::cli_alert_info("Calibrating from {.file {IN}}, comparing against {.file {PREV}}.")
 cli::cli_alert_info(
   "{format(nrow(champs), big.mark=',')} results | {uniqueN(champs$competition_id)} meets | {format(uniqueN(champs$race_key), big.mark=',')} races"
 )
@@ -24,11 +28,11 @@ cal2 <- calibrate(clean, min_races = 30L)
 hl2  <- fit_half_life(clean[!is.na(perf) & !is.na(event_id)])
 ag2  <- fit_aging_curve(clean[!is.na(perf) & !is.na(event_id)])
 
-saveRDS(cal2, file.path(OUT, "calibration_v2.rds"))
-saveRDS(hl2,  file.path(OUT, "half_life_v2.rds"))
-saveRDS(ag2,  file.path(OUT, "aging_v2.rds"))
+saveRDS(cal2, file.path(OUT, "calibration_new.rds"))
+saveRDS(hl2,  file.path(OUT, "half_life_new.rds"))
+saveRDS(ag2,  file.path(OUT, "aging_new.rds"))
 
-cal1 <- readRDS(file.path(OUT, "calibration.rds"))
+cal1 <- readRDS(file.path(OUT, PREV))
 
 cli::cli_h2("v1 vs v2 calibration")
 cat("tail_df      :", cal1$tail_df, "->", cal2$tail_df, "\n")
@@ -73,7 +77,7 @@ print(head(m[order(-abs(d)), .(event_id, c1 = round(c1, 4), c2 = round(c2, 4),
                                s1 = round(s1, 4), s2 = round(s2, 4), n2)], 12))
 
 cat("\n--- half-lives ---\n")
-cat("v1:\n"); print(readRDS(file.path(OUT, "half_life.rds")))
+cat("v1:\n"); print(readRDS(file.path(OUT, "half_life_prev.rds")))
 cat("v2:\n"); print(hl2)
 
 cat("\n--- aging peaks ---\n")

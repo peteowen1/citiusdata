@@ -59,15 +59,24 @@ check_corpus <- function(d, label, lane_check = TRUE) {
   m <- merge(d[!is.na(mark) & !is.na(event_id)],
              citius_events()[, .(event_id, family, orientation)], by = "event_id")
   # Deliberately generous: catching unit errors (a 6cm vault), not outliers.
-  # Upper bounds must accommodate the SLOWEST legitimate competitor, not the
-  # elite range: a first pass used sprint hi = 70s and flagged 462 perfectly
-  # ordinary 400m runs of 70-78s. A bound tuned to elites turns the check into
-  # an outlier detector, which is the failure mode this script exists to avoid.
+  # Bounds must span the SHORTEST and LONGEST event in each family, and the
+  # slowest legitimate competitor — not the elite range. Two ways this has gone
+  # wrong already:
+  #   - tuned to elites: sprint hi = 70s flagged 462 ordinary 70-78s 400m runs,
+  #     turning the check into the outlier detector it exists to replace;
+  #   - stale after the registry grew from 80 to 122 events: a 600m (~72s) trips
+  #     a 90s middle floor and a 5km walk (~1200s) trips a 3000s walk floor,
+  #     flagging 8,666 perfectly good marks.
+  # When the registry gains events, revisit this table.
   bounds <- data.table(
-    family = c("sprint", "middle", "distance", "road", "hurdles", "walk",
-               "jump", "throw", "combined"),
-    lo = c(5, 90, 400, 1500, 10, 3000, 1, 5, 1000),
-    hi = c(150, 1200, 3600, 40000, 300, 30000, 20, 110, 11000))
+    family   = c("sprint", "middle", "distance", "road", "hurdles", "walk",
+                 "jump", "throw", "combined"),
+    # shortest: 60m ~6s | 600m ~72s | 2000m ~290s | 5km ~750s | 60mH ~7s | 3km walk ~600s
+    lo       = c(5,        60,       280,         700,     6,         550,
+                 0.5,      1,        1000),
+    # longest: 400m slow | Mile slow | 10,000m slow | Marathon slow | 400mH slow | 50km walk
+    hi       = c(150,      1200,     3600,        40000,   300,       30000,
+                 20,       110,      11000))
   m <- merge(m, bounds, by = "family", all.x = TRUE)
   bad <- m[!is.na(lo) & (mark < lo | mark > hi)]
   if (nrow(bad)) {
@@ -127,8 +136,12 @@ check_corpus <- function(d, label, lane_check = TRUE) {
   invisible(NULL)
 }
 
-champs <- readRDS(file.path(OUT, "championship_results.rds"))
-check_corpus(champs, "Athletics — championship_results.rds")
+# Parameterised so a freshly harvested file can be validated BEFORE it is
+# promoted over the live one. Hardcoding the path meant an attempt to validate
+# a new harvest silently re-validated the old file instead.
+ATH <- Sys.getenv("CITIUS_VALIDATE_ATH", "championship_results.rds")
+champs <- readRDS(file.path(OUT, ATH))
+check_corpus(champs, paste("Athletics —", ATH))
 
 sw <- file.path(OUT, "swimming_history.rds")
 if (file.exists(sw)) check_corpus(readRDS(sw), "Swimming — swimming_history.rds",
