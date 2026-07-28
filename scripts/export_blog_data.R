@@ -34,7 +34,12 @@ dir.create(BLOG, recursive = TRUE, showWarnings = FALSE)
 # Prefer a live harvest; fall back to the last saved copy so a feed outage
 # degrades to stale-but-labelled rather than to an empty page.
 ath <- tryCatch(setDT(harvest_competitions(GLASGOW)), error = function(e) NULL)
-if (is.null(ath) || !nrow(ath)) {
+# `harvest_ok` is published to the site. Without it the freshness banner tracks
+# when this SCRIPT ran, not how old the DATA is: run it during a feed outage and
+# the page shows a green "as at just now" over yesterday's results, which is the
+# exact failure the banner exists to prevent.
+harvest_ok <- !(is.null(ath) || !nrow(ath))
+if (!harvest_ok) {
   cli::cli_alert_warning("Live harvest failed or empty; falling back to saved results.")
   ath <- setDT(readRDS(file.path(OUT, "glasgow2026_results.rds")))
 } else {
@@ -47,9 +52,19 @@ cli::cli_alert_info("Athletics: {nrow(ath)} result{?s}, {uniqueN(ath$race_key)} 
 # feed: it refreshes only when someone re-runs the CRS browser recipe.
 swim <- tryCatch(setDT(parse_crs_export(file.path(OUT, "glasgow2026_swimming.json"))),
                  error = function(e) NULL)
+# Catching `error` is NOT enough: parse_crs_export() returns an EMPTY table
+# without erroring when the export has no rows (a truncated or malformed manual
+# CRS scrape). Both paths collapse to zero swimming rows, and the site claims
+# "across athletics and swimming" in its medal-table caption — so a whole
+# finished sport can vanish while the page insists it is included. Publish the
+# count and let the page tell the truth.
 if (is.null(swim)) {
-  cli::cli_alert_warning("No swimming export parsed; continuing with athletics only.")
+  cli::cli_alert_warning("Swimming export failed to parse; continuing with athletics only.")
   swim <- data.table()
+}
+swim_rows <- nrow(swim)
+if (!swim_rows) {
+  cli::cli_alert_warning("Swimming contributed ZERO rows - the medal table will exclude it.")
 }
 
 # --- unify -------------------------------------------------------------------
@@ -128,6 +143,11 @@ pick_newest <- function(pattern) {
 locked <- pick_newest("^glasgow2026_entrylist_predictions_.*parquet$")
 if (is.null(locked)) cli::cli_abort("No locked entry-list prediction file found.")
 fc <- setDT(read_parquet(locked))
+# pick_newest() matches on filename and mtime, never content. A stray file that
+# matches the glob with a newer mtime would sail through and silently zero the
+# whole "Against the model" comparison — which renders on the site as an absent
+# section, reading as "nothing to show" rather than "something is broken".
+if (!nrow(fc)) cli::cli_abort("Locked forecast {.file {basename(locked)}} has ZERO rows.")
 fc[, `:=`(athlete_id = as.character(athlete_id), basis = "forecast",
           source_file = basename(locked))]
 
@@ -204,6 +224,11 @@ card <- list(generated_at = format(NOW, "%Y-%m-%dT%H:%M:%S%z"),
              games = "Commonwealth Games 2026", venue = "Glasgow",
              prediction_file = basename(locked),
              scored_basis = "forecast",
+             # Freshness of the DATA, as distinct from freshness of this run.
+             # `generated_at` alone cannot tell the site whether the numbers are
+             # current: it is Sys.time() whether the feed answered or not.
+             harvest_ok = harvest_ok,
+             swim_rows = swim_rows,
              results_through = as.character(max(results$date, na.rm = TRUE)))
 
 finals <- results[is_final == TRUE & !is.na(place) & place > 0L & !is_relay &
@@ -299,8 +324,19 @@ upload <- function(f) {
 }
 
 if (!nzchar(Sys.getenv("CITIUS_SKIP_UPLOAD"))) {
-  ok <- vapply(c(names(artefacts), "cg2026-scorecard.json"), upload, logical(1))
-  if (!all(ok)) cli::cli_abort("{sum(!ok)} upload{?s} failed.")
+  # The scorecard carries the freshness stamp the whole site trusts, so it goes
+  # LAST and only if every data artefact landed. Uploading it unconditionally
+  # publishes a brand-new "as at just now" banner over a medal table that failed
+  # to upload and is a run behind — fresh-looking and wrong, with nothing on the
+  # page contradicting it.
+  ok <- vapply(names(artefacts), upload, logical(1))
+  if (!all(ok)) {
+    cli::cli_abort(c(
+      "{sum(!ok)} data upload{?s} failed - scorecard NOT uploaded.",
+      i = "R2 still serves the previous run's scorecard, so the site stays
+           self-consistent. Re-run once the cause is fixed."))
+  }
+  if (!upload("cg2026-scorecard.json")) cli::cli_abort("Scorecard upload failed.")
 } else {
   cli::cli_alert_info("CITIUS_SKIP_UPLOAD set - wrote to {.file {BLOG}} only.")
 }

@@ -1,0 +1,100 @@
+{
+  "generated_at": "2026-07-28T14:37:28+1000",
+  "games": "Commonwealth Games 2026",
+  "venue": "Glasgow",
+  "prediction_file": "glasgow2026_entrylist_predictions_20260727T213901.parquet",
+  "scored_basis": "forecast",
+  "harvest_ok": true,
+  "swim_rows": 964,
+  "results_through": "2026-07-27",
+  "races_scored": 5,
+  "races_skipped_winner_absent": 0,
+  "gold": {
+    "brier": 0.073509,
+    "brier_baseline": 0.110245,
+    "brier_skill": 0.333222,
+    "n_races": 5
+  },
+  "medal": {
+    "brier": 0.189914,
+    "brier_baseline": 0.279432,
+    "brier_skill": 0.320357
+  },
+  "reliability": [
+    {
+      "bin": "[0,0.1]",
+      "n": 27,
+      "mean_predicted": 0.033344,
+      "observed": 0,
+      "gap": -0.033344
+    },
+    {
+      "bin": "(0.1,0.2]",
+      "n": 6,
+      "mean_predicted": 0.137825,
+      "observed": 0.333333,
+      "gap": 0.195508
+    },
+    {
+      "bin": "(0.2,0.3]",
+      "n": 1,
+      "mean_predicted": 0.2223,
+      "observed": 0,
+      "gap": -0.2223
+    },
+    {
+      "bin": "(0.3,0.4]",
+      "n": 2,
+      "mean_predicted": 0.3331,
+      "observed": 0.5,
+      "gap": 0.1669
+    },
+    {
+      "bin": "(0.4,0.5]",
+      "n": 2,
+      "mean_predicted": 0.453325,
+      "observed": 0.5,
+      "gap": 0.046675
+    },
+    {
+      "bin": "(0.8,0.9]",
+      "n": 1,
+      "mean_predicted": 0.84925,
+      "observed": 1,
+      "gap": 0.15075
+    }
+  ],
+  "favourite_won": 2,
+  "favourite_of": 5,
+  "winner_rank": [
+    {
+      "race_id": "AT-10000Metres-W",
+      "rank": 3,
+      "field": 12
+    },
+    {
+      "race_id": "AT-110MetresHurdles-M",
+      "rank": 1,
+      "field": 12
+    },
+    {
+      "race_id": "AT-3000MetresSteeplechase-M",
+      "rank": 2,
+      "field": 7
+    },
+    {
+      "race_id": "AT-HammerThrow-M",
+      "rank": 1,
+      "field": 6
+    },
+    {
+      "race_id": "AT-HighJump-M",
+      "rank": 3,
+      "field": 13
+    }
+  ],
+  "nonstarter_gold_mass": {
+    "eliminated_earlier": 0.06485,
+    "never_at_games": 0.4599
+  }
+}

@@ -48,28 +48,53 @@ cli::cli_alert_info(
   "Linked {uniqueN(g[!is.na(hist_id)]$athlete_name)} of {uniqueN(g$athlete_name)} swimmer{?s} to World Aquatics history."
 )
 
+# In-meet rounds are prior form for the final, and they are what makes the field
+# complete. Only 72% of finalists carry World Aquatics history -- a Commonwealth
+# entry list includes many swimmers whose first international meet this is -- but
+# 100% of them swam a heat in their own event. Heats and semis precede finals,
+# so using them is legitimate rather than leakage; it is the same thing
+# predict_glasgow_live.R does for athletics.
+#
+# Swimmers unknown to World Aquatics enter with a single heat swim, so
+# ability_se is large and shrinkage heavy. That is the correct treatment: they
+# are rated, but weakly, and the simulator knows it.
+pre <- g[!grepl("final", round, ignore.case = TRUE) | grepl("semi", round, ignore.case = TRUE)]
+pre_hist <- pre[!is.na(perf) & !is.na(event_id),
+                .(athlete_id = fifelse(is.na(hist_id), paste0("CRS:", key), hist_id),
+                  event_id, perf, date, round, tier = "top",
+                  sport = "Swimming", competition_id = -1L, race_key = race_key)]
 hist <- flag_implausible(sw)[!is.na(event_id) & !is.na(perf) & date < CUT]
-ability <- estimate_ability(hist, as_of = CUT, half_life = HALF_LIFE, calibration = cal)
+hist <- rbind(hist, pre_hist, fill = TRUE)
+cli::cli_alert_info(
+  "Ability from {format(nrow(hist), big.mark = ',')} swim{?s}, including {nrow(pre_hist)} in-meet round{?s}."
+)
+# as_of is the FINALS date, not the meet start, so the in-meet swims are not
+# discounted as though they were a week old.
+AS_OF <- max(g$date, na.rm = TRUE)
+ability <- estimate_ability(hist, as_of = AS_OF, half_life = HALF_LIFE, calibration = cal)
 
 # --- predict each final ------------------------------------------------------
 fin <- g[grepl("final", round, ignore.case = TRUE) & !grepl("semi", round, ignore.case = TRUE)]
 preds <- list(); outs <- list()
 for (ev in sort(unique(fin$event_id))) {
   field <- unique(fin[event_id == ev], by = "athlete_name")
-  ent <- ability[event_id == ev & athlete_id %in% field$hist_id]
+  # Match on the World Aquatics id where we have one, otherwise on the CRS
+  # surrogate built from the name key.
+  field[, use_id := fifelse(is.na(hist_id), paste0("CRS:", key), hist_id)]
+  ent <- ability[event_id == ev & athlete_id %in% field$use_id]
   if (nrow(ent) < 3L) next
   sim <- simulate_event(ent, n_sims = N_SIMS, calibration = cal, seed = 20260728L)
   mp <- medal_probs(sim)
   pos <- position_probs(sim, max_position = 8L, wide = TRUE)
   mp <- merge(mp, pos, by = "athlete_id", all.x = TRUE)
   mp[, `:=`(event_id = ev, race_id = ev)]
-  nm <- unique(field[!is.na(hist_id), .(athlete_id = hist_id, athlete_name)])
+  nm <- unique(field[, .(athlete_id = use_id, athlete_name)])
   mp <- merge(mp, nm, by = "athlete_id", all.x = TRUE)
   preds[[length(preds) + 1L]] <- mp
   outs[[length(outs) + 1L]] <- data.table(
     race_id = ev, athlete_id = mp$athlete_id,
-    hit = mp$athlete_id %in% field[place == 1L]$hist_id,
-    hit_medal = mp$athlete_id %in% field[place <= 3L]$hist_id)
+    hit = mp$athlete_id %in% field[place == 1L]$use_id,
+    hit_medal = mp$athlete_id %in% field[place <= 3L]$use_id)
 }
 if (!length(preds)) {
   cli::cli_alert_danger("No final had enough rated entrants."); quit(save = "no")
