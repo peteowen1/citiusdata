@@ -1,0 +1,54 @@
+event_id,mark,holder,source,checked_on
+AT-100Metres-M,9.58,Usain Bolt,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-200Metres-M,19.19,Usain Bolt,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-400Metres-M,43.03,Wayde van Niekerk,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-800Metres-M,1:40.91,David Rudisha,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-1000Metres-M,2:11.83,Emmanuel Wanyonyi,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-1500Metres-M,3:26.00,Hicham El Guerrouj,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-Mile-M,3:42.66,Josh Kerr,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-3000Metres-M,7:17.55,unnamed-in-source,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-5000Metres-M,12:35.36,Joshua Cheptegei,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-10000Metres-M,26:11.00,unnamed-in-source,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-110MetresHurdles-M,12.75,Ja'Kobe Tharp,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-400MetresHurdles-M,45.94,Karsten Warholm,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-3000MetresSteeplechase-M,7:52.11,Lamecha Girma,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-HighJump-M,2.45,Javier Sotomayor,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-PoleVault-M,6.31,Armand Duplantis,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-LongJump-M,8.95,Mike Powell,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-TripleJump-M,18.29,Jonathan Edwards,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-ShotPut-M,23.56,Ryan Crouser,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-DiscusThrow-M,75.56,Mykolas Alekna,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-HammerThrow-M,86.74,Yuriy Sedykh,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-JavelinThrow-M,98.48,Jan Zelezny,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-Decathlon-M,9126,Kevin Mayer,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-20KilometresRaceWalk-M,1:16:10,Toshikazu Yamanishi,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-35KilometresRaceWalk-M,2:20:43,Massimo Stano,wikipedia-list-of-world-records-in-athletics,2026-07-28
+AT-Marathon-M,1:59:30,Sabastian Sawe,wikipedia+verified-search,2026-07-28
+AT-HalfMarathon-M,57:20,Jacob Kiplimo,wikipedia+verified-search,2026-07-28
+AT-100Metres-W,10.49,Florence Griffith Joyner,wikipedia-section-6+verified-search,2026-07-28
+AT-200Metres-W,21.34,Florence Griffith Joyner,wikipedia-section-6,2026-07-28
+AT-400Metres-W,47.60,Marita Koch,wikipedia-section-6,2026-07-28
+AT-800Metres-W,1:53.28,Jarmila Kratochvilova,wikipedia-section-6,2026-07-28
+AT-1000Metres-W,2:28.98,Svetlana Masterkova,wikipedia-section-6,2026-07-28
+AT-1500Metres-W,3:48.68,Faith Kipyegon,wikipedia-section-6,2026-07-28
+AT-Mile-W,4:07.64,Faith Kipyegon,wikipedia-section-6,2026-07-28
+AT-2000Metres-W,5:19.70,Jessica Hull,wikipedia-section-6,2026-07-28
+AT-3000Metres-W,8:06.11,Wang Junxia,wikipedia-section-6,2026-07-28
+AT-5000Metres-W,13:58.06,Beatrice Chebet,wikipedia-section-6,2026-07-28
+AT-10000Metres-W,28:54.14,Beatrice Chebet,wikipedia-section-6,2026-07-28
+AT-100MetresHurdles-W,12.12,Tobi Amusan,wikipedia-section-6,2026-07-28
+AT-400MetresHurdles-W,50.37,Sydney McLaughlin-Levrone,wikipedia-section-6,2026-07-28
+AT-3000MetresSteeplechase-W,8:44.32,Beatrice Chepkoech,wikipedia-section-6,2026-07-28
+AT-HighJump-W,2.10,Yaroslava Mahuchikh,wikipedia-section-6,2026-07-28
+AT-PoleVault-W,5.06,Yelena Isinbayeva,wikipedia-section-6,2026-07-28
+AT-LongJump-W,7.52,Galina Chistyakova,wikipedia-section-6,2026-07-28
+AT-TripleJump-W,15.74,Yulimar Rojas,wikipedia-section-6,2026-07-28
+AT-ShotPut-W,22.63,Natalya Lisovskaya,wikipedia-section-6,2026-07-28
+AT-DiscusThrow-W,76.80,Gabriele Reinsch,wikipedia-section-6,2026-07-28
+AT-HammerThrow-W,82.98,Anita Wlodarczyk,wikipedia-section-6,2026-07-28
+AT-JavelinThrow-W,72.28,Barbora Spotakova,wikipedia-section-6,2026-07-28
+AT-Heptathlon-W,7291,Jackie Joyner-Kersee,wikipedia-section-6,2026-07-28
+AT-20KilometresRaceWalk-W,1:23:49,Yang Jiayu,wikipedia-section-6,2026-07-28
+AT-35KilometresRaceWalk-W,2:37:15,Maria Perez,wikipedia-section-6,2026-07-28
+AT-Marathon-W,2:09:56,Ruth Chepngetich,wikipedia-section-6,2026-07-28
+AT-HalfMarathon-W,1:02:52,Letesenbet Gidey,wikipedia-section-6,2026-07-28

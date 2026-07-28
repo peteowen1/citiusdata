@@ -1,8 +1,16 @@
 .Rhistory
 .RData
-data/
 *.parquet
 *.rds
+
+# Bulk data stays out of git. Written as `data/*` rather than `data/` so the
+# negation below can take effect: git does not descend into an excluded
+# DIRECTORY, so `data/` + `!data/x` silently keeps ignoring x.
+data/*
+# ...but world_records.csv is hand-maintained REFERENCE data, not bulk data.
+# It is small, reviewable, and every "% of world record" on the site is wrong
+# without it — so it belongs in git.
+!data/world_records.csv
 
 # Blog export staging dir — build artefacts, republished on every run
 blog/
