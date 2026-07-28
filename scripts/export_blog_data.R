@@ -393,6 +393,81 @@ setorder(hist, athlete_id, -date)
 cli::cli_alert_info(
   "Athlete history: {nrow(hist)} row{?s} for {uniqueN(hist$athlete_id)} of {length(who)} Glasgow athlete{?s}.")
 
+# --- evergreen athlete ratings (citius#2) -------------------------------------
+# Ability is on each event's own performance scale (log-mark, signed so higher is
+# better), so a sprinter's number and a thrower's are not comparable. THREE
+# comparable scales are published side by side and the site toggles between them,
+# because they answer different questions and each lies in its own way:
+#
+#   z         - standard deviations above the event mean. Keeps the elite tail
+#               legible, which percentile crushes. Negative for half the field,
+#               and its spread depends on how deep the event is.
+#   pct       - percentile within event, 0-100. Instantly readable and always
+#               positive, but compresses exactly where the interest is: the gap
+#               between 99.5 and 99.9 is the whole medal race.
+#   pct_best  - predicted mark as a share of the best mark ON RECORD IN THIS
+#               DATASET. Deliberately NOT "% of world record": we do not hold
+#               ratified records, and claiming one we cannot verify would be
+#               worse than a slightly humbler denominator that is exactly true.
+#
+# A fourth scale Pete asked for - expected medal chance against a reference
+# field - is NOT here on purpose. It needs the package's own simulation
+# semantics (condition shocks, tail_df, foul rates), and hand-rolling those out
+# here would let the site's numbers drift from the model's. Filed as citius#5.
+RATING_HALF_LIFE <- 730
+RATING_ACTIVE_DAYS <- 730          # "current" ratings, not an all-time archive
+# Without a calibration, estimate_ability() falls back to FLAT context weights —
+# heats, finals and every competition tier counted equally. That would still
+# produce a plausible-looking table, so load it explicitly rather than let the
+# fallback ship silently.
+calibration <- readRDS(file.path(OUT, "calibration.rds"))
+
+clean_all <- flag_implausible(hist_src <- setDT(readRDS(file.path(OUT, "championship_results.rds"))))
+clean_all <- clean_all[!is.na(event_id) & !is.na(perf)]
+AS_OF <- max(clean_all$date, na.rm = TRUE)
+ratings <- estimate_ability(clean_all, as_of = AS_OF, half_life = RATING_HALF_LIFE,
+                            calibration = calibration)
+
+# estimate_ability() already returns last_date per athlete-event — merging a
+# second copy in produced last_date.x / last_date.y and a confusing failure.
+ratings[, athlete_id := as.character(athlete_id)]
+ratings <- ratings[!is.na(last_date) & as.numeric(AS_OF - last_date) <= RATING_ACTIVE_DAYS]
+
+# Comparable scales, computed WITHIN event over the active population.
+ratings[, `:=`(z = (ability - mean(ability)) / stats::sd(ability),
+               pct = 100 * (frank(ability, ties.method = "average") - 0.5) / .N,
+               pct_best = 100 * exp(ability - max(ability))), by = event_id]
+# sd() is NA for a single-athlete event, and exp(0)=100 for its lone member —
+# report the scales as missing rather than as a perfect score.
+ratings[is.na(z), z := NA_real_]
+ratings[, n_event := .N, by = event_id]
+
+# Scales are computed over the FULL active population above — that is what makes
+# a percentile a percentile — but only the top slice is published. The full set
+# is 77,755 rows / 5.1 MB, which is not a thing to put on the wire for a page
+# nobody scrolls to row 900 of. `n_event` travels with each row so the site can
+# say what the rank is out of, and pct/z stay honest because they were never
+# computed on the truncated set.
+RATING_TOP_N <- 150L
+setorder(ratings, event_id, -ability)
+ratings <- ratings[, head(.SD, RATING_TOP_N), by = event_id]
+
+names_lk <- unique(clean_all[!is.na(athlete_name),
+                             .(athlete_id = as.character(athlete_id), athlete_name)]
+                   )[, .(athlete_name = athlete_name[1]), by = athlete_id]
+ratings <- merge(ratings, names_lk, by = "athlete_id", all.x = TRUE)
+ratings <- merge(ratings, citius_events()[, .(event_id, sport, discipline, sex)],
+                 by = "event_id", all.x = TRUE)
+RATING_COLS <- c("athlete_id", "athlete_name", "event_id", "sport", "discipline", "sex",
+                 "ability", "ability_se", "z", "pct", "pct_best", "n", "w_total",
+                 "n_event", "last_date")
+for (nm in setdiff(RATING_COLS, names(ratings))) ratings[, (nm) := NA]
+ratings <- ratings[, ..RATING_COLS]
+ratings[, `:=`(as_of = AS_OF, generated_at = NOW)]
+setorder(ratings, event_id, -ability)
+cli::cli_alert_info(
+  "Ratings: {nrow(ratings)} athlete-event row{?s} across {uniqueN(ratings$event_id)} event{?s}, as of {format(AS_OF)}.")
+
 # --- write + upload ----------------------------------------------------------
 pred[, generated_at_export := NOW]
 results[, generated_at := NOW]
@@ -402,6 +477,7 @@ artefacts <- list(
   "cg2026-results.parquet"     = results,
   "cg2026-medals.parquet"      = medals,
   "cg2026-athlete-history.parquet" = hist,
+  "athlete-ratings.parquet"    = ratings,
   "events.parquet"             = events)
 
 for (nm in names(artefacts)) {
