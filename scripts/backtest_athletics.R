@@ -90,15 +90,25 @@ for (i in seq_len(n)) {
                               calibration = calibration)
 
   out <- list()
-  for (ev in unique(block$event_id)) {
-    field <- unique(block[event_id == ev], by = "athlete_id")
+  # Score one RACE, not one competition+event. Club and gala meets run an event
+  # in many sections, each labelled "Final" -- Sparkassen Gala 2026 ran the
+  # women's 200m as 18 separate finals. Keying on competition+event merged them
+  # into a single scored race with 18 winners, inflating the field and awarding
+  # many golds. That alone put 16.9% of scored races on more than one winner;
+  # keyed by race_key it is 0.4%, which is the sport's genuine tie rate.
+  #
+  # The damage was not confined to those races: the merged ones looked like huge
+  # fields, which is why calibration appeared to degrade with field size.
+  for (rk in unique(block$race_key)) {
+    field <- unique(block[race_key == rk], by = "athlete_id")
+    ev <- field$event_id[1]
     entrants <- ability[event_id == ev &
                           athlete_id %in% as.character(field$athlete_id)]
     if (nrow(entrants) < 4L) next
     sim <- simulate_event(entrants, n_sims = N_SIMS,
                           calibration = calibration, seed = 11L)
     mp <- medal_probs(sim)
-    key <- paste(cid, ev)
+    key <- rk
     mp[, race_id := key]
     out[[length(out) + 1L]] <- list(
       pred = mp,
