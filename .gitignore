@@ -3,3 +3,6 @@
 data/
 *.parquet
 *.rds
+
+# Blog export staging dir — build artefacts, republished on every run
+blog/
