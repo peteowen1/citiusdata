@@ -124,6 +124,13 @@ for (cid in score_cids) {
     mp <- medal_probs(sim)
     key <- paste(cid, ev)
     mp[, race_id := key]
+    # Carry the model's own uncertainty through to the predictions. Task 13 --
+    # probabilities too evenly spread -- is a hypothesis ABOUT shrinkage, and it
+    # has stayed open partly because shrinkage was never recorded alongside the
+    # probability it is supposed to explain.
+    mp[entrants, on = "athlete_id",
+       `:=`(shrinkage = i.shrinkage, w_total = i.w_total, n_results = i.n,
+            ability_se = i.ability_se)]
     all_pred[[length(all_pred) + 1L]] <- mp
 
     all_out[[length(all_out) + 1L]] <- data.table(
