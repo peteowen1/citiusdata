@@ -86,6 +86,15 @@ for (ev in sort(unique(res$event_id))) {
 
   r <- simulate_rounds(ent, structure = structure,
                        n_sims = N_SIMS, calibration = cal, seed = 20260728L)
+
+  # The full finishing distribution for the final itself, conditional on the
+  # field reaching it. A medal probability cannot express fourth place, and
+  # fourth is the position people actually ask about.
+  pos <- position_probs(
+    simulate_event(ent[athlete_id %in% r[p_final > 0.01]$athlete_id],
+                   n_sims = N_SIMS, calibration = cal, seed = 20260728L),
+    max_position = n_final, wide = TRUE)
+  r <- merge(r, pos, by = "athlete_id", all.x = TRUE)
   r[, `:=`(event_id = ev, contested_round = x$round[1], n_heats = n_heats,
            field_size = length(field))]
   out[[length(out) + 1L]] <- r
@@ -107,9 +116,16 @@ for (ev in unique(pred$event_id)) {
   x <- pred[event_id == ev]
   cat(sprintf("\n%s  (%d contested %s in %d heat%s)\n", ev, x$field_size[1],
               x$contested_round[1], x$n_heats[1], if (x$n_heats[1] == 1) "" else "s"))
-  print(head(x[, .(athlete = substr(athlete_name, 1, 24),
-                   reach_final = round(p_final, 3),
-                   gold = round(p_gold, 3), medal = round(p_medal, 3))], 6))
+  cols <- c("athlete_name", "p_final", "p_gold", "p_medal",
+            intersect(c("pos_1", "pos_2", "pos_3", "pos_4"), names(x)))
+  y <- x[, ..cols]
+  data.table::setnames(y, c("athlete_name", "p_final", "p_gold", "p_medal"),
+                       c("athlete", "reach_final", "gold", "medal"))
+  y[, athlete := substr(athlete, 1, 22)]
+  num <- setdiff(names(y), "athlete")
+  y[, (num) := lapply(.SD, round, 3), .SDcols = num]
+  print(head(y, 6))
 }
 cat("\nEvery athlete here contested a round at these Games, so no probability\n")
-cat("sits on a withdrawal. p_final carries the qualification uncertainty.\n")
+cat("sits on a withdrawal. p_final carries the qualification uncertainty, and\n")
+cat("pos_4 is the near-miss a medal probability cannot express.\n")
