@@ -63,6 +63,23 @@ for (cid in unique(finals$competition_id)) {
   ability <- estimate_ability(past, as_of = cut_date, half_life = half_life,
                               calibration = calibration)
 
+  # Keyed by competition+event, and that is CORRECT for swimming even though
+  # athletics needs race_key. The rule is how PLACINGS are assigned, and the two
+  # sports genuinely differ:
+  #
+  #   swimming  115 of 116 multi-section groups rank GLOBALLY (one winner across
+  #             all heats -- a distance "timed final" is swum in heats but
+  #             placed on time overall)
+  #   athletics 2,462 of 2,545 rank PER SECTION (each gala section has its own
+  #             place 1)
+  #
+  # Keying swimming per race_key gives 4.5% multi-winner races and 11.1% with NO
+  # winner, because it splits a timed final into heats. Per competition+event it
+  # is 0.3% and 0.0%. Do not copy the athletics fix across.
+  #
+  # Note the asymmetry: race_key is still the right unit for the SHARED SHOCK in
+  # decompose_races(), since those heats were swum separately in their own
+  # conditions. Scoring unit and conditions unit are not the same thing.
   for (ev in unique(block$event_id)) {
     field <- unique(block[event_id == ev], by = "athlete_id")
     entrants <- ability[event_id == ev & athlete_id %in% field$athlete_id]
