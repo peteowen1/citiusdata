@@ -166,7 +166,38 @@ if (!is.null(live_file)) {
   lv <- merge(lv, citius_events()[, .(event_id, discipline, sex)], by = "event_id", all.x = TRUE)
 }
 
-pred <- rbindlist(list(fc, lv), fill = TRUE)
+# Swimming (citiusdata#3). The meet finished on 26 Jul, so these are NOT a
+# forecast: ability is estimated from World Aquatics history dated before the
+# Games and scored after the fact. Tagged "retrospective" and kept out of both
+# the model-scope medal table and the report card's headline, because the claim
+# those make is "we published this before a race was run" and this did not exist
+# until two days after the meet ended. It is published because a forward-test on
+# an independent feed is worth showing — labelled as what it is.
+swim_file <- pick_newest("^glasgow2026_swimming_predictions.*parquet$")
+rt <- NULL
+if (!is.null(swim_file)) {
+  rt <- setDT(read_parquet(swim_file))
+  rt[, `:=`(athlete_id = as.character(athlete_id), basis = "retrospective",
+            source_file = basename(swim_file))]
+  if (!"athlete" %in% names(rt) && "athlete_name" %in% names(rt)) {
+    rt[, athlete := athlete_name][, athlete_name := NULL]
+  }
+  # The swimming feed carries nation on the RESULTS, not the predictions, so the
+  # lookup is built from the scraped results rather than the athletics entry list.
+  # Read off `results` (already normalised, swimming's `country` mapped to
+  # `nation`), not the raw `swim` parse, which still calls the column `country`.
+  swim_nat <- unique(results[sport == "Swimming" & !is.na(nation),
+                             .(key = normkey(athlete_name), nation)]
+                     )[, .(nation = nation[1]), by = key]
+  rt[, .k := normkey(athlete)]
+  rt[swim_nat, nation := i.nation, on = c(.k = "key")]
+  rt[, .k := NULL]
+  rt <- merge(rt, citius_events()[, .(event_id, discipline, sex)],
+              by = "event_id", all.x = TRUE)
+  cli::cli_alert_info("Swimming retrospective: {nrow(rt)} row{?s} across {uniqueN(rt$event_id)} event{?s}.")
+}
+
+pred <- rbindlist(list(fc, lv, rt), fill = TRUE)
 cli::cli_alert_info(
   "Predictions: forecast {nrow(fc)} row{?s}/{uniqueN(fc$event_id)} event{?s} from {.file {basename(locked)}}; live {if (is.null(lv)) 0L else nrow(lv)} row{?s}.")
 
@@ -276,6 +307,55 @@ if (nrow(finals)) {
   }
 } else {
   card$races_scored <- 0L
+}
+
+# --- swimming retrospective, scored SEPARATELY -------------------------------
+# Its own key in the scorecard, never folded into card$gold. The headline claim
+# is about a published pre-Games forecast; this is a post-hoc forward-test on a
+# different sport and a different feed, and averaging the two would quietly
+# launder one into the other.
+if (!is.null(rt) && nrow(rt)) {
+  sf <- results[sport == "Swimming" & is_final == TRUE & !is.na(place) &
+                  place > 0L & !is_relay & event_id %in% unique(rt$event_id)]
+  if (nrow(sf)) {
+    # The two swimming feeds do NOT share an athlete id: predictions carry World
+    # Aquatics UUIDs, the CRS results carry their own. They are joined on
+    # athlete_key(), which sorts name tokens so "Hannah STERRY" and
+    # "STERRY Hannah" agree - the same key the upstream script uses. Matching is
+    # partial by nature (many Commonwealth swimmers have no World Aquatics
+    # history at all), which is why races whose WINNER is unmatched are dropped
+    # below rather than counted as misses.
+    ps <- rt[, .(race_id = event_id, athlete_id = athlete_key(athlete), p_gold, p_medal)]
+    os <- sf[, .(race_id = event_id, athlete_id = athlete_key(athlete_name),
+                 hit = place == 1L, hit_medal = place <= 3L)]
+    ps <- ps[!is.na(athlete_id)]; os <- os[!is.na(athlete_id)]
+    # A race counts only if the actual winner is in the predicted field. Without
+    # this, the score measures how many swimmers World Aquatics has a history
+    # for, not how good the model is.
+    # A race counts only if the actual winner is in the predicted field.
+    # Otherwise the score measures how many swimmers World Aquatics happens to
+    # have a history for, not how good the model is.
+    keep_s <- merge(os[hit == TRUE, .(race_id, athlete_id)],
+                    ps[, .(race_id, athlete_id)],
+                    by = c("race_id", "athlete_id"))$race_id
+    card$swimming_retro <- list(
+      basis = "retrospective",
+      note = "Model re-run on data available before the meet; not a published forecast.",
+      races_scored = length(keep_s),
+      races_skipped_winner_unrated = length(setdiff(unique(sf$event_id), keep_s)))
+    if (length(keep_s)) {
+      gs <- score_predictions(ps[race_id %in% keep_s], os[race_id %in% keep_s], "p_gold")
+      ms <- score_predictions(ps[race_id %in% keep_s],
+                              os[race_id %in% keep_s, .(race_id, athlete_id, hit = hit_medal)],
+                              "p_medal")
+      card$swimming_retro$gold  <- gs$overall[c("brier", "brier_baseline", "brier_skill", "n_races")]
+      card$swimming_retro$medal <- ms$overall[c("brier", "brier_baseline", "brier_skill")]
+      tops <- ps[race_id %in% keep_s][order(race_id, -p_gold)][, .SD[1], by = race_id]
+      tops <- merge(tops, os[hit == TRUE, .(race_id, winner = athlete_id)], by = "race_id")
+      card$swimming_retro$favourite_won <- sum(tops$athlete_id == tops$winner)
+      card$swimming_retro$favourite_of  <- nrow(tops)
+    }
+  }
 }
 
 # --- events registry ---------------------------------------------------------
