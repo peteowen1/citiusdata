@@ -27,6 +27,26 @@ calibration <- readRDS(file.path(OUT, "calibration.rds"))
 half_life   <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "730"))
 
 clean <- flag_implausible(champs)[!is.na(event_id) & !is.na(perf)]
+
+# Narrow to the columns actually read, ONCE, before any per-meet filtering.
+#
+# The per-meet refit brackets this table 825 times. A bracket filter copies
+# every column of every passing row, so carrying 33 columns when 8 are read
+# means ~4x the allocation per iteration -- and R's gc() does not see the
+# resulting growth, only the OS does. Two runs of this backtest were killed with
+# no error output, which is what an out-of-memory kill looks like from inside.
+# See the data.table RSS notes in C:/dev/.claude/rules.
+#
+# estimate_ability() reads athlete_id, event_id, date, perf, age, round and
+# tier; the finals block additionally needs competition_id, comp_start, place
+# and race_key. Anything else (marks, wind, venue, the new feed fields) is
+# harvest metadata that no model touches.
+keep_cols <- c("athlete_id", "event_id", "date", "perf", "age", "round", "tier",
+               "competition_id", "comp_start", "place", "race_key")
+clean <- clean[, intersect(keep_cols, names(clean)), with = FALSE]
+cli::cli_alert_info(
+  "Narrowed to {ncol(clean)} column{?s} ({format(object.size(clean), units = 'MB')})."
+)
 finals <- clean[!is.na(place) &
                   grepl("final", round, ignore.case = TRUE) &
                   !grepl("semi", round, ignore.case = TRUE)]
