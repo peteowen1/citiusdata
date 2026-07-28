@@ -1,3 +1,18 @@
+# SUPERSEDED -- kept only for its stage-0 competition DISCOVERY.
+#
+# Stage 2 (athlete histories) is replaced by harvest_athletics_careers.R, which
+# is 6.8x faster and materially more complete. This script is serial, refetches
+# each athlete's PROFILE before their results (doubling the requests), and lacks
+# the guards added after a parallel sweep silently wrote zero files.
+#
+# Concretely, on the same work: 51 athletes/min here against 347 there, and the
+# profile it consults is MISSING sex for 37% of athletes, leaving 15.5% of
+# results with no event_id against 11.5%.
+#
+# Do not extend this file. Use:
+#   harvest_athletics_meets.R  -- stage 0/1 only, competition discovery
+#   harvest_athletics_careers.R -- athlete careers
+#
 # Large-scale athletics harvest, in two resumable stages.
 #
 # Stage 1 — competitions. Gives whole fields, which is what makes shared race

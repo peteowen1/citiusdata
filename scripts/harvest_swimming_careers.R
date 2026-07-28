@@ -96,4 +96,4 @@ if (WORKERS <= 1L) {
   }
 }
 cli::cli_alert_info("{remaining_after} swimmer{?s} still to fetch - run again.")
-cli::cli_alert_info("Cache holds {length(list.files(CACHE))} file{?s}. Assemble with assemble_swim_athletes.R.")
+cli::cli_alert_info("Cache holds {length(list.files(CACHE))} file{?s}. Assemble with assemble_swimming_careers.R.")

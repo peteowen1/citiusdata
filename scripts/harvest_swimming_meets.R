@@ -130,6 +130,18 @@ if (WORKERS <= 1L) {
   for (k in seq_along(chunks)) {
     idx <- chunks[[k]]
     got <- parallel::parLapply(cl, jobs[idx], function(j) fetch_comp(j, CACHE))
+    # A chunk where NOTHING succeeded is a failure, not a quiet success. The
+    # first parallel sweep in this project reported success having written zero
+    # files, because the worker referenced a variable that was never exported;
+    # parLapply swallowed every error. Caught only by checking the file count.
+    #
+    # Empty competitions are legitimate here (a listed meet whose results are not
+    # loaded), so this guards on a whole chunk failing rather than on any single
+    # empty result.
+    if (!any(unlist(got) > 0) && k > 1L) {
+      cli::cli_alert_danger("Chunk {k} returned no swims for any competition - stopping.")
+      break
+    }
     el <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
     done <- max(idx)
     cat(sprintf("  %d/%d  (%.1f/min, ~%.0f min left, %s swims this chunk)\n",

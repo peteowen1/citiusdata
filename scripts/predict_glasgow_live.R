@@ -32,14 +32,30 @@ res[, athlete_id := as.character(athlete_id)]
 res[, rc := citius:::.round_class(round)]
 
 CUT <- min(res$date, na.rm = TRUE)
-champs <- readRDS(file.path(OUT, "championship_results.rds"))
+# Read only the events and window needed, from the partitioned store.
+# Measured at 8.6M rows: 46.1s to load an .rds and filter it against 0.09s
+# here, because partition pruning never opens the other event files.
+# flag_implausible() is already applied at store-build time -- it is a
+# GLOBAL operation and cannot be redone on a slice.
+STORE <- file.path(OUT, "athletics_store")
+USE_STORE <- dir.exists(STORE)
+champs <- if (USE_STORE) NULL else readRDS(file.path(OUT, "championship_results.rds"))
 cal <- readRDS(file.path(OUT, "calibration.rds"))
-clean <- flag_implausible(champs)[!is.na(event_id) & !is.na(perf)]
+clean <- if (USE_STORE) NULL else flag_implausible(champs)[!is.na(event_id) & !is.na(perf)]
 # Excluded by ID as well as by date (citiusdata#1). This script is the one most
 # exposed: it runs DURING the Games, so any re-harvest between now and the final
 # would put the heats it is predicting from into the ability estimates too.
-past <- clean[date < CUT & date >= CUT - 4380 & event_id %in% unique(res$event_id) &
-                (is.na(competition_id) | competition_id != GLASGOW)]
+past <- if (USE_STORE) {
+  read_results_store(STORE, events = unique(res$event_id),
+                     from = CUT - 4380, to = CUT - 1L)[
+                       !is.na(event_id) & !is.na(perf)]
+} else {
+  clean[date < CUT & date >= CUT - 4380 & event_id %in% unique(res$event_id)]
+}
+# Excluded by ID as well as by date (citiusdata#1), whichever source it came
+# from. This script runs DURING the Games, so a re-harvest between now and the
+# final would otherwise feed it the very heats it is predicting from.
+past <- past[is.na(competition_id) | competition_id != GLASGOW]
 stopifnot("history must not contain the competition being predicted" =
             !any(past$competition_id == GLASGOW, na.rm = TRUE))
 ability <- estimate_ability(past, as_of = CUT, half_life = HALF_LIFE, calibration = cal)
