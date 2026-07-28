@@ -9,7 +9,7 @@ suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
 
 OUT <- here::here("citiusdata", "data")
-BT_CACHE <- file.path(OUT, "backtest_cache")
+BT_CACHE <- file.path(OUT, Sys.getenv("CITIUS_BT_CACHE", "backtest_cache"))
 dir.create(BT_CACHE, recursive = TRUE, showWarnings = FALSE)
 
 N_SIMS <- 10000L
@@ -18,15 +18,27 @@ MAX_PER_RUN <- as.integer(Sys.getenv("CITIUS_BT_MEETS", "25"))
 # 2^-4 = 6%; 12 years carries 1.5%. Beyond that the compute is pure waste.
 HISTORY_DAYS <- as.integer(Sys.getenv("CITIUS_HISTORY_DAYS", "4380"))
 
-champs      <- readRDS(file.path(OUT, "championship_results.rds"))
-calibration <- readRDS(file.path(OUT, "calibration.rds"))
+# OUTCOMES and HISTORY are separate inputs so two ability sources can be compared
+# on an IDENTICAL scored set. Pointing one file at both roles silently swaps the
+# test set along with the model: the swimming A/B did exactly that and compared
+# 43 competitions against 5,868, which measures coverage, not skill. Outcomes must
+# always come from the competition harvest -- it is the only route that carries
+# whole fields with finishing places.
+OUTCOMES <- Sys.getenv("CITIUS_BT_OUTCOMES", "championship_results.rds")
+HISTORY  <- Sys.getenv("CITIUS_BT_HISTORY", OUTCOMES)
+champs      <- readRDS(file.path(OUT, OUTCOMES))
+hist_raw    <- if (identical(HISTORY, OUTCOMES)) champs else readRDS(file.path(OUT, HISTORY))
+calibration <- readRDS(file.path(OUT, Sys.getenv("CITIUS_BT_CALIBRATION", "calibration.rds")))
+cli::cli_alert_info("Outcomes from {.file {OUTCOMES}}; ability history from {.file {HISTORY}}.")
 # Half-life tuned on ranking skill rather than next-result MAE. fit_half_life()
 # optimises point prediction, which favours recency (180 days) and leaves
 # w_total below 1 for most athletes - so ability_se dominates and favourites are
 # under-rated. 730 days costs no measurable skill and halves the calibration gap.
 half_life   <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "730"))
 
-clean <- flag_implausible(champs)[!is.na(event_id) & !is.na(perf)]
+clean <- flag_implausible(hist_raw)[!is.na(event_id) & !is.na(perf)]
+outcome_rows <- if (identical(HISTORY, OUTCOMES)) clean
+                else flag_implausible(champs)[!is.na(event_id) & !is.na(perf)]
 
 # Narrow to the columns actually read, ONCE, before any per-meet filtering.
 #
@@ -44,18 +56,23 @@ clean <- flag_implausible(champs)[!is.na(event_id) & !is.na(perf)]
 keep_cols <- c("athlete_id", "event_id", "date", "perf", "age", "round", "tier",
                "competition_id", "comp_start", "place", "race_key")
 clean <- clean[, intersect(keep_cols, names(clean)), with = FALSE]
+outcome_rows <- outcome_rows[, intersect(keep_cols, names(outcome_rows)), with = FALSE]
 
 # Prefer the partitioned parquet store when it exists: the per-meet read drops
 # from 46.1s to 0.39s at 8.6M rows. The .rds path is kept so the script still
 # runs before build_stores.R has been run.
-STORE <- file.path(OUT, "athletics_store")
-USE_STORE <- dir.exists(STORE)
+STORE <- file.path(OUT, Sys.getenv("CITIUS_BT_STORE", "athletics_store"))
+# The store is built from ONE history file. Reading it while HISTORY points
+# somewhere else would silently ignore the arm under test and run the baseline
+# twice -- the A/B would come back a dead heat and look like a null result.
+USE_STORE <- dir.exists(STORE) && (identical(HISTORY, OUTCOMES) ||
+                                   nzchar(Sys.getenv("CITIUS_BT_STORE")))
 cli::cli_alert_info(if (USE_STORE) "Reading history from the parquet store."
                     else "No parquet store; filtering the in-memory corpus.")
 cli::cli_alert_info(
   "Narrowed to {ncol(clean)} column{?s} ({format(object.size(clean), units = 'MB')})."
 )
-finals <- clean[!is.na(place) &
+finals <- outcome_rows[!is.na(place) &
                   grepl("final", round, ignore.case = TRUE) &
                   !grepl("semi", round, ignore.case = TRUE)]
 
@@ -128,6 +145,13 @@ for (i in seq_len(n)) {
     mp <- medal_probs(sim)
     key <- rk
     mp[, race_id := key]
+    # Carry the evidence weight alongside the probability. Hypotheses about
+    # shrinkage stayed untestable for weeks because the quantity they were about
+    # was never written down next to the prediction it supposedly explained.
+    if ("shrinkage" %in% names(entrants))
+      mp[entrants, on = "athlete_id", shrinkage := i.shrinkage]
+    if ("w_total" %in% names(entrants))
+      mp[entrants, on = "athlete_id", w_total := i.w_total]
     out[[length(out) + 1L]] <- list(
       pred = mp,
       outc = data.table(
@@ -170,4 +194,4 @@ cat(sprintf("\nraces beating baseline: %d of %d (%.0f%%)\n",
             sum(br$skill > 0), nrow(br), 100 * mean(br$skill > 0)))
 
 saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc),
-        file.path(OUT, "backtest.rds"))
+        file.path(OUT, Sys.getenv("CITIUS_BT_OUT", "backtest.rds")))
