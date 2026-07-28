@@ -51,10 +51,25 @@ if (dir.exists(d) && length(list.files(d))) {
 
 keep <- c("source", "athlete_id", "athlete_name", "event_id", "discipline",
           "date", "mark", "mark_string", "place", "round", "comp_name",
+          # The source's own competition id must survive. Substituting the
+          # competition NAME turned Swim England's 17,317 ranked meets into
+          # pseudo-competitions and the backtest reported 5,508 "competitions
+          # with finals" against a true 43.
+          "competition_id", "comp_start", "tier",
           "course", "is_best", "race_key")
+# Fill missing columns with a TYPED NA. A bare NA is logical, and if every
+# source lacks a column the result is a logical column that then refuses a
+# character or Date assignment later.
+na_for <- list(source = NA_character_, athlete_id = NA_character_,
+               athlete_name = NA_character_, event_id = NA_character_,
+               discipline = NA_character_, date = as.Date(NA),
+               mark = NA_real_, mark_string = NA_character_, place = NA_integer_,
+               round = NA_character_, comp_name = NA_character_,
+               competition_id = NA_character_, comp_start = as.Date(NA),
+               tier = NA_character_, course = NA_character_,
+               is_best = NA, race_key = NA_character_)
 all <- rbindlist(lapply(parts, function(p) {
-  miss <- setdiff(keep, names(p))
-  for (m in miss) p[[m]] <- NA
+  for (m in setdiff(keep, names(p))) p[[m]] <- na_for[[m]]
   p[, ..keep]
 }), fill = TRUE)
 say("\ncombined: %s rows", format(nrow(all), big.mark = ","))
@@ -115,7 +130,21 @@ say("results per person: median %s, 90th pct %s",
 # row back to where it came from.
 all[, source_athlete_id := athlete_id]
 all[, athlete_id := person_id]
-all[, competition_id := comp_name]
+# Fall back to the meet name only where a source gives no id of its own.
+all[, competition_id := as.character(competition_id)]
+all[is.na(competition_id) | !nzchar(competition_id),
+    competition_id := paste(source, comp_name, sep = "|")]
+all[is.na(comp_start), comp_start := min(date, na.rm = TRUE), by = competition_id]
+
+# A competition is SCOREABLE only if it has real races -- a field, a round, and
+# finishing places. Ranked lists have none of those: they are one best per
+# swimmer per season and can only ever be history. Marking this explicitly stops
+# a downstream consumer from mistaking a ranking for a meet.
+all[, scoreable := !is.na(race_key) & !is.na(round) & (is.na(is_best) | !is_best)]
+say("scoreable rows (real races): %s of %s across %s competition%s",
+    format(sum(all$scoreable), big.mark = ","), format(nrow(all), big.mark = ","),
+    format(uniqueN(all[scoreable == TRUE]$competition_id), big.mark = ","),
+    if (uniqueN(all[scoreable == TRUE]$competition_id) == 1) "" else "s")
 # perf is the LONG-COURSE-equivalent performance; the raw one stays as perf_raw
 # so the adjustment can be audited or undone.
 all[, perf_raw := perf]

@@ -59,7 +59,23 @@ finals <- clean[!is.na(place) & !is.na(perf) &
 cli::cli_alert_info("{uniqueN(finals$competition_id)} competition{?s} with finals.")
 
 all_pred <- list(); all_out <- list()
-for (cid in unique(finals$competition_id)) {
+# The SCORED set must be held fixed while the history varies, or an A/B compares
+# two different test sets and any change in skill is uninterpretable. Point
+# CITIUS_SCORE_COMPS at a results file and only its competitions are scored --
+# the richer corpus is then used purely to estimate ability.
+SCORE_FROM <- Sys.getenv("CITIUS_SCORE_COMPS", "")
+score_cids <- unique(finals$competition_id)
+if (nzchar(SCORE_FROM)) {
+  ref <- data.table::as.data.table(readRDS(file.path(OUT, SCORE_FROM)))
+  ref_cids <- unique(ref[grepl("^finals?$", round, ignore.case = TRUE),
+                         competition_id])
+  score_cids <- intersect(score_cids, ref_cids)
+  cli::cli_alert_info(
+    "Scoring the {length(score_cids)} competition{?s} defined by {SCORE_FROM};      history supplies ability only."
+  )
+}
+
+for (cid in score_cids) {
   block <- finals[competition_id == cid]
   cut_date <- min(block$comp_start, na.rm = TRUE)
 
