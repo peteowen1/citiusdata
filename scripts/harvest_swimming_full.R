@@ -32,13 +32,27 @@ pages <- unique(setDT(pages), by = "competition_id")
 saveRDS(pages, file.path(OUT, "swim_competitions_all.rds"))
 cli::cli_alert_info("{nrow(pages)} competition{?s} listed by World Aquatics.")
 
-# The only exclusions: sports that are not pool swimming. Masters, junior, youth
-# and short course are all KEPT and tagged -- a masters swimmer is a real
-# athlete, an age-group result is real evidence about a young swimmer, and a
-# short-course time is a real performance in a different event.
+# MEASURED, not assumed: World Aquatics serves results only for events it
+# sanctions itself. Probing 10 unharvested global events found 3 with results;
+# probing 10 national championships found 0. All 43 meets already held are
+# global events. National meets are on this calendar because it is a calendar --
+# their results live with the national federation.
+#
+# So the pool is the global calendar, not the whole listing. Sweeping all 3,310
+# would spend hours proving that 2,835 national meets hold nothing.
+#
+# This also caps what swimming can know: the 37% of Glasgow finalists with no
+# history are national-level swimmers whose results are not in this API at all.
+# No amount of harvesting reaches them; that needs a different source.
 OTHER_SPORTS <- "Water Polo|Diving|Artistic|Open Water|High Diving"
+GLOBAL <- "Olympic|World Aquatics Championships|World Cup|World Swimming Championships|FINA"
 pool <- pages[!grepl(OTHER_SPORTS, official_name, ignore.case = TRUE) &
+                grepl(GLOBAL, official_name, ignore.case = TRUE) &
                 !is.na(date_from) & date_from <= Sys.Date() & date_from >= FROM]
+# Oldest first: recent meets are listed before their results are loaded, so a
+# newest-first sweep spends its first hours on empty files. Ordering this way
+# means an interrupted run still leaves usable data behind.
+data.table::setorder(pool, date_from)
 # Course matters physically: a 25m pool has twice the turns and push-offs, so a
 # short-course time is a DIFFERENT event, not a faster version of the same one.
 # Tagged here; the models decide what to do with it.
@@ -53,33 +67,99 @@ print(pool[, .N, by = .(level, course)][order(-N)])
 
 todo <- pool[!file.exists(file.path(CACHE, paste0(competition_id, ".rds")))]
 cli::cli_alert_info("{nrow(todo)} remaining to harvest.")
-n <- min(nrow(todo), as.integer(Sys.getenv("CITIUS_MAX_COMPS", "3000")))
+n <- min(nrow(todo), as.integer(Sys.getenv("CITIUS_MAX_COMPS", "5000")))
+remaining_after <- max(0L, nrow(todo) - n)
+todo <- todo[seq_len(n)]
 
-for (i in seq_len(n)) {
-  cid <- todo$competition_id[i]
-  f <- file.path(CACHE, paste0(cid, ".rds"))
-  disc <- tryCatch(aquatics_disciplines(cid), error = function(e) NULL)
-  if (is.null(disc) || !nrow(disc)) { saveRDS(data.table(), f); next }
-  out <- rbindlist(lapply(disc$discipline_id, function(did) {
+# Measured like the athletics feed: LATENCY bound, not throttle bound. Per
+# request 0.283s at a 0.25s throttle and 0.274s at 0.08s -- flat, so the throttle
+# is not what costs. Concurrency is: 1 worker 0.275s/req, 3 workers 0.152s,
+# 6 workers 0.117s, zero failures throughout.
+#
+# 75% of listed competitions hold results, averaging 38 disciplines each, so this
+# is ~91,600 requests. Six workers takes it from 7 hours to 3.
+WORKERS <- as.integer(Sys.getenv("CITIUS_WORKERS", "6"))
+cli::cli_alert_info("Harvesting {n} competition{?s} on {WORKERS} worker{?s}.")
+
+fetch_comp <- function(j, cache) {
+  f <- file.path(cache, paste0(j$cid, ".rds"))
+  disc <- tryCatch(aquatics_disciplines(j$cid), error = function(e) NULL)
+  # An empty file records a competition that holds nothing, so a rerun does not
+  # pay to rediscover it. 25% of listed meets are empty -- mostly ones too recent
+  # to have been loaded.
+  if (is.null(disc) || !nrow(disc)) { saveRDS(data.table::data.table(), f); return(0L) }
+  out <- data.table::rbindlist(lapply(disc$discipline_id, function(did) {
     tryCatch(aquatics_results(did), error = function(e) NULL)
   }), use.names = TRUE, fill = TRUE)
   if (nrow(out)) {
-    out[, `:=`(comp_name = todo$official_name[i], comp_start = todo$date_from[i],
-               course = todo$course[i], level = todo$level[i],
-               venue_city = todo$city[i], venue_country = todo$country[i])]
+    # competition_id and race_key are NOT optional metadata. race_key is what
+    # calibrate() groups on to identify the shared race effect, and
+    # competition_id is the backtest's scoring key -- omitting them produces a
+    # corpus that loads fine, calibrates silently wrong, and reports "0 meets".
+    # That is exactly what the first version of this script did.
+    out[, `:=`(competition_id = j$cid, comp_name = j$name, comp_start = j$start,
+               course = j$course, level = j$level,
+               venue_city = j$city, venue_country = j$country)]
+    out[, race_key := paste(competition_id, event_id, heat_name, sep = "|")]
   }
   saveRDS(out, f)
-  if (i %% 25 == 0) { cat(sprintf("  %d/%d\n", i, n)); flush.console() }
+  nrow(out)
 }
 
-files <- list.files(CACHE, full.names = TRUE)
-all <- rbindlist(lapply(files, readRDS), use.names = TRUE, fill = TRUE)
-if (nrow(all)) {
-  saveRDS(all, file.path(OUT, "swimming_history_full.rds"))
-  cat(sprintf("\n%s swims | %s meets | %s athletes\n",
-              format(nrow(all), big.mark = ","), uniqueN(all$competition_id),
-              format(uniqueN(all$athlete_id), big.mark = ",")))
-  if ("level" %in% names(all)) print(all[, .(swims = .N, meets = uniqueN(competition_id)),
-                                         by = .(level, course)][order(-swims)])
+jobs <- lapply(seq_len(n), function(i) list(
+  cid = todo$competition_id[i], name = todo$official_name[i],
+  start = todo$date_from[i], course = todo$course[i], level = todo$level[i],
+  city = todo$city[i], country = todo$country[i]))
+
+t0 <- Sys.time()
+if (WORKERS <= 1L) {
+  for (j in jobs) fetch_comp(j, CACHE)
+} else {
+  cl <- parallel::makeCluster(WORKERS)
+  on.exit(parallel::stopCluster(cl), add = TRUE)
+  parallel::clusterEvalQ(cl, {
+    suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
+    library(data.table); NULL
+  })
+  # Every value the worker needs travels INSIDE the job. Referencing `todo` from
+  # the worker looks natural, fails silently because the data.table is not in
+  # that environment, and reports success having written nothing -- which is
+  # exactly what happened on the first parallel attempt at the athletics sweep.
+  parallel::clusterExport(cl, c("fetch_comp", "CACHE"), envir = environment())
+  chunks <- split(seq_len(n), ceiling(seq_len(n) / 100))
+  for (k in seq_along(chunks)) {
+    idx <- chunks[[k]]
+    got <- parallel::parLapply(cl, jobs[idx], function(j) fetch_comp(j, CACHE))
+    el <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
+    done <- max(idx)
+    cat(sprintf("  %d/%d  (%.1f/min, ~%.0f min left, %s swims this chunk)\n",
+                done, n, done / el, (n - done) / (done / el),
+                format(sum(unlist(got)), big.mark = ",")))
+    flush.console()
+  }
 }
-cli::cli_alert_info("{nrow(todo) - n} competition{?s} still to fetch - run again.")
+
+cli::cli_alert_info("{remaining_after} competition{?s} still to fetch - run again.")
+
+# Assembly is OFF by default, as for the athletics sweep: a complete harvest is
+# millions of swims across ~3,100 files, and rbindlist-ing all of them after
+# every batch costs minutes and a large memory peak for no benefit. The cache is
+# the source of truth.
+if (!identical(Sys.getenv("CITIUS_ASSEMBLE", "0"), "1")) {
+  cli::cli_alert_info("Cache holds {length(list.files(CACHE))} competition file{?s}. Set CITIUS_ASSEMBLE=1 to build swimming_history_full.rds.")
+} else {
+  files <- list.files(CACHE, full.names = TRUE)
+  cli::cli_alert_info("Assembling {length(files)} file{?s}...")
+  parts <- lapply(split(files, ceiling(seq_along(files) / 500)), function(ch)
+    rbindlist(lapply(ch, readRDS), use.names = TRUE, fill = TRUE))
+  all <- rbindlist(parts, use.names = TRUE, fill = TRUE)
+  rm(parts); invisible(gc())
+  if (nrow(all)) {
+    saveRDS(all, file.path(OUT, "swimming_history_full.rds"))
+    cat(sprintf("\n%s swims | %s meets | %s athletes\n",
+                format(nrow(all), big.mark = ","), uniqueN(all$competition_id),
+                format(uniqueN(all$athlete_id), big.mark = ",")))
+    if ("level" %in% names(all)) print(all[, .(swims = .N, meets = uniqueN(competition_id)),
+                                           by = .(level, course)][order(-swims)])
+  }
+}

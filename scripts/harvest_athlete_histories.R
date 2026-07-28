@@ -37,7 +37,26 @@ ch <- ch[!is.na(aid)]
 # Priority 3: everyone else.
 fin <- unique(ch[!is.na(place) & grepl("final", round, ignore.case = TRUE) &
                    !grepl("semi", round, ignore.case = TRUE)]$aid)
+# athlete_results() fetches the PROFILE first when sex or birthdate is missing,
+# which doubles the request count for a sweep this size. We already hold both
+# for every one of these athletes, so passing them turns 2 requests per athlete
+# into 1 -- measured at 51 athletes/min, that is the difference between a 28
+# hour sweep and a 14 hour one.
+# Verified before relying on it: across 59 sampled athletes the feed's sex and
+# the profile's NEVER disagreed (37 of 37 where both exist), and the profile is
+# MISSING sex for 37% -- so passing it also recovers results that would
+# otherwise get no event_id at all (15.5% unusable -> 11.5%).
+#
+# 604 athletes (0.69%) carry conflicting sex_code within our own data. Those are
+# left NULL so they take the profile path rather than being fetched under a
+# guessed sex, which would file an entire career under the wrong events.
+known <- ch[!is.na(sex_code) | !is.na(birthdate),
+            .(sex = data.table::first(stats::na.omit(sex_code)),
+              birthdate = data.table::first(stats::na.omit(birthdate)),
+              n_sex = data.table::uniqueN(stats::na.omit(sex_code))), by = aid]
+known[n_sex > 1L, sex := NA_character_]
 held <- ch[, .(n_held = .N), by = aid]
+held <- merge(held, known, by = "aid", all.x = TRUE)
 held[, priority := fifelse(aid %in% fin, 1L, fifelse(n_held <= 3L, 2L, 3L))]
 setorder(held, priority, n_held)
 cli::cli_alert_info(
@@ -48,30 +67,98 @@ done <- sub("\\.rds$", "", list.files(CACHE))
 todo <- held[!as.character(aid) %in% done]
 cli::cli_alert_info("{format(nrow(todo), big.mark = ',')} remaining ({round(100 * nrow(todo) / nrow(held))}%).")
 
-n <- min(nrow(todo), as.integer(Sys.getenv("CITIUS_MAX_ATHLETES", "2000")))
+n <- min(nrow(todo), as.integer(Sys.getenv("CITIUS_MAX_ATHLETES", "200000")))
+# Measured: this feed is LATENCY bound, not throttle bound -- per-request time is
+# flat from a 0.25s throttle down to 0.03s (0.85s vs 0.76s). So the only lever is
+# concurrency, and it works: 1 worker 0.81s/req, 3 workers 0.37s, 6 workers
+# 0.22s, 10 workers 0.19s. Zero failures at every level.
+#
+# Six is the sweet spot. Ten buys 0.5x more for 67% more connections against a
+# free community API, which is not a trade worth making.
+WORKERS <- as.integer(Sys.getenv("CITIUS_WORKERS", "6"))
+remaining_after <- max(0L, nrow(todo) - n)   # captured BEFORE todo is truncated
+todo <- todo[seq_len(n)]
+cli::cli_alert_info("Fetching {n} athlete{?s} on {WORKERS} worker{?s}.")
+
+fetch_one <- function(id, sx, bd, cache) {
+  r <- tryCatch(athlete_results(id, sex = sx, birthdate = bd), error = function(e) NULL)
+  # An empty file records the miss so a rerun does not retry it forever. Each
+  # worker writes its own files, so no coordination is needed.
+  saveRDS(if (is.null(r)) data.table::data.table() else r,
+          file.path(cache, paste0(id, ".rds")))
+  !is.null(r) && nrow(r) > 0
+}
+
 t0 <- Sys.time()
-for (i in seq_len(n)) {
-  id <- todo$aid[i]
-  r <- tryCatch(athlete_results(id), error = function(e) NULL)
-  # An empty file records the miss so a rerun does not retry it forever.
-  saveRDS(if (is.null(r)) data.table() else r, file.path(CACHE, paste0(id, ".rds")))
-  if (i %% 100 == 0) {
+if (WORKERS <= 1L) {
+  for (i in seq_len(n)) {
+    fetch_one(todo$aid[i], if (!is.na(todo$sex[i])) todo$sex[i] else NULL,
+              if (!is.na(todo$birthdate[i])) todo$birthdate[i] else NULL, CACHE)
+  }
+} else {
+  cl <- parallel::makeCluster(WORKERS)
+  on.exit(parallel::stopCluster(cl), add = TRUE)
+  # PSOCK workers need library()/load_all on the search path; requireNamespace
+  # alone leaves the functions unavailable unqualified.
+  parallel::clusterEvalQ(cl, {
+    suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
+    library(data.table); NULL
+  })
+  parallel::clusterExport(cl, c("fetch_one", "CACHE"), envir = environment())
+  # Each task carries its OWN values. Referencing `todo` inside the worker looks
+  # natural and fails silently: the data.table is not in the worker's
+  # environment, every task errors, parLapply swallows it and the run reports
+  # success having written nothing. Caught only because the cache count did not
+  # move.
+  jobs <- lapply(seq_len(n), function(i) list(
+    id = todo$aid[i],
+    sx = if (!is.na(todo$sex[i])) todo$sex[i] else NULL,
+    bd = if (!is.na(todo$birthdate[i])) todo$birthdate[i] else NULL))
+  # Chunked so progress is visible and a stall is obvious, rather than one
+  # opaque multi-hour call.
+  chunks <- split(seq_len(n), ceiling(seq_len(n) / 500))
+  for (k in seq_along(chunks)) {
+    idx <- chunks[[k]]
+    got <- parallel::parLapply(cl, jobs[idx], function(j)
+      fetch_one(j$id, j$sx, j$bd, CACHE))
+    # A chunk that returns nothing usable is a failure, not a quiet success.
+    if (!any(unlist(got))) {
+      cli::cli_alert_danger("Chunk {k} returned no data for any athlete - stopping.")
+      break
+    }
     el <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
-    cat(sprintf("  %d/%d  (%.1f/min, ~%.0f min left this run)\n", i, n, i / el,
-                (n - i) / (i / el)))
+    done <- max(idx)
+    cat(sprintf("  %d/%d  (%.0f/min, ~%.0f min left)\n", done, n, done / el,
+                (n - done) / (done / el)))
     flush.console()
   }
 }
 
-cached <- list.files(CACHE, full.names = TRUE)
-hist <- rbindlist(lapply(cached, readRDS), use.names = TRUE, fill = TRUE)
-if (nrow(hist)) {
-  saveRDS(hist, file.path(OUT, "athletics_history.rds"))
-  cat(sprintf("\n%s performance%s from %s athlete%s\n",
-              format(nrow(hist), big.mark = ","), if (nrow(hist) == 1) "" else "s",
-              format(uniqueN(hist$athlete_id), big.mark = ","),
-              if (uniqueN(hist$athlete_id) == 1) "" else "s"))
-  cat(sprintf("mean results per athlete: %.1f (competition harvest gave ~3)\n",
-              nrow(hist) / uniqueN(hist$athlete_id)))
+cli::cli_alert_info("{remaining_after} athlete{?s} still to fetch - run again.")
+
+# Assembly is optional and OFF by default. At ~92 results per athlete a complete
+# sweep is ~8 million rows across 87k files; rbindlist-ing all of them every run
+# costs minutes and a multi-GB peak, and this ecosystem has already OOM-killed a
+# pipeline through exactly that kind of accumulation. The cache is the source of
+# truth -- assemble once at the end, not after every batch.
+if (!identical(Sys.getenv("CITIUS_ASSEMBLE", "0"), "1")) {
+  cli::cli_alert_info("Cache holds {length(list.files(CACHE))} athlete file{?s}. Set CITIUS_ASSEMBLE=1 to build athletics_history.rds.")
+} else {
+  cached <- list.files(CACHE, full.names = TRUE)
+  cli::cli_alert_info("Assembling {length(cached)} file{?s}...")
+  # Chunked so peak memory is one chunk plus the accumulator, not two full
+  # copies of everything.
+  parts <- lapply(split(cached, ceiling(seq_along(cached) / 5000)), function(ch)
+    rbindlist(lapply(ch, readRDS), use.names = TRUE, fill = TRUE))
+  hist <- rbindlist(parts, use.names = TRUE, fill = TRUE)
+  rm(parts); invisible(gc())
+  if (nrow(hist)) {
+    saveRDS(hist, file.path(OUT, "athletics_history.rds"))
+    cat(sprintf("\n%s performance%s from %s athlete%s\n",
+                format(nrow(hist), big.mark = ","), if (nrow(hist) == 1) "" else "s",
+                format(uniqueN(hist$athlete_id), big.mark = ","),
+                if (uniqueN(hist$athlete_id) == 1) "" else "s"))
+    cat(sprintf("mean results per athlete: %.1f (competition harvest gave ~3)\n",
+                nrow(hist) / uniqueN(hist$athlete_id)))
+  }
 }
-cli::cli_alert_info("{max(0, nrow(todo) - n)} athlete{?s} still to fetch - run again.")
