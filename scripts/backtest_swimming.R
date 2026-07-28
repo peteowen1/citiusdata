@@ -11,7 +11,12 @@ library(data.table)
 OUT <- here::here("citiusdata", "data")
 N_SIMS <- 20000L
 
-history <- readRDS(file.path(OUT, "swimming_history.rds"))
+# Input is switchable so the multi-source corpus can be compared against the
+# single-source history with nothing else changed. Any other difference between
+# the two runs would be uninterpretable.
+HISTORY <- Sys.getenv("CITIUS_SWIM_HISTORY", "swimming_history.rds")
+history <- readRDS(file.path(OUT, HISTORY))
+cli::cli_alert_info("Input: {HISTORY}")
 history <- history[!is.na(event_id) & !is.na(athlete_id)]
 cli::cli_alert_info(
   "{nrow(history)} swim{?s}, {uniqueN(history$athlete_id)} athlete{?s}, {uniqueN(history$competition_id)} competition{?s}."
