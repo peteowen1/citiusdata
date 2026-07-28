@@ -99,8 +99,27 @@ if (!nrow(finals)) {
       # mass sitting on non-starters is a FIELD error, not a model error, and
       # inflates apparent miscalibration -- so report it rather than absorb it.
       cat("\n=== probability mass on athletes who never appeared ===\n")
-      appeared <- unique(finals[event_id %in% keep, .(race_id = event_id, athlete_id)])
-      ghost <- p[race_id %in% keep][!appeared, on = .(race_id, athlete_id)]
+      # "Appeared" must NOT be filtered on place > 0. An athlete who fouls out
+      # of the high jump or fails to finish still contested the final -- they
+      # are a no-mark, which the simulator already models via foul_rate, not a
+      # non-starter. Filtering on place counted Shankar and Samarawee (0.10 of
+      # gold probability between them) as absent from a final they competed in.
+      contested <- unique(results[grepl("final", round, ignore.case = TRUE) &
+                                    !grepl("semi", round, ignore.case = TRUE) &
+                                    event_id %in% keep,
+                                  .(race_id = event_id, athlete_id)])
+      ghost <- p[race_id %in% keep][!contested, on = .(race_id, athlete_id)]
+      # Split what remains: an athlete seen elsewhere at these Games was
+      # eliminated earlier (a round-progression question, which simulate_rounds
+      # handles), not a withdrawal.
+      at_games <- unique(results$athlete_id)
+      ghost[, eliminated := athlete_id %in% at_games]
+      cat(sprintf("  eliminated earlier : %.2f gold prob (%d athlete%s)\n",
+                  sum(ghost[eliminated == TRUE]$p_gold), nrow(ghost[eliminated == TRUE]),
+                  if (nrow(ghost[eliminated == TRUE]) == 1) "" else "s"))
+      cat(sprintf("  never at the Games : %.2f gold prob (%d athlete%s) <- true withdrawals\n",
+                  sum(ghost[eliminated == FALSE]$p_gold), nrow(ghost[eliminated == FALSE]),
+                  if (nrow(ghost[eliminated == FALSE]) == 1) "" else "s"))
       if (nrow(ghost)) {
         gs <- ghost[, .(lost_gold = sum(p_gold), n = .N), by = race_id][order(-lost_gold)]
         print(gs)

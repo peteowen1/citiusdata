@@ -1,0 +1,109 @@
+# Re-predict Glasgow finals from the field that ACTUALLY turned up.
+#
+# The entry-list predictions put 9% of their gold probability on athletes who
+# never appeared at the Games -- the high jump favourite Hamish Kerr alone
+# carried 0.35. That is a field error, not a model error, but it is real lost
+# accuracy and it is avoidable once a round has been run.
+#
+# Where an earlier round exists, the field for the final is knowable:
+#   - heats run    -> the final field comes from those who contested the heats,
+#                     and qualification uncertainty is modelled by
+#                     simulate_rounds() rather than assumed away
+#   - final run    -> nothing to predict
+#   - nothing run  -> fall back to the entry list, flagged as provisional
+#
+# Athletes who contested a round but recorded no mark are KEPT: a no-height in
+# qualifying is a performance, and foul_rate already models it.
+
+suppressMessages(devtools::load_all(here::here("citius")))
+library(data.table)
+
+OUT <- here::here("citiusdata", "data")
+GLASGOW <- 7187518L
+HALF_LIFE <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "730"))
+N_SIMS <- 20000L
+
+res <- tryCatch(setDT(harvest_competitions(GLASGOW)), error = function(e) NULL)
+if (is.null(res) || !nrow(res)) {
+  cli::cli_alert_warning("No Glasgow results yet; nothing to re-predict from.")
+  quit(save = "no")
+}
+res[, athlete_id := as.character(athlete_id)]
+res[, rc := citius:::.round_class(round)]
+
+CUT <- min(res$date, na.rm = TRUE)
+champs <- readRDS(file.path(OUT, "championship_results.rds"))
+cal <- readRDS(file.path(OUT, "calibration.rds"))
+clean <- flag_implausible(champs)[!is.na(event_id) & !is.na(perf)]
+past <- clean[date < CUT & date >= CUT - 4380 & event_id %in% unique(res$event_id)]
+ability <- estimate_ability(past, as_of = CUT, half_life = HALF_LIFE, calibration = cal)
+
+out <- list()
+for (ev in sort(unique(res$event_id))) {
+  if (is.na(ev)) next
+  x <- res[event_id == ev]
+  if (any(x$rc == "final")) next                       # already decided
+  # Everyone who contested the earlier round, marks or not.
+  field <- unique(x$athlete_id)
+  ent <- ability[event_id == ev & athlete_id %in% field]
+  if (nrow(ent) < 4L) next
+
+  n_heats <- uniqueN(x$race_key)
+  reg <- citius_events()
+  fam <- reg$family[match(ev, reg$event_id)]
+  n_final <- if (fam %in% c("jump", "throw")) 12L else 8L
+
+  # When there are more heats than final places, a naive `n_final %/% n_heats`
+  # floors to 0, gets clamped to 1 per heat, and qualifies MORE athletes than
+  # the final holds -- 11 heats produced an 11-lane 100m final. Championships
+  # solve this with a semi-final round, so insert one whenever the heats cannot
+  # feed the final directly.
+  build <- function(nh, target) {
+    per <- target %/% nh
+    if (per >= 1L) {
+      list(list(races = nh, advance = per,
+                fastest_losers = max(0L, target - per * nh)))
+    } else {
+      NULL                                   # caller adds an intermediate round
+    }
+  }
+  structure <- if (n_heats <= n_final) {
+    c(build(n_heats, n_final), list(list(races = 1)))
+  } else {
+    # Heats -> semis -> final. Semis are sized to the final's capacity.
+    n_semi <- max(2L, min(n_heats %/% 2L, 3L))
+    n_semi_field <- n_semi * n_final %/% 2L   # ~half a final's worth per semi
+    c(build(n_heats, n_semi_field),
+      build(n_semi, n_final),
+      list(list(races = 1)))
+  }
+
+  r <- simulate_rounds(ent, structure = structure,
+                       n_sims = N_SIMS, calibration = cal, seed = 20260728L)
+  r[, `:=`(event_id = ev, contested_round = x$round[1], n_heats = n_heats,
+           field_size = length(field))]
+  out[[length(out) + 1L]] <- r
+}
+
+if (!length(out)) {
+  cli::cli_alert_info("No event has an earlier round but no final yet.")
+  quit(save = "no")
+}
+pred <- rbindlist(out, fill = TRUE)
+info <- unique(res[, .(athlete_id, event_id, athlete_name)])
+pred <- merge(pred, info, by = c("athlete_id", "event_id"), all.x = TRUE)
+stamp <- format(Sys.time(), "%Y%m%dT%H%M%S")
+arrow::write_parquet(pred, file.path(OUT, paste0("glasgow2026_live_predictions_", stamp, ".parquet")))
+cli::cli_alert_success("{nrow(pred)} row{?s} across {uniqueN(pred$event_id)} event{?s} still to be decided.")
+
+setorder(pred, event_id, -p_gold)
+for (ev in unique(pred$event_id)) {
+  x <- pred[event_id == ev]
+  cat(sprintf("\n%s  (%d contested %s in %d heat%s)\n", ev, x$field_size[1],
+              x$contested_round[1], x$n_heats[1], if (x$n_heats[1] == 1) "" else "s"))
+  print(head(x[, .(athlete = substr(athlete_name, 1, 24),
+                   reach_final = round(p_final, 3),
+                   gold = round(p_gold, 3), medal = round(p_medal, 3))], 6))
+}
+cat("\nEvery athlete here contested a round at these Games, so no probability\n")
+cat("sits on a withdrawal. p_final carries the qualification uncertainty.\n")
