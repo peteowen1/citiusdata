@@ -372,6 +372,27 @@ events <- merge(reg[event_id %in% ids], status[!is.na(event_id)], by = "event_id
 events[is.na(results), `:=`(results = 0L, races = 0L, final_done = FALSE)]
 events[, `:=`(predicted = event_id %in% predicted_events, generated_at = NOW)]
 
+# --- athlete history ---------------------------------------------------------
+# Career marks for the athletes actually at these Games, so the site can show
+# what a result means against a career rather than in isolation. Scoped to
+# Glasgow participants on purpose: the full 308k-row history is the wrong thing
+# to put behind a per-athlete page, and shipping it would put megabytes on the
+# wire for a page that reads one athlete at a time.
+HIST_COLS <- c("athlete_id", "athlete_name", "date", "event_id", "discipline",
+               "sex_code", "round", "mark_string", "mark", "perf", "place",
+               "wind", "tier", "venue_city", "age", "comp_name")
+who <- unique(c(as.character(results$athlete_id), as.character(pred$athlete_id)))
+who <- who[!is.na(who)]
+hist <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+hist <- hist[as.character(athlete_id) %in% who]
+for (nm in setdiff(HIST_COLS, names(hist))) hist[, (nm) := NA]
+hist <- hist[, ..HIST_COLS]
+setnames(hist, "sex_code", "sex")
+hist[, `:=`(athlete_id = as.character(athlete_id), generated_at = NOW)]
+setorder(hist, athlete_id, -date)
+cli::cli_alert_info(
+  "Athlete history: {nrow(hist)} row{?s} for {uniqueN(hist$athlete_id)} of {length(who)} Glasgow athlete{?s}.")
+
 # --- write + upload ----------------------------------------------------------
 pred[, generated_at_export := NOW]
 results[, generated_at := NOW]
@@ -380,6 +401,7 @@ artefacts <- list(
   "cg2026-predictions.parquet" = pred,
   "cg2026-results.parquet"     = results,
   "cg2026-medals.parquet"      = medals,
+  "cg2026-athlete-history.parquet" = hist,
   "events.parquet"             = events)
 
 for (nm in names(artefacts)) {
