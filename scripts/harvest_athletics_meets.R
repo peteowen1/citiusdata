@@ -61,7 +61,7 @@ if (file.exists(comp_file)) {
   comps <- readRDS(comp_file)
 } else {
   comps <- rbindlist(lapply(QUERIES, function(q) {
-    r <- tryCatch(find_competition(q), error = function(e) NULL)
+    r <- tryCatch(athletics_find_competition(q), error = function(e) NULL)
     if (is.null(r) || !nrow(r)) return(NULL)
     r[has_results == TRUE & start >= as.Date("2010-01-01") & start <= Sys.Date()]
   }), use.names = TRUE, fill = TRUE)
@@ -88,7 +88,7 @@ if (nrow(todo_c)) {
   todo_c[, dur := pmin(dur + 1L, 12L)]        # +1 buffer, capped
   for (i in seq_len(n)) {
     cid <- todo_c$competition_id[i]
-    r <- tryCatch(competition_results(cid, days = seq_len(todo_c$dur[i])),
+    r <- tryCatch(athletics_competition_results(cid, days = seq_len(todo_c$dur[i])),
                   error = function(e) NULL)
     if (!is.null(r) && nrow(r)) {
       r[, `:=`(comp_name = todo_c$name[i], comp_start = todo_c$start[i],
@@ -123,7 +123,7 @@ if (nrow(champs)) {
     n <- min(length(todo_a), MAX_ATHLETES)
     for (i in seq_len(n)) {
       id <- todo_a[i]
-      r <- tryCatch(athlete_results(id), error = function(e) NULL)
+      r <- tryCatch(athletics_athlete_results(id), error = function(e) NULL)
       saveRDS(if (is.null(r)) data.table() else r,
               file.path(ATH_CACHE, paste0(id, ".rds")))
       if (i %% 50 == 0) cli::cli_alert("  stage 2: {i}/{n}")

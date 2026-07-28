@@ -33,7 +33,7 @@ dir.create(BLOG, recursive = TRUE, showWarnings = FALSE)
 # --- athletics results -------------------------------------------------------
 # Prefer a live harvest; fall back to the last saved copy so a feed outage
 # degrades to stale-but-labelled rather than to an empty page.
-ath <- tryCatch(setDT(harvest_competitions(GLASGOW)), error = function(e) NULL)
+ath <- tryCatch(setDT(athletics_harvest_competitions(GLASGOW)), error = function(e) NULL)
 # `harvest_ok` is published to the site. Without it the freshness banner tracks
 # when this SCRIPT ran, not how old the DATA is: run it during a feed outage and
 # the page shows a green "as at just now" over yesterday's results, which is the

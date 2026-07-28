@@ -37,7 +37,7 @@ ch <- ch[!is.na(aid)]
 # Priority 3: everyone else.
 fin <- unique(ch[!is.na(place) & grepl("final", round, ignore.case = TRUE) &
                    !grepl("semi", round, ignore.case = TRUE)]$aid)
-# athlete_results() fetches the PROFILE first when sex or birthdate is missing,
+# athletics_athlete_results() fetches the PROFILE first when sex or birthdate is missing,
 # which doubles the request count for a sweep this size. We already hold both
 # for every one of these athletes, so passing them turns 2 requests per athlete
 # into 1 -- measured at 51 athletes/min, that is the difference between a 28
@@ -81,7 +81,7 @@ todo <- todo[seq_len(n)]
 cli::cli_alert_info("Fetching {n} athlete{?s} on {WORKERS} worker{?s}.")
 
 fetch_one <- function(id, sx, bd, cache) {
-  r <- tryCatch(athlete_results(id, sex = sx, birthdate = bd), error = function(e) NULL)
+  r <- tryCatch(athletics_athlete_results(id, sex = sx, birthdate = bd), error = function(e) NULL)
   # An empty file records the miss so a rerun does not retry it forever. Each
   # worker writes its own files, so no coordination is needed.
   saveRDS(if (is.null(r)) data.table::data.table() else r,

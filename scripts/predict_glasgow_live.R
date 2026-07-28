@@ -23,7 +23,7 @@ GLASGOW <- 7187518L
 HALF_LIFE <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "730"))
 N_SIMS <- 20000L
 
-res <- tryCatch(setDT(harvest_competitions(GLASGOW)), error = function(e) NULL)
+res <- tryCatch(setDT(athletics_harvest_competitions(GLASGOW)), error = function(e) NULL)
 if (is.null(res) || !nrow(res)) {
   cli::cli_alert_warning("No Glasgow results yet; nothing to re-predict from.")
   quit(save = "no")

@@ -16,7 +16,7 @@ GLASGOW_2026 <- 7187518L
 OUT <- here::here("citiusdata", "data")
 dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
 
-comp <- find_competition("XXIII Commonwealth Games")
+comp <- athletics_find_competition("XXIII Commonwealth Games")
 comp <- comp[competition_id == GLASGOW_2026]
 
 if (!nrow(comp)) {
@@ -26,7 +26,7 @@ if (!nrow(comp)) {
     "Glasgow 2026 has no results yet (runs {format(comp$start)} to {format(comp$end)})."
   )
 } else {
-  results <- harvest_competitions(GLASGOW_2026)
+  results <- athletics_harvest_competitions(GLASGOW_2026)
   arrow::write_parquet(results, file.path(OUT, "glasgow2026_athletics.parquet"))
   cli::cli_alert_success(
     "Harvested {nrow(results)} result{?s} across {uniqueN(results$event_id)} event{?s}."

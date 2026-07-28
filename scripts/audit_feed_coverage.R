@@ -60,9 +60,9 @@ for (i in seq_len(nrow(samp))) {
   cat(sprintf("  %d/%d\n", i, nrow(samp))); flush.console()
 }
 
-# What competition_results() actually produces, for the same competitions.
+# What athletics_competition_results() actually produces, for the same competitions.
 parsed <- rbindlist(lapply(samp$competition_id, function(cid) {
-  tryCatch(competition_results(cid), error = function(e) NULL)
+  tryCatch(athletics_competition_results(cid), error = function(e) NULL)
 }), use.names = TRUE, fill = TRUE)
 
 cli::cli_h2("1. Field coverage — what the feed offers vs what we keep")
