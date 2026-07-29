@@ -61,7 +61,37 @@ half_life   <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "365"))
 # edge. 0.5 takes most of the mark gain without paying that.
 PRIOR_WEIGHT <- as.numeric(Sys.getenv("CITIUS_PRIOR_WEIGHT", "0.5"))
 
+# --- DEV HARNESS: restrict to a named set of athletes ------------------------
+# The full run takes ~2.8 hours on the corpus, which is too slow to iterate on.
+# Restricting to championship-calibre athletes cuts it to roughly a fifth, and it
+# is also the population this package exists for -- there is little point tuning
+# on club runners who will never contest a Games.
+#
+# THIS IS A DEV HARNESS, NOT A REPORTING ONE. Two reasons its absolute numbers
+# must never be quoted:
+#
+#  1. Restricting the history changes `prior_mu` and `sigma_between`, which are
+#     population statistics. So this is a DIFFERENT MODEL, not a subsample of the
+#     full one, and its MAE is not comparable to the headline.
+#  2. Athletes are selected by having reached a top-tier final at some point,
+#     which for an early cut date uses information from after it. Harmless when
+#     every arm gets the identical set and only their ORDERING is read; not
+#     harmless if the number itself is reported.
+#
+# Validated by reproducing the arm ordering of known full runs -- see
+# scripts/validate_dev_harness.R.
+ATHLETES <- Sys.getenv("CITIUS_BT_ATHLETES", "")
+dev_ids <- if (nzchar(ATHLETES)) {
+  as.character(readRDS(file.path(OUT, ATHLETES)))
+} else NULL
+if (!is.null(dev_ids)) {
+  cli::cli_alert_warning(
+    "DEV HARNESS: history restricted to {format(length(dev_ids), big.mark = ',')} athletes. Absolute metrics are NOT comparable to a full run."
+  )
+}
+
 clean <- flag_implausible(hist_raw)[!is.na(event_id) & !is.na(perf)]
+if (!is.null(dev_ids)) clean <- clean[as.character(athlete_id) %in% dev_ids]
 outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
   clean
 } else {
@@ -111,6 +141,11 @@ cli::cli_alert_info(
 finals <- outcome_rows[!is.na(place) &
                   grepl("final", round, ignore.case = TRUE) &
                   !grepl("semi", round, ignore.case = TRUE)]
+if (!is.null(dev_ids)) {
+  finals <- finals[as.character(athlete_id) %in% dev_ids]
+  finals[, .n_dev := .N, by = race_key]
+  finals <- finals[.n_dev >= 4L][, .n_dev := NULL]
+}
 
 # Sample meets evenly across time rather than taking the most recent, so the
 # backtest is not all one era.
@@ -167,6 +202,7 @@ for (i in seq_len(n)) {
     clean[date < cut_date & date >= cut_date - HISTORY_DAYS &
             event_id %in% meet_events]
   })
+  if (!is.null(dev_ids)) past <- past[as.character(athlete_id) %in% dev_ids]
   TIMING$rows <- TIMING$rows + nrow(past)
   if (nrow(past) < 2000L) { saveRDS(list(), file.path(BT_CACHE, paste0(cid, ".rds"))); next }
   ability <- tick("ability", estimate_ability(past, as_of = cut_date,
