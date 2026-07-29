@@ -80,13 +80,38 @@ PRIOR_WEIGHT <- as.numeric(Sys.getenv("CITIUS_PRIOR_WEIGHT", "0.5"))
 #
 # Validated by reproducing the arm ordering of known full runs -- see
 # scripts/validate_dev_harness.R.
+# TWO SEPARATE KNOBS, deliberately. Conflating them is easy and wrong.
+#
+#   CITIUS_BT_COHORT   restricts the SCORED RACES to fields containing at least
+#                      four of these athletes. This is a MODELLING CHOICE about
+#                      what the model is for -- championship races, not club
+#                      meets -- and it leaves the model itself untouched, so its
+#                      metrics remain directly comparable across arms and to any
+#                      other run using the same cohort. It is also most of the
+#                      speedup, because the meet pool shrinks and the expensive
+#                      per-meet ability refit is skipped along with the meet.
+#
+#   CITIUS_BT_ATHLETES additionally restricts the HISTORY. That changes prior_mu
+#                      and sigma_between, which are population statistics, so it
+#                      produces a DIFFERENT MODEL rather than a subsample. Use it
+#                      only when speed matters more than comparability, and never
+#                      quote the absolute numbers it produces.
+COHORT <- Sys.getenv("CITIUS_BT_COHORT", "elite_cohort.rds")
+cohort_ids <- if (nzchar(COHORT) && file.exists(file.path(OUT, COHORT))) {
+  as.character(readRDS(file.path(OUT, COHORT)))
+} else NULL
 ATHLETES <- Sys.getenv("CITIUS_BT_ATHLETES", "")
 dev_ids <- if (nzchar(ATHLETES)) {
   as.character(readRDS(file.path(OUT, ATHLETES)))
 } else NULL
+if (!is.null(cohort_ids)) {
+  cli::cli_alert_info(
+    "Scoring races with 4+ of {format(length(cohort_ids), big.mark = ',')} cohort athletes. History is UNRESTRICTED."
+  )
+}
 if (!is.null(dev_ids)) {
   cli::cli_alert_warning(
-    "DEV HARNESS: history restricted to {format(length(dev_ids), big.mark = ',')} athletes. Absolute metrics are NOT comparable to a full run."
+    "DEV HARNESS: history ALSO restricted. Absolute metrics are NOT comparable to a full run."
   )
 }
 
@@ -141,10 +166,13 @@ cli::cli_alert_info(
 finals <- outcome_rows[!is.na(place) &
                   grepl("final", round, ignore.case = TRUE) &
                   !grepl("semi", round, ignore.case = TRUE)]
-if (!is.null(dev_ids)) {
-  finals <- finals[as.character(athlete_id) %in% dev_ids]
-  finals[, .n_dev := .N, by = race_key]
-  finals <- finals[.n_dev >= 4L][, .n_dev := NULL]
+sel <- if (!is.null(dev_ids)) dev_ids else cohort_ids
+if (!is.null(sel)) {
+  # Keep the WHOLE field of a qualifying race, not just its cohort members --
+  # a medal probability is over everyone who lined up, and dropping the rest
+  # would silently redefine the race.
+  finals[, .n_sel := sum(as.character(athlete_id) %in% sel), by = race_key]
+  finals <- finals[.n_sel >= 4L][, .n_sel := NULL]
 }
 
 # Sample meets evenly across time rather than taking the most recent, so the
