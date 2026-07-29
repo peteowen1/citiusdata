@@ -305,6 +305,14 @@ for (i in seq_len(n)) {
     }), fill = TRUE))
   }
 
+  # estimate_ability() strips the championship offset from championship history,
+  # leaving ability on a NON-championship top-tier-final footing. Every meet
+  # scored here is a championship, so it has to go back on -- without this half
+  # the correction runs one way and makes predictions worse, not better.
+  if (!is.null(calibration$championship) && nrow(calibration$championship)) {
+    ability <- project_championship(ability, calibration)
+  }
+
   # Key ONCE per meet, not once per race. The loop below previously bracket-filtered
   # `ability` for every race -- O(races x nrow(ability)) -- which is cheap on the
   # 308k harvest and expensive on the 4.99M corpus, where a single event carries
