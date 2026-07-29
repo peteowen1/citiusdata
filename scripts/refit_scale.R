@@ -30,7 +30,7 @@ OUT <- here::here("citiusdata", "data")
 
 BT   <- Sys.getenv("CITIUS_REFIT_BT",  "backtest_corpus_elite.rds")
 CAL  <- Sys.getenv("CITIUS_REFIT_CAL", "calibration_corpus.rds")
-DEST <- Sys.getenv("CITIUS_REFIT_OUT", sub("\.rds$", "_widened.rds", CAL))
+DEST <- Sys.getenv("CITIUS_REFIT_OUT", sub("[.]rds$", "_widened.rds", CAL))
 CUT  <- as.Date(Sys.getenv("CITIUS_REFIT_CUT", "2024-01-01"))
 MIN_N <- as.integer(Sys.getenv("CITIUS_REFIT_MIN_N", "150"))
 
