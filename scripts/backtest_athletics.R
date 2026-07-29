@@ -39,6 +39,16 @@ HISTORY  <- Sys.getenv("CITIUS_BT_HISTORY", OUTCOMES)
 champs      <- readRDS(file.path(OUT, OUTCOMES))
 hist_raw    <- if (identical(HISTORY, OUTCOMES)) champs else readRDS(file.path(OUT, HISTORY))
 calibration <- readRDS(file.path(OUT, Sys.getenv("CITIUS_BT_CALIBRATION", "calibration.rds")))
+# The aging curve. Found missing from this script on 2026-07-29: project_ability()
+# is applied in predict_glasgow2026.R but was never called here, so the backtest
+# was measuring a DIFFERENT pipeline from the one that ships -- and every
+# parameter tuned against it was tuned without ageing. Set CITIUS_BT_AGING empty
+# to reproduce the old, ageing-free behaviour.
+AGING_FILE <- Sys.getenv("CITIUS_BT_AGING", "aging.rds")
+aging <- if (nzchar(AGING_FILE) && file.exists(file.path(OUT, AGING_FILE)))
+  readRDS(file.path(OUT, AGING_FILE)) else NULL
+cli::cli_alert_info(if (is.null(aging)) "No aging curve: ability is NOT age-projected."
+                    else paste("Age projection from", AGING_FILE))
 cli::cli_alert_info("Outcomes from {.file {OUTCOMES}}; ability history from {.file {HISTORY}}.")
 # 365 days, selected by A/B on out-of-sample RANKING skill over 5,872 backtest
 # races -- not by fit_half_life(), which optimises next-result MAE and returns 90
@@ -276,6 +286,20 @@ for (i in seq_len(n)) {
     if (PRIOR_WEIGHT > 0) {
       entrants <- condition_prior(entrants, field = entrants$athlete_id,
                                   weight = PRIOR_WEIGHT)
+    }
+    # Age-project onto the day of the race. `age_now` comes from the meet's own
+    # rows, which carry each athlete's age on the day; `age_ref` is the weighted
+    # mean age behind the estimate. project_ability() scales the shift by
+    # (1 - shrinkage), so a heavily-shrunk athlete is not aged as if the event
+    # mean were their own career.
+    if (!is.null(aging) && "age" %in% names(field)) {
+      entrants[field[, .(athlete_id = as.character(athlete_id), age_now = age)],
+               on = "athlete_id", age_now := i.age_now]
+      ok <- entrants[!is.na(age_now) & !is.na(age_ref)]
+      if (nrow(ok)) {
+        proj <- suppressWarnings(project_ability(ok, aging))
+        entrants[proj, on = "athlete_id", ability := i.ability]
+      }
     }
     sim <- tick("sim", simulate_event(entrants, n_sims = N_SIMS,
                                       calibration = calibration, seed = 11L))
