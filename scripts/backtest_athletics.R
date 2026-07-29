@@ -58,6 +58,31 @@ cli::cli_alert_info("Outcomes from {.file {OUTCOMES}}; ability history from {.fi
 # (t=3.44) and 90 (t=10.52); tied with 270. It also cuts the top-band
 # over-confidence from -0.106 to -0.073.
 half_life   <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "365"))
+# Optionally vary the half-life BY FAMILY. fit_half_life() finds a 6x spread --
+# road 1095 days against 180 for sprint, throw, middle, distance and hurdles --
+# and a single global value is applied to all of them. The families with the most
+# headroom above their own noise floor (distance 1.54x, road 1.60x) are precisely
+# the ones whose fitted half-life is furthest from 365.
+# Adopted 2026-07-29: road 1095, walk 730, everything else the global 365.
+#
+# Measured, not guessed. A profile that also lengthened distance and middle to
+# 545 gained nothing there (+0.004 and -0.002 MAE), so only the two families with
+# real evidence are varied. Paired over 28,737 marks the change is t = +8.24,
+# p = 1.8e-16 on marks and NOT significant on gold (p = 0.78).
+#
+# The mechanism is race FREQUENCY, not physiology. A marathoner races twice a
+# year, so under a 365-day half-life their previous marathon carries 0.5 and the
+# one before 0.25 -- a two-race athlete has almost no evidence left. The right
+# knob is probably observation frequency rather than family, which would
+# generalise to any sparsely-raced athlete; this is the cheap version.
+HL_BY_FAMILY <- Sys.getenv("CITIUS_HALF_LIFE_FAMILY", "road=1095,walk=730")
+hl_map <- if (nzchar(HL_BY_FAMILY)) {
+  kv <- strsplit(strsplit(HL_BY_FAMILY, ",")[[1]], "=")
+  stats::setNames(as.numeric(vapply(kv, `[`, character(1), 2)),
+                  vapply(kv, `[`, character(1), 1))
+} else NULL
+if (!is.null(hl_map)) cli::cli_alert_info(
+  "Per-family half-life: {paste(names(hl_map), round(hl_map), sep = '=', collapse = ', ')}")
 # 0 = shrink toward the unconditional event mean (previous behaviour);
 # 1 = shrink fully toward the field being predicted. See condition_prior().
 #
@@ -243,9 +268,23 @@ for (i in seq_len(n)) {
   if (!is.null(dev_ids)) past <- past[as.character(athlete_id) %in% dev_ids]
   TIMING$rows <- TIMING$rows + nrow(past)
   if (nrow(past) < 2000L) { saveRDS(list(), file.path(BT_CACHE, paste0(cid, ".rds"))); next }
-  ability <- tick("ability", estimate_ability(past, as_of = cut_date,
-                                             half_life = half_life,
-                                             calibration = calibration))
+  ability <- if (is.null(hl_map)) {
+    tick("ability", estimate_ability(past, as_of = cut_date,
+                                     half_life = half_life,
+                                     calibration = calibration))
+  } else {
+    # Refit per family. estimate_ability takes a single half-life, so split the
+    # history by family and stack -- each event only ever belongs to one family,
+    # so no athlete-event is estimated twice.
+    reg_f <- as.data.table(citius_events()[, c("event_id", "family")])
+    pf <- merge(past, reg_f, by = "event_id", all.x = TRUE)
+    tick("ability", data.table::rbindlist(lapply(split(pf, pf$family), function(g) {
+      hl <- if (!is.na(g$family[1]) && g$family[1] %in% names(hl_map))
+        hl_map[[g$family[1]]] else half_life
+      estimate_ability(g[, !"family"], as_of = cut_date, half_life = hl,
+                       calibration = calibration)
+    }), fill = TRUE))
+  }
 
   # Key ONCE per meet, not once per race. The loop below previously bracket-filtered
   # `ability` for every race -- O(races x nrow(ability)) -- which is cheap on the
