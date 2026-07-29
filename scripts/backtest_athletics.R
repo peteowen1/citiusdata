@@ -14,8 +14,18 @@ dir.create(BT_CACHE, recursive = TRUE, showWarnings = FALSE)
 
 N_SIMS <- 10000L
 MAX_PER_RUN <- as.integer(Sys.getenv("CITIUS_BT_MEETS", "25"))
-# History depth per refit. At a 730-day half-life, 8 years back carries weight
-# 2^-4 = 6%; 12 years carries 1.5%. Beyond that the compute is pure waste.
+# History depth per refit. TWELVE YEARS, and do not shorten it on the argument
+# that old marks carry negligible weight.
+#
+# That argument was tried on 2026-07-29 and is wrong. An individual mark seven
+# years old carries 2^-7 = 0.8% at a 365-day half-life, which is indeed nothing
+# for the weighted MEAN. But `w_total` is a SUM, and it drives shrinkage: an
+# athlete with 50 marks in years 7-12 contributes ~0.4 to a w_total that averages
+# 1.59 across the backtest. Cutting the window to seven years changed 4,397 of
+# 4,809 predictions, moving p_gold by up to 0.246 and predicted marks by up to
+# 5.3%.
+#
+# Negligible for the mean, decisive for the sum. Verified, not assumed.
 HISTORY_DAYS <- as.integer(Sys.getenv("CITIUS_HISTORY_DAYS", "4380"))
 
 # OUTCOMES and HISTORY are separate inputs so two ability sources can be compared
@@ -90,6 +100,11 @@ USE_STORE <- dir.exists(STORE) && (identical(HISTORY, OUTCOMES) ||
                                    nzchar(Sys.getenv("CITIUS_BT_STORE")))
 cli::cli_alert_info(if (USE_STORE) "Reading history from the parquet store."
                     else "No parquet store; filtering the in-memory corpus.")
+# Ask the store only for columns it holds. `comp_start` and `place` are OUTCOME
+# fields used to build the meet pool; the history side never reads them, and the
+# corpus store does not carry comp_start at all. Requesting them aborted the run.
+STORE_COLS <- if (USE_STORE)
+  intersect(keep_cols, names(arrow::open_dataset(STORE))) else keep_cols
 cli::cli_alert_info(
   "Narrowed to {ncol(clean)} column{?s} ({format(object.size(clean), units = 'MB')})."
 )
@@ -112,6 +127,17 @@ if (nrow(pool) > TARGET) pool <- pool[round(seq(1, .N, length.out = TARGET))]
 todo <- pool[!file.exists(file.path(BT_CACHE, paste0(competition_id, ".rds")))]
 cli::cli_alert_info("{nrow(todo)} of {nrow(pool)} meet{?s} remaining.")
 
+# Per-phase timing, so an optimisation is aimed rather than guessed. Written to
+# the log every meet and summarised at the end.
+TIMING <- new.env(parent = emptyenv())
+TIMING$read <- 0; TIMING$ability <- 0; TIMING$sim <- 0; TIMING$rows <- 0
+tick <- function(slot, expr) {
+  t0 <- Sys.time()
+  out <- force(expr)
+  assign(slot, get(slot, TIMING) + as.numeric(difftime(Sys.time(), t0, units = "secs")), TIMING)
+  out
+}
+
 n <- min(nrow(todo), MAX_PER_RUN)
 for (i in seq_len(n)) {
   cid <- todo$competition_id[i]
@@ -133,17 +159,19 @@ for (i in seq_len(n)) {
   # Measured on 8.6M rows: 46.1s to load an .rds and filter it, against 0.39s
   # here, because partition pruning never opens the other 80-odd event files.
   # Falls back to the in-memory corpus when no store exists.
-  past <- if (USE_STORE) {
+  past <- tick("read", if (USE_STORE) {
     read_results_store(STORE, events = meet_events,
                        from = cut_date - HISTORY_DAYS, to = cut_date - 1L,
-                       columns = keep_cols)
+                       columns = STORE_COLS)
   } else {
     clean[date < cut_date & date >= cut_date - HISTORY_DAYS &
             event_id %in% meet_events]
-  }
+  })
+  TIMING$rows <- TIMING$rows + nrow(past)
   if (nrow(past) < 2000L) { saveRDS(list(), file.path(BT_CACHE, paste0(cid, ".rds"))); next }
-  ability <- estimate_ability(past, as_of = cut_date, half_life = half_life,
-                              calibration = calibration)
+  ability <- tick("ability", estimate_ability(past, as_of = cut_date,
+                                             half_life = half_life,
+                                             calibration = calibration))
 
   # Key ONCE per meet, not once per race. The loop below previously bracket-filtered
   # `ability` for every race -- O(races x nrow(ability)) -- which is cheap on the
@@ -185,8 +213,8 @@ for (i in seq_len(n)) {
       entrants <- condition_prior(entrants, field = entrants$athlete_id,
                                   weight = PRIOR_WEIGHT)
     }
-    sim <- simulate_event(entrants, n_sims = N_SIMS,
-                          calibration = calibration, seed = 11L)
+    sim <- tick("sim", simulate_event(entrants, n_sims = N_SIMS,
+                                      calibration = calibration, seed = 11L))
     mp <- medal_probs(sim)
     key <- rk
     mp[, race_id := key]
@@ -205,8 +233,14 @@ for (i in seq_len(n)) {
         hit_medal = mp$athlete_id %in% as.character(field[place <= 3L]$athlete_id)))
   }
   saveRDS(out, file.path(BT_CACHE, paste0(cid, ".rds")))
-  cli::cli_alert("  {i}/{n}: {cid} -> {length(out)} race{?s}")
+  cli::cli_alert("  {i}/{n}: {cid} -> {length(out)} race{?s}  [read {round(TIMING$read)}s ability {round(TIMING$ability)}s sim {round(TIMING$sim)}s]")
 }
+
+cli::cli_h3("Timing")
+tot <- TIMING$read + TIMING$ability + TIMING$sim
+cli::cli_alert_info(
+  "read {round(TIMING$read)}s ({round(100*TIMING$read/tot)}%) | ability {round(TIMING$ability)}s ({round(100*TIMING$ability/tot)}%) | simulate {round(TIMING$sim)}s ({round(100*TIMING$sim/tot)}%) | {format(TIMING$rows, big.mark=',')} history rows read"
+)
 
 # --- assemble and score ------------------------------------------------------
 blobs <- unlist(lapply(list.files(BT_CACHE, full.names = TRUE), readRDS), recursive = FALSE)

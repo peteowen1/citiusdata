@@ -75,6 +75,12 @@ build <- function(src, dest, label) {
 }
 
 build("championship_results.rds", "athletics_store", "Athletics competitions")
+# The UNIFIED corpus -- 4.99M rows against the competition harvest's 308k. Without
+# a store the backtest filters it in memory once per meet, 900 times, which is
+# what made the corpus arm 16x slower than the harvest arms rather than equal.
+if (file.exists(file.path(OUT, "athletics_corpus.rds"))) {
+  build("athletics_corpus.rds", "athletics_corpus_store", "Athletics corpus")
+}
 build("swimming_history_full.rds", "swimming_store", "Swimming")
 if (file.exists(file.path(OUT, "athletics_history.rds"))) {
   build("athletics_history.rds", "athletics_careers_store", "Athletics careers")
