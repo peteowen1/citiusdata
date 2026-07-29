@@ -35,10 +35,15 @@ HISTORY_DAYS <- as.integer(Sys.getenv("CITIUS_HISTORY_DAYS", "4380"))
 # always come from the competition harvest -- it is the only route that carries
 # whole fields with finishing places.
 OUTCOMES <- Sys.getenv("CITIUS_BT_OUTCOMES", "championship_results.rds")
-HISTORY  <- Sys.getenv("CITIUS_BT_HISTORY", OUTCOMES)
+# DEFAULT HISTORY IS THE CORPUS as of 2026-07-29. Paired against the harvest on
+# 28,737 common marks with the aging file, cohort and outcomes all held fixed:
+# marks MAE 2.216% -> 2.007% (t = +23.8), gold Brier +0.0113 (t = +18.5), medal
+# +0.0273 (t = +24.2). That is 10-50x any parameter change adopted the same day,
+# and it holds while LACKING several of them. Mean w_total 1.59 -> 7.47.
+HISTORY  <- Sys.getenv("CITIUS_BT_HISTORY", "athletics_corpus.rds")
 champs      <- readRDS(file.path(OUT, OUTCOMES))
 hist_raw    <- if (identical(HISTORY, OUTCOMES)) champs else readRDS(file.path(OUT, HISTORY))
-calibration <- readRDS(file.path(OUT, Sys.getenv("CITIUS_BT_CALIBRATION", "calibration.rds")))
+calibration <- readRDS(file.path(OUT, Sys.getenv("CITIUS_BT_CALIBRATION", "calibration_corpus.rds")))
 # The aging curve. Found missing from this script on 2026-07-29: project_ability()
 # is applied in predict_glasgow2026.R but was never called here, so the backtest
 # was measuring a DIFFERENT pipeline from the one that ships -- and every
@@ -196,7 +201,7 @@ outcome_rows <- outcome_rows[, intersect(keep_cols, names(outcome_rows)), with =
 # Prefer the partitioned parquet store when it exists: the per-meet read drops
 # from 46.1s to 0.39s at 8.6M rows. The .rds path is kept so the script still
 # runs before build_stores.R has been run.
-STORE <- file.path(OUT, Sys.getenv("CITIUS_BT_STORE", "athletics_store"))
+STORE <- file.path(OUT, Sys.getenv("CITIUS_BT_STORE", "athletics_corpus_store"))
 # The store is built from ONE history file. Reading it while HISTORY points
 # somewhere else would silently ignore the arm under test and run the baseline
 # twice -- the A/B would come back a dead heat and look like a null result.
@@ -434,6 +439,18 @@ saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc,
                history_restricted = !is.null(dev_ids),
                history = HISTORY, outcomes_file = OUTCOMES,
                calibration = Sys.getenv("CITIUS_BT_CALIBRATION", "calibration.rds"),
+               # HASHES, not just filenames. `aging.rds` meant three different
+               # curves on 2026-07-29, and an A/B that recorded only the name
+               # attributed an aging change to a calibration change. A stamp that
+               # cannot distinguish two versions of the same path is not a stamp.
+               calibration_md5 = tryCatch(tools::md5sum(
+                 file.path(OUT, Sys.getenv("CITIUS_BT_CALIBRATION", "calibration.rds")))[[1]],
+                 error = function(e) NA_character_),
+               aging_file = AGING_FILE,
+               aging_md5 = tryCatch(tools::md5sum(file.path(OUT, AGING_FILE))[[1]],
+                                    error = function(e) NA_character_),
+               history_md5 = tryCatch(tools::md5sum(file.path(OUT, HISTORY))[[1]],
+                                      error = function(e) NA_character_),
                half_life = half_life, prior_weight = PRIOR_WEIGHT,
                history_days = HISTORY_DAYS, n_sims = N_SIMS,
                races_scored = length(keep), run_at = Sys.time())),
