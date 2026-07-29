@@ -40,7 +40,16 @@ cli::cli_alert_info("Outcomes from {.file {OUTCOMES}}; ability history from {.fi
 half_life   <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "365"))
 # 0 = shrink toward the unconditional event mean (previous behaviour);
 # 1 = shrink fully toward the field being predicted. See condition_prior().
-PRIOR_WEIGHT <- as.numeric(Sys.getenv("CITIUS_PRIOR_WEIGHT", "0"))
+#
+# 0.5 adopted 2026-07-29. Paired over 5,867 races against weight 0:
+#   marks  MAE 2.642% -> 2.533%, bias -0.480% -> -0.202%
+#   medal  Brier diff +0.00089, t = +8.33  (wins)
+#   gold   Brier diff -0.00013, t = -1.93, p = 0.053  (no significant cost)
+# Weight 1.0 predicts marks best of all (MAE 2.497%, bias +0.081%) but
+# SIGNIFICANTLY damages gold (t = -6.34) and drops AUC 0.8461 -> 0.8392: shrinking
+# everyone toward the field mean compresses the field and blurs the favourite's
+# edge. 0.5 takes most of the mark gain without paying that.
+PRIOR_WEIGHT <- as.numeric(Sys.getenv("CITIUS_PRIOR_WEIGHT", "0.5"))
 
 clean <- flag_implausible(hist_raw)[!is.na(event_id) & !is.na(perf)]
 outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
