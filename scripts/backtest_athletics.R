@@ -59,8 +59,11 @@ outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
 # tier; the finals block additionally needs competition_id, comp_start, place
 # and race_key. Anything else (marks, wind, venue, the new feed fields) is
 # harvest metadata that no model touches.
+# `wind` is read by estimate_ability() when the calibration carries a wind
+# coefficient. Narrowing it away would silently disable the adjustment and the
+# A/B would report a dead heat.
 keep_cols <- c("athlete_id", "event_id", "date", "perf", "age", "round", "tier",
-               "competition_id", "comp_start", "place", "race_key")
+               "competition_id", "comp_start", "place", "race_key", "wind")
 clean <- clean[, intersect(keep_cols, names(clean)), with = FALSE]
 outcome_rows <- outcome_rows[, intersect(keep_cols, names(outcome_rows)), with = FALSE]
 
