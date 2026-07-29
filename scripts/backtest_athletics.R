@@ -44,6 +44,19 @@ calibration <- readRDS(file.path(OUT, Sys.getenv("CITIUS_BT_CALIBRATION", "calib
 # was measuring a DIFFERENT pipeline from the one that ships -- and every
 # parameter tuned against it was tuned without ageing. Set CITIUS_BT_AGING empty
 # to reproduce the old, ageing-free behaviour.
+# Momentum: an exponentially decayed count of recent race days. Set
+# CITIUS_BT_MOMENTUM to a fitted per-family effect table to enable it. The
+# history must carry a `momentum` column (see build_mom.R) and the entrants'
+# momentum AT THE CUT DATE is computed below from that same history -- so it uses
+# only what was knowable before the meet.
+MOM_FILE <- Sys.getenv("CITIUS_BT_MOMENTUM", "")
+mom_eff <- if (nzchar(MOM_FILE) && file.exists(file.path(OUT, MOM_FILE)))
+  as.data.table(readRDS(file.path(OUT, MOM_FILE))) else NULL
+if (!is.null(mom_eff)) {
+  calibration$momentum <- mom_eff
+  cli::cli_alert_info("Momentum enabled from {.file {MOM_FILE}} ({nrow(mom_eff)} famil{?y/ies}).")
+}
+
 AGING_FILE <- Sys.getenv("CITIUS_BT_AGING", "aging.rds")
 aging <- if (nzchar(AGING_FILE) && file.exists(file.path(OUT, AGING_FILE)))
   readRDS(file.path(OUT, AGING_FILE)) else NULL
@@ -175,7 +188,8 @@ outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
 # coefficient. Narrowing it away would silently disable the adjustment and the
 # A/B would report a dead heat.
 keep_cols <- c("athlete_id", "event_id", "date", "perf", "age", "round", "tier",
-               "competition_id", "comp_start", "place", "race_key", "wind")
+               "competition_id", "comp_start", "place", "race_key", "wind",
+               "momentum")
 clean <- clean[, intersect(keep_cols, names(clean)), with = FALSE]
 outcome_rows <- outcome_rows[, intersect(keep_cols, names(outcome_rows)), with = FALSE]
 
@@ -331,6 +345,16 @@ for (i in seq_len(n)) {
     # mean age behind the estimate. project_ability() scales the shift by
     # (1 - shrinkage), so a heavily-shrunk athlete is not aged as if the event
     # mean were their own career.
+    # The athlete's momentum ON THE DAY, from history strictly before the cut.
+    if (!is.null(mom_eff) && "momentum" %in% names(past)) {
+      last_m <- past[!is.na(momentum), .(momentum = momentum[which.max(date)],
+                                         last = max(date)),
+                     by = .(athlete_id = as.character(athlete_id))]
+      # Decay from that athlete's last race to the day of this one.
+      last_m[, momentum_now := momentum * 0.5^(as.numeric(cut_date - last) / 120)]
+      entrants <- apply_momentum(entrants, last_m[, .(athlete_id, momentum_now)],
+                                 calibration)
+    }
     if (!is.null(aging) && "age" %in% names(field)) {
       entrants[field[, .(athlete_id = as.character(athlete_id), age_now = age)],
                on = "athlete_id", age_now := i.age_now]
