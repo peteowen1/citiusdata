@@ -145,6 +145,21 @@ for (i in seq_len(n)) {
   ability <- estimate_ability(past, as_of = cut_date, half_life = half_life,
                               calibration = calibration)
 
+  # Key ONCE per meet, not once per race. The loop below previously bracket-filtered
+  # `ability` for every race -- O(races x nrow(ability)) -- which is cheap on the
+  # 308k harvest and expensive on the 4.99M corpus, where a single event carries
+  # 13,506 rated athletes. A keyed join is a binary search instead of a full scan.
+  #
+  # `.ord` preserves the original row order. `ability[cond]` returns rows in
+  # ability's order; a keyed join returns them in key order. That matters because
+  # simulate_event() draws with a fixed seed, so a different row order would
+  # silently change every simulation -- not wrongly, but not comparably either,
+  # and every A/B in the log would shift for no reason.
+  ability[, .ord := .I]
+  data.table::setkey(ability, event_id, athlete_id)
+  # Split once rather than bracketing `block` inside the loop for the same reason.
+  by_race <- split(block, block$race_key)
+
   out <- list()
   # Score one RACE, not one competition+event. Club and gala meets run an event
   # in many sections, each labelled "Final" -- Sparkassen Gala 2026 ran the
@@ -155,12 +170,12 @@ for (i in seq_len(n)) {
   #
   # The damage was not confined to those races: the merged ones looked like huge
   # fields, which is why calibration appeared to degrade with field size.
-  for (rk in unique(block$race_key)) {
-    field <- unique(block[race_key == rk], by = "athlete_id")
+  for (rk in names(by_race)) {
+    field <- unique(by_race[[rk]], by = "athlete_id")
     ev <- field$event_id[1]
-    entrants <- ability[event_id == ev &
-                          athlete_id %in% as.character(field$athlete_id)]
+    entrants <- ability[.(ev, as.character(field$athlete_id)), nomatch = NULL]
     if (nrow(entrants) < 4L) next
+    data.table::setorder(entrants, .ord)
     # Optional: shrink toward the FIELD rather than the whole event. Empirical
     # Bayes otherwise pulls a thinly-evidenced entrant toward the unconditional
     # event mean, which includes a long tail of athletes who never contest a

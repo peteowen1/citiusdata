@@ -116,6 +116,12 @@ score_one <- function(f) {
     n_clipped = n_clip,
     # ability
     n_marks = nrow(ab),
+    # A metric without an interval invites reading noise as a result. Today's
+    # arms differ by ~0.1pp of MAE; the interval says whether that is a finding.
+    mae_lo = round(100*(mean(abs(exp(ab$err)-1)) -
+                        1.96*sd(abs(exp(ab$err)-1))/sqrt(nrow(ab))), 3),
+    mae_hi = round(100*(mean(abs(exp(ab$err)-1)) +
+                        1.96*sd(abs(exp(ab$err)-1))/sqrt(nrow(ab))), 3),
     mae_log = round(mean(abs(ab$err)), 5),
     mae_pct = round(100 * mean(abs(exp(ab$err) - 1)), 3),
     rmse_log = round(sqrt(mean(ab$err^2)), 5),
@@ -142,7 +148,13 @@ if (any(s$n_clipped > 0)) cli::cli_alert_info(
 cli::cli_h2("Ability metrics — how well MARKS are predicted")
 cat("mae_pct is the average error as a percentage of the mark.\n")
 cat("bias_log > 0 means the model predicts athletes BETTER than they run.\n\n")
-print(s[, .(model, n_marks, mae_log, mae_pct, rmse_log, rmse_pct, bias_pct, cor_mark)])
+print(s[, .(model, n_marks, mae_pct, ci95 = paste0(mae_lo, "-", mae_hi),
+            rmse_pct, bias_pct, cor_mark)])
+cat("
+ci95 is on MAE. Arms whose intervals overlap heavily are not separated by
+")
+cat("this data -- use the PAIRED test, which removes race-to-race variation.
+")
 
 # Per family for the best model: spread differs by an order of magnitude between
 # a sprint and a throw, so a pooled number hides where the error lives.
