@@ -30,15 +30,21 @@ champs      <- readRDS(file.path(OUT, OUTCOMES))
 hist_raw    <- if (identical(HISTORY, OUTCOMES)) champs else readRDS(file.path(OUT, HISTORY))
 calibration <- readRDS(file.path(OUT, Sys.getenv("CITIUS_BT_CALIBRATION", "calibration.rds")))
 cli::cli_alert_info("Outcomes from {.file {OUTCOMES}}; ability history from {.file {HISTORY}}.")
-# Half-life tuned on ranking skill rather than next-result MAE. fit_half_life()
-# optimises point prediction, which favours recency (180 days) and leaves
-# w_total below 1 for most athletes - so ability_se dominates and favourites are
-# under-rated. 730 days costs no measurable skill and halves the calibration gap.
-half_life   <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "730"))
+# 365 days, selected by A/B on out-of-sample RANKING skill over 5,872 backtest
+# races -- not by fit_half_life(), which optimises next-result MAE and returns 90
+# for sprints. Measured 2026-07-29 across six arms on an identical scored set:
+# gold skill 0.183 (90d), 0.224 (180), 0.234 (270), 0.237 (365), 0.236 (540),
+# 0.234 (730). Paired t-test vs 365: beats 730 (t=5.78), 540 (t=4.23), 180
+# (t=3.44) and 90 (t=10.52); tied with 270. It also cuts the top-band
+# over-confidence from -0.106 to -0.073.
+half_life   <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "365"))
 
 clean <- flag_implausible(hist_raw)[!is.na(event_id) & !is.na(perf)]
-outcome_rows <- if (identical(HISTORY, OUTCOMES)) clean
-                else flag_implausible(champs)[!is.na(event_id) & !is.na(perf)]
+outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
+  clean
+} else {
+  flag_implausible(champs)[!is.na(event_id) & !is.na(perf)]
+}
 
 # Narrow to the columns actually read, ONCE, before any per-meet filtering.
 #

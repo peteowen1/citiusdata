@@ -112,7 +112,7 @@ if (file.exists(f_ent) && file.exists(f_hist)) {
   ab_at <- estimate_ability(at[!is.na(perf) & !is.na(person_id),
                                .(athlete_id = person_id, event_id, date, perf,
                                  round, competition_id)],
-                            as_of = CUT, half_life = 730, calibration = cal_at)
+                            as_of = CUT, half_life = 365, calibration = cal_at)
   res_at <- rbindlist(lapply(unique(fa$event_id),
                              function(e) sim_event(fa, ab_at, e, cal_at, "Athletics")),
                       fill = TRUE)

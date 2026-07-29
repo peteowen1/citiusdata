@@ -418,7 +418,7 @@ cli::cli_alert_info(
 # field - is NOT here on purpose. It needs the package's own simulation
 # semantics (condition shocks, tail_df, foul rates), and hand-rolling those out
 # here would let the site's numbers drift from the model's. Filed as citius#5.
-RATING_HALF_LIFE <- 730
+RATING_HALF_LIFE <- 365
 RATING_ACTIVE_DAYS <- 730          # "current" ratings, not an all-time archive
 # Without a calibration, estimate_ability() falls back to FLAT context weights —
 # heats, finals and every competition tier counted equally. That would still

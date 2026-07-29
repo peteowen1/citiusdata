@@ -17,7 +17,14 @@ GAMES_DATE <- as.Date("2026-07-30")
 # The competition being forecast, excluded from its own history by ID. Glasgow
 # runs 27 Jul - 1 Aug, so GAMES_DATE alone does not cover it (citiusdata#1).
 GLASGOW_2026 <- 7187518L
-HALF_LIFE <- 730          # tuned on ranking skill, not next-result MAE
+# 365 days, selected by A/B on out-of-sample RANKING skill over 5,872 backtest
+# races -- not by fit_half_life(), which optimises next-result MAE and returns 90
+# for sprints. Measured 2026-07-29 across six arms on an identical scored set:
+# gold skill 0.183 (90d), 0.224 (180), 0.234 (270), 0.237 (365), 0.236 (540),
+# 0.234 (730). Paired t-test vs 365: beats 730 (t=5.78), 540 (t=4.23), 180
+# (t=3.44) and 90 (t=10.52); tied with 270. It also cuts the top-band
+# over-confidence from -0.106 to -0.073.
+HALF_LIFE <- 365
 N_SIMS <- 20000L
 
 champs      <- readRDS(file.path(OUT, "championship_results.rds"))

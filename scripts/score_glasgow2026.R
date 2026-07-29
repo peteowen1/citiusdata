@@ -21,7 +21,7 @@ library(data.table)
 
 OUT <- here::here("citiusdata", "data")
 GLASGOW <- 7187518L
-HALF_LIFE <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "730"))
+HALF_LIFE <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "365"))
 
 results <- tryCatch(setDT(athletics_harvest_competitions(GLASGOW)), error = function(e) NULL)
 if (is.null(results) || !nrow(results)) {
