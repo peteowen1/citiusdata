@@ -38,6 +38,9 @@ cli::cli_alert_info("Outcomes from {.file {OUTCOMES}}; ability history from {.fi
 # (t=3.44) and 90 (t=10.52); tied with 270. It also cuts the top-band
 # over-confidence from -0.106 to -0.073.
 half_life   <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "365"))
+# 0 = shrink toward the unconditional event mean (previous behaviour);
+# 1 = shrink fully toward the field being predicted. See condition_prior().
+PRIOR_WEIGHT <- as.numeric(Sys.getenv("CITIUS_PRIOR_WEIGHT", "0"))
 
 clean <- flag_implausible(hist_raw)[!is.na(event_id) & !is.na(perf)]
 outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
@@ -149,6 +152,15 @@ for (i in seq_len(n)) {
     entrants <- ability[event_id == ev &
                           athlete_id %in% as.character(field$athlete_id)]
     if (nrow(entrants) < 4L) next
+    # Optional: shrink toward the FIELD rather than the whole event. Empirical
+    # Bayes otherwise pulls a thinly-evidenced entrant toward the unconditional
+    # event mean, which includes a long tail of athletes who never contest a
+    # final -- measured at a median +1.36% below the finalist population, and the
+    # predicted-mark bias runs to -2.18% for athletes shrunk over 60%.
+    if (PRIOR_WEIGHT > 0) {
+      entrants <- condition_prior(entrants, field = entrants$athlete_id,
+                                  weight = PRIOR_WEIGHT)
+    }
     sim <- simulate_event(entrants, n_sims = N_SIMS,
                           calibration = calibration, seed = 11L)
     mp <- medal_probs(sim)
