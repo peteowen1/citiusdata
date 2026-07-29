@@ -52,6 +52,43 @@ score_one <- function(f) {
   top <- pr[p_gold > 0.7]
   cal_top <- if (nrow(top)) mean(top$hit) - mean(top$p_gold) else NA_real_
 
+  # Log loss alongside Brier, because they disagree in a way that matters here.
+  # Both are proper scoring rules, but Brier is quadratic and log loss is
+  # unbounded: a confident miss costs Brier at most 1 and costs log loss
+  # arbitrarily much. Over-confidence is this model's known failure mode, so the
+  # metric that punishes it hardest belongs in the table.
+  #
+  # A simulated probability of exactly 0 for an athlete who wins gives an
+  # infinite loss, which is an artefact of finite simulation rather than of the
+  # model. Probabilities are clipped, and the number clipped is REPORTED -- a
+  # silent clip would quietly cap the penalty this metric exists to impose.
+  EPS <- 1 / (2 * 10000)                       # half a simulation at N_SIMS
+  ll <- function(p, y) {
+    p <- pmin(pmax(p, EPS), 1 - EPS)
+    -mean(y * log(p) + (1 - y) * log(1 - p))
+  }
+  # Baseline: uniform within race, the same reference the Brier skill uses.
+  pr[, n_in_race := .N, by = race_id]
+  base_gold <- ll(1 / pr$n_in_race, as.numeric(pr$hit))
+  base_med  <- ll(pmin(3 / pr$n_in_race, 1 - EPS), as.numeric(pr$hit_medal))
+  ll_gold <- ll(pr$p_gold, as.numeric(pr$hit))
+  ll_med  <- ll(pr$p_medal, as.numeric(pr$hit_medal))
+  n_clip <- sum(pr$p_gold < EPS | pr$p_gold > 1 - EPS) +
+            sum(pr$p_medal < EPS | pr$p_medal > 1 - EPS)
+
+  # AUC separates DISCRIMINATION from calibration. Brier and log loss mix the
+  # two, so a change that only re-scales probabilities moves them while leaving
+  # the ordering identical. If AUC is flat and Brier improves, the gain was
+  # calibration; if AUC moves, the model genuinely tells athletes apart better.
+  auc <- function(p, y) {
+    y <- as.logical(y)
+    if (!any(y) || all(y)) return(NA_real_)
+    r <- data.table::frank(p, ties.method = "average")
+    (sum(r[y]) - sum(y) * (sum(y) + 1) / 2) / (sum(y) * sum(!y))
+  }
+  auc_gold <- auc(pr$p_gold, pr$hit)
+  auc_med  <- auc(pr$p_medal, pr$hit_medal)
+
   # --- ABILITY -------------------------------------------------------------
   # Predicted mark against the mark actually recorded. No-marks are excluded:
   # a DNF has no time, and foul_rate already models the event of not recording
@@ -68,14 +105,22 @@ score_one <- function(f) {
     races = g$n_races,
     gold_skill = round(g$brier_skill, 4),
     medal_skill = round(m$brier_skill, 4),
+    gold_ll = round(ll_gold, 5),
+    medal_ll = round(ll_med, 5),
+    gold_ll_skill = round(1 - ll_gold / base_gold, 4),
+    medal_ll_skill = round(1 - ll_med / base_med, 4),
+    gold_auc = round(auc_gold, 4),
+    medal_auc = round(auc_med, 4),
     fav_hit = round(mean(fav$hit), 4),
     top_gap = round(cal_top, 4),
+    n_clipped = n_clip,
     # ability
     n_marks = nrow(ab),
     mae_log = round(mean(abs(ab$err)), 5),
     mae_pct = round(100 * mean(abs(exp(ab$err) - 1)), 3),
     rmse_log = round(sqrt(mean(ab$err^2)), 5),
-    bias_log = round(mean(ab$err), 5),
+    rmse_pct = round(100 * sqrt(mean((exp(ab$err) - 1)^2)), 3),
+    bias_pct = round(100 * mean(exp(ab$err) - 1), 3),
     cor_mark = round(stats::cor(ab$pred, ab$actual), 4)
   )
 }
@@ -84,13 +129,20 @@ s <- rbindlist(lapply(files, score_one), fill = TRUE)
 if (!nrow(s)) { cli::cli_alert_warning("Nothing to score."); quit(save = "no") }
 setorder(s, -gold_skill)
 
-cli::cli_h2("Outcome metrics — how well placings are predicted")
-print(s[, .(model, races, gold_skill, medal_skill, fav_hit, top_gap)])
+cli::cli_h2("GOLD — who wins")
+print(s[, .(model, races, brier_skill = gold_skill, logloss = gold_ll,
+            ll_skill = gold_ll_skill, auc = gold_auc, fav_hit, top_gap)])
+
+cli::cli_h2("MEDAL — who finishes top three")
+print(s[, .(model, brier_skill = medal_skill, logloss = medal_ll,
+            ll_skill = medal_ll_skill, auc = medal_auc)])
+if (any(s$n_clipped > 0)) cli::cli_alert_info(
+  "Probabilities clipped at 1/20000 for log loss: {sum(s$n_clipped)} across all models.")
 
 cli::cli_h2("Ability metrics — how well MARKS are predicted")
 cat("mae_pct is the average error as a percentage of the mark.\n")
 cat("bias_log > 0 means the model predicts athletes BETTER than they run.\n\n")
-print(s[, .(model, n_marks, mae_log, mae_pct, rmse_log, bias_log, cor_mark)])
+print(s[, .(model, n_marks, mae_log, mae_pct, rmse_log, rmse_pct, bias_pct, cor_mark)])
 
 # Per family for the best model: spread differs by an order of magnitude between
 # a sprint and a throw, so a pooled number hides where the error lives.
