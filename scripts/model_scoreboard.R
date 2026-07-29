@@ -99,8 +99,13 @@ score_one <- function(f) {
   ab <- ab[is.finite(err)]
   if (!nrow(ab)) return(NULL)   # swimming arms score against a different truth
 
+  mt <- b$meta
   data.table(
-    model = sub("^backtest_?|\\.rds$", "", f),
+    # gsub, not sub: sub replaces only the FIRST match of the alternation,
+    # so it stripped the prefix and left ".rds" on every model name.
+    model = { z <- gsub("^backtest_?|[.]rds$", "", f); if (nzchar(z)) z else "baseline" },
+    cohort = if (is.null(mt$cohort)) "all (pre-stamp)" else mt$cohort,
+    hist_restricted = isTRUE(mt$history_restricted),
     # outcome
     races = g$n_races,
     gold_skill = round(g$brier_skill, 4),
@@ -133,6 +138,19 @@ score_one <- function(f) {
 
 s <- rbindlist(lapply(files, score_one), fill = TRUE)
 if (!nrow(s)) { cli::cli_alert_warning("Nothing to score."); quit(save = "no") }
+
+# Refuse to present arms that scored DIFFERENT race sets as if they were rivals.
+# On 2026-07-29 the default changed from scoring all 21,122 races to the elite
+# cohort; a table mixing the two compares test sets, not models. A comment saying
+# so is worth nothing in a week -- this reads the stamp each run now carries.
+if (uniqueN(s$cohort) > 1) {
+  cli::cli_alert_danger("MIXED COHORTS - these arms scored different race sets and are NOT comparable:")
+  print(s[, .(model, cohort, races)])
+  cli::cli_alert_info("Re-run the older arms under the current cohort before comparing.")
+}
+if (any(s$hist_restricted)) {
+  cli::cli_alert_warning("Some arms restricted their HISTORY (dev harness): read ORDERING only.")
+}
 setorder(s, -gold_skill)
 
 cli::cli_h2("GOLD — who wins")

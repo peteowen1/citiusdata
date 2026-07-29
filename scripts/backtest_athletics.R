@@ -336,5 +336,18 @@ br <- gold$by_race
 cat(sprintf("\nraces beating baseline: %d of %d (%.0f%%)\n",
             sum(br$skill > 0), nrow(br), 100 * mean(br$skill > 0)))
 
-saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc),
+# Stamp the run with what it actually scored. A comment warning that arms either
+# side of the cohort change are incomparable is worth nothing in a week; a field
+# the scoreboard can READ is worth something, because it can refuse to put two
+# incomparable arms in the same table.
+saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc,
+             meta = list(
+               cohort = if (is.null(cohort_ids)) "all" else COHORT,
+               cohort_n = if (is.null(cohort_ids)) NA_integer_ else length(cohort_ids),
+               history_restricted = !is.null(dev_ids),
+               history = HISTORY, outcomes_file = OUTCOMES,
+               calibration = Sys.getenv("CITIUS_BT_CALIBRATION", "calibration.rds"),
+               half_life = half_life, prior_weight = PRIOR_WEIGHT,
+               history_days = HISTORY_DAYS, n_sims = N_SIMS,
+               races_scored = length(keep), run_at = Sys.time())),
         file.path(OUT, Sys.getenv("CITIUS_BT_OUT", "backtest.rds")))
