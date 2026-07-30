@@ -27,8 +27,11 @@ ARM <- Sys.getenv("CITIUS_SCORE_ARM", "backtest_crob.rds")
 VS  <- Sys.getenv("CITIUS_SCORE_VS", "")
 HOLDOUT <- as.Date(Sys.getenv("CITIUS_SCORE_HOLDOUT", "2023-01-01"))
 
+arm_meta <- new.env(parent = emptyenv())
+
 load_arm <- function(f) {
   b <- readRDS(file.path(OUT, f))
+  assign(f, b$meta, envir = arm_meta)
   merge(as.data.table(b$predictions)[, .(race_id, athlete_id = as.character(athlete_id),
                                          p_gold, p_medal, median_mark)],
         as.data.table(b$outcomes)[, .(race_id, athlete_id = as.character(athlete_id),
@@ -50,6 +53,32 @@ d <- merge(d, cat_tbl[, .(competition_id, class, strength, meet_tier)],
 
 if (nzchar(VS)) {
   o <- load_arm(VS)
+
+  # AN ARM COMPARISON IS ONLY AN ARM COMPARISON IF BOTH ARMS SAW THE SAME DATA.
+  #
+  # The history store is rebuilt whenever a harvest lands, so two arms run days
+  # apart differ in their input corpus as well as in the variable under test,
+  # and the scorer cannot tell those apart. On 2026-07-31 this produced six
+  # supposedly-independent arms all showing an identical -1.7% marks gain over
+  # the reference -- which was the gap between two history vintages, not any
+  # arm's effect. Every one of them was simultaneously WORSE on gold Brier,
+  # which is the tell: real single-variable effects do not move in lockstep.
+  #
+  # backtest_athletics.R has always recorded history_md5. Nothing read it.
+  h_arm <- get(ARM, envir = arm_meta)$history_md5
+  h_vs  <- get(VS,  envir = arm_meta)$history_md5
+  if (is.null(h_arm) || is.null(h_vs)) {
+    cli::cli_abort(c("x" = "{.file {if (is.null(h_arm)) ARM else VS}} has no {.field history_md5}.",
+                     "i" = "Pre-dates provenance tracking; re-run it before comparing."))
+  }
+  if (!identical(h_arm, h_vs)) {
+    cli::cli_abort(c(
+      "x" = "{.file {ARM}} and {.file {VS}} were built on different history vintages.",
+      "*" = "{ARM}: {substr(h_arm, 1, 8)}",
+      "*" = "{VS}: {substr(h_vs, 1, 8)}",
+      "i" = "Any difference confounds the arm variable with the data. Re-run one
+             on the other's corpus, or score both against the baseline instead."))
+  }
   setnames(o, c("p_gold", "p_medal", "median_mark"), c("b_gold", "b_medal", "b_mark"))
   d <- merge(d, o[, .(race_id, athlete_id, b_gold, b_medal, b_mark)],
              by = c("race_id", "athlete_id"))
