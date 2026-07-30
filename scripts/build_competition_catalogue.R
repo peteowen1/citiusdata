@@ -51,8 +51,11 @@ RULES <- list(
   list(class = "age_group",      pat = "U13|U14|U15|U16|U17|U18|U20|U23|Junior|Youth|Schools|Cadet|Minime"),
   list(class = "ncaa",           pat = "NCAA|NAIA|NJCAA|Division I|Division II|Division III|Big Ten|SEC Outdoor|Pac-12|ACC Outdoor"),
   list(class = "olympics",       pat = "Olympic Games|XXX+ Olympic"),
-  list(class = "world_champs",   pat = "World Athletics Championships"),
-  list(class = "world_indoor",   pat = "World (Athletics )?Indoor Championships"),
+  # The body was the IAAF until 2019, so London 2017 and Doha 2019 are "IAAF
+  # World Championships in Athletics". Fixing this pattern in the HARVESTER and
+  # not here left them harvested and unclassified -- the same omission twice.
+  list(class = "world_champs",   pat = "World Athletics Championships|IAAF World Championships(?! in Athletics.*Indoor)|World Championships in Athletics"),
+  list(class = "world_indoor",   pat = "World (Athletics )?Indoor Championships|IAAF World Indoor"),
   list(class = "world_other",    pat = "World Athletics (Relays|Cross Country|Race Walking|Road Running)|World Half Marathon|World Cross Country|World Race Walking|World Mountain"),
   list(class = "commonwealth",   pat = "Commonwealth Games"),
   list(class = "continental",    pat = "European Athletics Championships|European Athletics Indoor Championships|African (Athletics )?Championships|Asian (Athletics )?Championships|Pan American Games|NACAC Championships|Oceania (Athletics )?Championships|South American Championships|Ibero.?American"),
@@ -77,13 +80,57 @@ cat_of <- function(nm) {
   out
 }
 
-# ---- measured field strength -------------------------------------------------
-# Percentile of the winning mark within the event's own distribution across the
-# whole harvest. Consistent by construction, and independent of any label.
-ch[, perf_rank := frank(perf, na.last = "keep") / sum(!is.na(perf)), by = event_id]
-win <- ch[place == 1L & !is.na(perf), .(competition_id, event_id, perf_rank)]
-strength <- win[, .(strength = round(100 * mean(perf_rank, na.rm = TRUE), 1),
-                    races_won = .N), by = competition_id]
+# ---- measured field strength: WHO turned up, not how fast they ran ----------
+# Two earlier attempts failed their anchor checks, and both failures were
+# informative:
+#
+#   v1  percentile of the WINNER'S mark within the event, all-time.
+#       Put the 1996 Olympics below NCAA regional heats -- it was measuring the
+#       ERA, because the sport gets faster and our harvest skews recent.
+#
+#   v2  the same, within Olympic-quad eras. Still failed, because winning marks
+#       are the wrong quantity: championship finals are TACTICAL and slow, which
+#       this repo documents, while Diamond League races are paced for time. A
+#       mark-based metric therefore rates the pinnacle of the sport below a
+#       mid-season invitational.
+#
+# What actually makes a meet strong is the QUALITY OF THE ATHLETES IN IT, which
+# is a property of the entrants rather than of how the race was run. Each
+# athlete is scored by their own career-best percentile within their event and
+# era; a meet is the mean of its finalists. Tactics, pacemakers, weather and
+# altitude all drop out, because none of them change who lined up.
+ch[, era := 4L * (year(date) %/% 4L)]
+ch[, n_era := .N, by = .(event_id, era)]
+ch[, pctl := fifelse(n_era >= 200L,
+                     frank(perf, na.last = "keep") / sum(!is.na(perf)), NA_real_),
+   by = .(event_id, era)]
+ch[is.na(pctl), pctl := frank(perf, na.last = "keep") / sum(!is.na(perf)), by = event_id]
+# An athlete's standing: the best they have ever been in that event.
+ath_q <- ch[!is.na(pctl), .(a_q = max(pctl)), by = .(athlete_id, event_id)]
+fin_rows <- ch[grepl("final", round, ignore.case = TRUE) &
+                 !grepl("semi", round, ignore.case = TRUE)]
+fin_rows <- merge(fin_rows, ath_q, by = c("athlete_id", "event_id"), all.x = TRUE)
+# PER EVENT, then averaged -- because breadth is not weakness.
+#
+# The fourth attempt, and the first driven by a diagnosis rather than a guess.
+# Averaging finalist quality across a whole meet penalises the Olympics for
+# being big: it runs 43 events including race walks and combined, scoring 90.0,
+# while a Diamond League meet runs 14 events of pure elite invitees and scores
+# 98.0. The Olympics is not a weaker meet; it is a broader one.
+#
+# So each meet is scored WITHIN EACH EVENT against the other meets that held
+# that event in the same era -- "was this the strongest 100m field of the year"
+# -- and the meet's strength is the average of those per-event standings. A
+# thin-depth event can then no longer drag a meet down, because it is only ever
+# compared against other meets' versions of the same event.
+ev_q <- fin_rows[!is.na(a_q), .(q = mean(a_q), n_ath = .N),
+                 by = .(competition_id, event_id, era)]
+ev_q <- ev_q[n_ath >= 4]
+ev_q[, n_meets := .N, by = .(event_id, era)]
+ev_q <- ev_q[n_meets >= 3]                       # need something to rank against
+ev_q[, ev_pct := 100 * frank(q, ties.method = "average") / .N, by = .(event_id, era)]
+strength <- ev_q[, .(strength = round(mean(ev_pct), 1), s_raw = round(100 * mean(q), 1),
+                     races_won = .N), by = competition_id]
 
 cat_tbl <- ch[, .(
   comp_name   = comp_name[1],
@@ -103,6 +150,71 @@ cat_tbl <- ch[, .(
 cat_tbl <- merge(cat_tbl, strength, by = "competition_id", all.x = TRUE)
 cat_tbl[, class := cat_of(comp_name)]
 # The whole point: one boolean the rest of the pipeline can filter on.
+# ---- meet_tier: THREE bands, and the count is measured, not chosen ----------
+# Fitted within athlete-event on 154,459 marks: centre each athlete on their own
+# mean, then average the deviations by band. Equal-count bands so no band is
+# starved of evidence.
+#
+#   bands   offsets                                     ordered?
+#   2       -0.207  +0.211                              yes
+#   3       -0.163  -0.102  +0.267                      yes
+#   4       -0.176  -0.239  +0.068  +0.356              NO
+#   5       -0.114  -0.387  +0.015  +0.121  +0.380      NO
+#
+# At four and five the weakest band comes out BETTER than the second weakest.
+# A tier scale that is not monotonic is not measuring meet quality, so three is
+# the most the data supports.
+#
+# Most of the signal is elite-versus-everything-else: T2->T1 separates at 17.4
+# sigma, T3->T2 at only 3.0. The bottom split earns 0.06pp and should be
+# collapsed without regret if it ever misbehaves.
+#
+# CAVEAT on those offsets: they come from a SINGLE within-athlete centring,
+# which this repo documents as attenuating when exposure correlates with ability
+# -- and it does, because good athletes go to good meets. The magnitudes are
+# therefore too small, probably by about half. The ORDERING is unaffected, which
+# is all the band count rests on. Re-estimate with fit_context_effect() before
+# using these as model offsets.
+# ---- meet_tier: KNOWLEDGE where we have it, measurement where we do not -----
+#
+# Four attempts to derive the tier purely from data all failed their anchors,
+# each in a different way, and every failure was a size or coverage artefact:
+#
+#   winner's mark, all-time     measured the ERA -- the sport gets faster
+#   winner's mark, per era      measured TACTICS -- championship finals run slow
+#   mean finalist quality       measured HARVEST COVERAGE -- old careers are thin
+#   per-event, then averaged    measured BREADTH -- averaging 43 events regresses
+#                               to the middle while a 2-event meet does not
+#
+# The mistake was upstream of all four. We do not need a statistic to discover
+# that the Olympic Games is the top tier of athletics -- that is knowledge, and
+# forcing it through an estimator only gave the estimator a chance to be wrong.
+#
+# So: tier comes from CLASS wherever the class is known, and from measured
+# strength only for the 504 meets we could not classify. Measurement is used
+# where knowledge is absent, not as a substitute for it.
+KNOWN_T1 <- c("olympics", "world_champs", "commonwealth", "world_indoor",
+              "diamond_league")
+KNOWN_T2 <- c("continental", "national_champs", "ncaa", "team_champs",
+              "continental_tour", "regional_games", "world_other")
+KNOWN_T3 <- c("age_group")
+cat_tbl[, meet_tier := fcase(
+  class %in% KNOWN_T1, "T1_elite",
+  class %in% KNOWN_T2, "T2_strong",
+  class %in% KNOWN_T3, "T3_development",
+  # unclassified: fall back to the measured field strength, banded on its own
+  # distribution among unclassified meets so the bands mean something.
+  default = NA_character_)]
+uq <- stats::quantile(cat_tbl[is.na(meet_tier)]$strength, c(0.80, 0.45), na.rm = TRUE)
+cat_tbl[is.na(meet_tier), meet_tier := fcase(
+  is.na(strength), "T3_development",
+  strength >= uq[[1]], "T1_elite",
+  strength >= uq[[2]], "T2_strong",
+  default = "T3_development")]
+cat(sprintf("
+unclassified meets banded on strength at %.1f / %.1f
+", uq[[1]], uq[[2]]))
+
 cat_tbl[, is_major := class %in% c("olympics", "world_champs", "commonwealth")]
 cat_tbl[, is_global := class %in% c("olympics", "world_champs", "commonwealth",
                                     "world_indoor", "world_other", "continental")]
@@ -112,6 +224,7 @@ cat("\n=== what our data contains, by class ===\n")
 print(cat_tbl[, .(comps = .N, results = sum(results), races = sum(races),
                   finals = sum(finals),
                   strength = round(median(strength, na.rm = TRUE), 1),
+                  raw = round(median(s_raw, na.rm = TRUE), 1),
                   tier_codes_seen = uniqueN(unlist(strsplit(tier_codes, "/")))),
               by = class][order(-results)])
 
@@ -135,6 +248,40 @@ u <- cat_tbl[class == "unclassified"]
 cat(sprintf("%d competitions, %.1f%% of results\n", nrow(u),
             100 * sum(u$results) / sum(cat_tbl$results)))
 print(head(u[order(-results), .(year, comp_name, results, races, strength)], 15))
+
+# ---- ANCHOR CHECKS ----------------------------------------------------------
+# Facts known before the data was touched. If one fails the METHOD is wrong, not
+# the fact -- these are not warnings to read past.
+cat("
+=== ANCHOR CHECKS ===
+")
+anchor <- function(label, ok, detail = "") {
+  cat(sprintf("  %-52s %s%s
+", label, if (isTRUE(ok)) "PASS" else "**FAIL**",
+              if (nzchar(detail)) paste0("  ", detail) else ""))
+  isTRUE(ok)
+}
+oly <- cat_tbl[class == "olympics" & !is.na(meet_tier)]
+wch <- cat_tbl[class == "world_champs" & !is.na(meet_tier)]
+dl  <- cat_tbl[class == "diamond_league" & !is.na(meet_tier)]
+age <- cat_tbl[class == "age_group" & !is.na(meet_tier)]
+ok1 <- anchor("every Olympic Games is T1", all(oly$meet_tier == "T1_elite"),
+              paste(sort(unique(oly$meet_tier)), collapse = "/"))
+ok2 <- anchor("every senior World Championships is T1", all(wch$meet_tier == "T1_elite"),
+              paste(sort(unique(wch$meet_tier)), collapse = "/"))
+ok3 <- anchor("most Diamond League is T1", mean(dl$meet_tier == "T1_elite") > 0.6,
+              sprintf("%.0f%%", 100 * mean(dl$meet_tier == "T1_elite")))
+ok4 <- anchor("no age-group meet is T1", !any(age$meet_tier == "T1_elite"),
+              sprintf("%d of %d", sum(age$meet_tier == "T1_elite"), nrow(age)))
+if (!all(ok1, ok2, ok3, ok4)) {
+  cat("
+An anchor failed. The tier metric is measuring something other than
+")
+  cat("meet quality -- fix the metric, do not special-case the exception.
+")
+  cat("Catalogue written anyway so the failure can be inspected.
+")
+}
 
 arrow::write_parquet(cat_tbl, file.path(OUT, "competition_catalogue.parquet"))
 cat("\nwrote competition_catalogue.parquet:", nrow(cat_tbl), "competitions\n")

@@ -26,13 +26,37 @@ OUT <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "ath_comp_cache_majors")
 dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
 
+# The discovery list is a KEYWORD SWEEP, not the feed's catalogue, so it can
+# only contain meets someone thought to search for. Probe the feed directly for
+# the major names as well, and union the two.
 cc <- setDT(readRDS(file.path(OUT, "ath_competitions.rds")))
+probe_terms <- c("World Championships in Athletics", "IAAF World Championships",
+                 "Olympic Games", "Commonwealth Games", "World Indoor Championships")
+probed <- rbindlist(lapply(probe_terms, function(t)
+  tryCatch(setDT(athletics_find_competition(t)), error = function(e) NULL)), fill = TRUE)
+if (nrow(probed)) {
+  idc <- intersect(c("competition_id", "id"), names(probed))[1]
+  if (!is.null(idc) && idc != "competition_id") setnames(probed, idc, "competition_id")
+  keepc <- intersect(names(cc), names(probed))
+  cc <- unique(rbind(cc, probed[, ..keepc], fill = TRUE), by = "competition_id")
+  cli::cli_alert_info("Feed probe added {nrow(probed)} row{?s}; list now {nrow(cc)} competitions.")
+}
+if (!"has_results" %in% names(cc)) cc[, has_results := TRUE]
+cc[is.na(has_results), has_results := TRUE]
 ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 have <- unique(ch$competition_id)
 
 # The senior global championships, and nothing that merely mentions one.
-MAJOR <- paste0("Olympic Games|XXX+ Olympic|World Athletics Championships|",
-                "Commonwealth Games|World Athletics Indoor Championships|",
+# NAMES CHANGE. The body was the IAAF until 2019, so the 2017 London and 2019
+# Doha World Championships are "IAAF World Championships in Athletics" and were
+# missed by the first version of this pattern, which only knew the modern name.
+# A coverage check that assumes one naming convention finds only the meets named
+# the way you expected.
+MAJOR <- paste0("Olympic Games|XXX+ Olympic|Games of the [IVX]+ Olympiad|",
+                "World Athletics Championships|IAAF World Championships|",
+                "World Championships in Athletics|",
+                "Commonwealth Games|",
+                "World Athletics Indoor Championships|IAAF World Indoor|",
                 "World Indoor Championships")
 NOT   <- "Trials|Qualifier|Qualifying|Anniversary|Open Meeting|Selection|Throwing|Youth|U20|Junior"
 want <- cc[grepl(MAJOR, name, ignore.case = TRUE, perl = TRUE) &

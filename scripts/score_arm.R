@@ -86,11 +86,20 @@ if (nzchar(VS)) {
     data.table(race_id = r$race_id[1], athlete_id = mp$athlete_id,
                b_gold = mp$p_gold, b_medal = mp$p_medal)
   }))
-  tr <- d[date < HOLDOUT]
-  fit <- rbindlist(lapply(seq(0.012, 0.024, by = 0.004), function(s) {
-    x <- merge(tr, sim(tr, s, 1200L), by = c("race_id", "athlete_id"))
-    data.table(sigma = s, brier = mean((x$b_gold - x$hit)^2))}))
-  SG <- fit$sigma[which.min(fit$brier)]
+  # Only the `global` baseline has a parameter to fit. Running the grid under
+  # `event` wasted a minute and, with an early holdout, crashed on an empty
+  # training set -- a fit for a value nothing then used.
+  SG <- NA_real_
+  if (BASE != "event") {
+    tr <- d[date < HOLDOUT]
+    if (!nrow(tr)) cli::cli_abort(c(
+      "No races before {HOLDOUT} to fit the global baseline sigma on.",
+      i = "Use {.code CITIUS_SCORE_BASE=event}, which fits nothing, or move the holdout."))
+    fit <- rbindlist(lapply(seq(0.012, 0.024, by = 0.004), function(s) {
+      x <- merge(tr, sim(tr, s, 1200L), by = c("race_id", "athlete_id"))
+      data.table(sigma = s, brier = mean((x$b_gold - x$hit)^2))}))
+    SG <- fit$sigma[which.min(fit$brier)]
+  }
   cli::cli_alert_info(if (BASE == "event")
     "Baseline sigma: measured per-event sigma_within." else
     "Baseline sigma: one global value fitted on pre-{HOLDOUT} races: {SG}")
