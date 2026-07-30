@@ -17,10 +17,11 @@
 
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+# Model inputs come from DEPLOYED, never from literals here. See _deployed.R.
+source(here::here("citiusdata", "scripts", "_deployed.R"))
 
 OUT <- here::here("citiusdata", "data")
 GLASGOW <- 7187518L
-HALF_LIFE <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "365"))
 N_SIMS <- 20000L
 
 res <- tryCatch(setDT(athletics_harvest_competitions(GLASGOW)), error = function(e) NULL)
@@ -49,28 +50,19 @@ CUT <- min(res$date, na.rm = TRUE)
 # here, because partition pruning never opens the other event files.
 # flag_implausible() is already applied at store-build time -- it is a
 # GLOBAL operation and cannot be redone on a slice.
-STORE <- file.path(OUT, "athletics_store")
-USE_STORE <- dir.exists(STORE)
-champs <- if (USE_STORE) NULL else readRDS(file.path(OUT, "championship_results.rds"))
-cal <- readRDS(file.path(OUT, "calibration.rds"))
-clean <- if (USE_STORE) NULL else flag_implausible(champs)[!is.na(event_id) & !is.na(perf)]
+cal <- deployed_calibration(OUT)
+aging <- deployed_aging(OUT)
+champs <- NULL              # loaded lazily below, for the entry-list name lookup only
+past <- deployed_history(OUT, events = unique(res$event_id),
+                         from = CUT - DEPLOYED$history_days, to = CUT - 1L)
+past <- past[!is.na(event_id) & !is.na(perf)]
 # Excluded by ID as well as by date (citiusdata#1). This script is the one most
 # exposed: it runs DURING the Games, so any re-harvest between now and the final
 # would put the heats it is predicting from into the ability estimates too.
-past <- if (USE_STORE) {
-  read_results_store(STORE, events = unique(res$event_id),
-                     from = CUT - 4380, to = CUT - 1L)[
-                       !is.na(event_id) & !is.na(perf)]
-} else {
-  clean[date < CUT & date >= CUT - 4380 & event_id %in% unique(res$event_id)]
-}
-# Excluded by ID as well as by date (citiusdata#1), whichever source it came
-# from. This script runs DURING the Games, so a re-harvest between now and the
-# final would otherwise feed it the very heats it is predicting from.
 past <- past[is.na(competition_id) | competition_id != GLASGOW]
 stopifnot("history must not contain the competition being predicted" =
             !any(past$competition_id == GLASGOW, na.rm = TRUE))
-ability <- estimate_ability(past, as_of = CUT, half_life = HALF_LIFE, calibration = cal)
+ability <- deployed_ability(past, as_of = CUT, calibration = cal)
 
 # --- entrants who have not raced yet ----------------------------------------
 # Top seeds receive a BYE straight into the semi-finals, so a field built from
@@ -118,6 +110,15 @@ for (ev in sort(unique(res$event_id))) {
   field <- union(raced, unraced)
   ent <- ability[event_id == ev & athlete_id %in% field]
   if (nrow(ent) < 4L) next
+  # The field prior and the age projection, in the order the backtest applies
+  # them. Neither reached this script until 2026-07-31: both were validated in
+  # the backtest and simply never called here, so the live path was shipping a
+  # model missing two adjustments it had been tuned with.
+  ages <- if ("age" %in% names(x)) {
+    unique(x[!is.na(age), .(athlete_id = as.character(athlete_id), age_now = age)],
+           by = "athlete_id")
+  } else NULL
+  ent <- deployed_field(ent, aging = aging, ages = ages)
 
   n_heats <- uniqueN(x$race_key)
   reg <- citius_events()
@@ -178,6 +179,9 @@ if (!length(out)) {
 pred <- rbindlist(out, fill = TRUE)
 info <- unique(res[, .(athlete_id, event_id, athlete_name)])
 pred <- merge(pred, info, by = c("athlete_id", "event_id"), all.x = TRUE)
+# Which configuration produced these numbers. A prediction artefact that cannot
+# be traced to a model version is unauditable a week later.
+pred[, config := DEPLOYED$stamp]
 stamp <- format(Sys.time(), "%Y%m%dT%H%M%S")
 arrow::write_parquet(pred, file.path(OUT, paste0("glasgow2026_live_predictions_", stamp, ".parquet")))
 cli::cli_alert_success("{nrow(pred)} row{?s} across {uniqueN(pred$event_id)} event{?s} still to be decided.")

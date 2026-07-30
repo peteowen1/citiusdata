@@ -17,6 +17,8 @@
 
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table); library(jsonlite); library(arrow)
+# Model inputs come from DEPLOYED, never from literals here. See _deployed.R.
+source(here::here("citiusdata", "scripts", "_deployed.R"))
 
 OUT     <- here::here("citiusdata", "data")
 BLOG    <- here::here("citiusdata", "blog")
@@ -418,19 +420,27 @@ cli::cli_alert_info(
 # field - is NOT here on purpose. It needs the package's own simulation
 # semantics (condition shocks, tail_df, foul rates), and hand-rolling those out
 # here would let the site's numbers drift from the model's. Filed as citius#5.
-RATING_HALF_LIFE <- 365
 RATING_ACTIVE_DAYS <- 730          # "current" ratings, not an all-time archive
 # Without a calibration, estimate_ability() falls back to FLAT context weights —
 # heats, finals and every competition tier counted equally. That would still
 # produce a plausible-looking table, so load it explicitly rather than let the
 # fallback ship silently.
-calibration <- readRDS(file.path(OUT, "calibration.rds"))
+calibration <- deployed_calibration(OUT)
 
+# OPEN DECISION, deliberately not taken here: this table is still built from the
+# 308k competition harvest while the deployed calibration is fitted on the 4.99M
+# corpus. That is the mismatch METHODOLOGY.md warns about -- a parameter fitted
+# under one history applied under another.
+#
+# It is left alone because swapping it is a PRODUCT change, not a model
+# promotion: the corpus would multiply the active population many times over,
+# and both published scales are computed within the active population, so `z`
+# and `pct_best` would shift for every athlete on the page. That is Pete's call,
+# not a silent side effect of promoting a calibration.
 clean_all <- flag_implausible(hist_src <- setDT(readRDS(file.path(OUT, "championship_results.rds"))))
 clean_all <- clean_all[!is.na(event_id) & !is.na(perf)]
 AS_OF <- max(clean_all$date, na.rm = TRUE)
-ratings <- estimate_ability(clean_all, as_of = AS_OF, half_life = RATING_HALF_LIFE,
-                            calibration = calibration)
+ratings <- deployed_ability(clean_all, as_of = AS_OF, calibration = calibration)
 
 # estimate_ability() already returns last_date per athlete-event — merging a
 # second copy in produced last_date.x / last_date.y and a confusing failure.

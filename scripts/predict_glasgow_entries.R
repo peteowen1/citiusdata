@@ -24,12 +24,15 @@ GLASGOW_2026 <- 7187518L
 # 0.234 (730). Paired t-test vs 365: beats 730 (t=5.78), 540 (t=4.23), 180
 # (t=3.44) and 90 (t=10.52); tied with 270. It also cuts the top-band
 # over-confidence from -0.106 to -0.073.
-HALF_LIFE <- 365
+# Model inputs come from DEPLOYED, never from literals here. See _deployed.R.
+source(here::here("citiusdata", "scripts", "_deployed.R"))
 N_SIMS <- 20000L
 
+# The entry list is resolved to athlete ids by NAME, so the competition harvest
+# is still read for its name -> id lookup. It is no longer the model's history.
 champs      <- readRDS(file.path(OUT, "championship_results.rds"))
-calibration <- readRDS(file.path(OUT, "calibration.rds"))
-aging       <- readRDS(file.path(OUT, "aging.rds"))
+calibration <- deployed_calibration(OUT)
+aging       <- deployed_aging(OUT)
 
 # --- entry list --------------------------------------------------------------
 j <- fromJSON(file.path(OUT, "glasgow2026_entries.json"), simplifyVector = FALSE)
@@ -69,9 +72,15 @@ cli::cli_alert_info("Resolved {sum(!is.na(entries$athlete_id))} of {nrow(entries
 # An ID exclusion cannot be defeated by a date being off by a few days, and the
 # assertion below turns any future leak into a loud failure rather than a
 # quietly excellent-looking forecast.
-clean <- flag_implausible(champs)[!is.na(event_id) & !is.na(perf) &
-                                    date < GAMES_DATE &
-                                    (is.na(competition_id) | competition_id != GLASGOW_2026)]
+#
+# flag_implausible() is NOT applied here: it is a GLOBAL operation (median and
+# MAD per event across the whole corpus) and the deployed store has it applied
+# at build time. Re-running it on a slice would compute different thresholds.
+clean <- deployed_history(OUT, events = unique(entries[!is.na(event_id)]$event_id),
+                          from = GAMES_DATE - DEPLOYED$history_days,
+                          to = GAMES_DATE - 1L)
+clean <- clean[!is.na(event_id) & !is.na(perf) &
+                 (is.na(competition_id) | competition_id != GLASGOW_2026)]
 leak <- champs[competition_id == GLASGOW_2026 & date < GAMES_DATE]
 if (nrow(leak)) {
   cli::cli_alert_warning(
@@ -82,14 +91,15 @@ stopifnot(
   "history must not contain the competition being predicted" =
     !any(clean$competition_id == GLASGOW_2026, na.rm = TRUE)
 )
-ability <- estimate_ability(clean, as_of = GAMES_DATE, half_life = HALF_LIFE,
-                            calibration = calibration)
+ability <- deployed_ability(clean, as_of = GAMES_DATE, calibration = calibration)
 
+# Age on the day, carried forward from each athlete's last recorded age. Applied
+# per field inside the loop rather than globally, because the field prior runs
+# first and project_ability() scales its shift by (1 - shrinkage) -- so it must
+# see the shrinkage the prior produced. That ordering is what the backtest does.
 ages <- clean[!is.na(age), .(age_last = max(age), age_asof = max(date)),
               by = .(athlete_id = as.character(athlete_id), event_id)]
-ability <- merge(ability, ages, by = c("athlete_id", "event_id"), all.x = TRUE)
-ability[, age_now := age_last + as.numeric(GAMES_DATE - age_asof) / 365.25]
-ability <- suppressWarnings(project_ability(ability[!is.na(age_ref) & !is.na(age_now)], aging))
+ages[, age_now := age_last + as.numeric(GAMES_DATE - age_asof) / 365.25]
 
 # --- simulate ----------------------------------------------------------------
 res <- list()
@@ -97,6 +107,7 @@ for (ev in unique(entries$event_id)) {
   field_ids <- entries[event_id == ev & !is.na(athlete_id)]$athlete_id
   ent <- ability[event_id == ev & athlete_id %in% field_ids]
   if (nrow(ent) < 3L) next
+  ent <- deployed_field(ent, aging = aging, ages = ages[event_id == ev, .(athlete_id, age_now)])
   sim <- simulate_event(ent, n_sims = N_SIMS, calibration = calibration, seed = 20260727L)
   mp <- medal_probs(sim)
   mp[, event_id := ev]
@@ -108,7 +119,7 @@ info <- unique(entries[, .(athlete_id, athlete, nation, event_id)])
 pred <- merge(pred, info, by = c("athlete_id", "event_id"), all.x = TRUE)
 pred <- merge(pred, citius_events()[, .(event_id, discipline, sex)], by = "event_id")
 pred[, `:=`(generated_at = Sys.time(), field_type = "official_entry_list",
-            half_life = HALF_LIFE)]
+            half_life = DEPLOYED$half_life, config = DEPLOYED$stamp)]
 
 stamp <- format(Sys.time(), "%Y%m%dT%H%M%S")
 arrow::write_parquet(pred, file.path(OUT, paste0("glasgow2026_entrylist_predictions_", stamp, ".parquet")))

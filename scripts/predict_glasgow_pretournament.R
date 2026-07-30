@@ -12,6 +12,8 @@
 VERSE <- "C:/dev/citiusverse"
 suppressMessages({library(citius); library(data.table)})
 D <- file.path(VERSE, "citiusdata", "data")
+# Model inputs come from DEPLOYED, never from literals here. See _deployed.R.
+source(file.path(VERSE, "citiusdata", "scripts", "_deployed.R"))
 say <- function(...) cat(sprintf(...), "\n", sep = "")
 N_SIMS <- 20000L
 CUT <- as.Date("2026-07-23")          # the Games opened on the 24th
@@ -88,7 +90,11 @@ if (file.exists(f_ent) && file.exists(f_hist)) {
     dob = r[[4]])), fill = TRUE)
   at <- setDT(readRDS(f_hist))
   at <- at[is.na(date) | date < CUT]
-  cal_at <- readRDS(file.path(D, "calibration.rds"))
+  # Athletics history stays on the competition harvest here, NOT the corpus:
+  # entrants are joined to history through the crosswalk's `person_id`, which is
+  # built from this feed. Swapping the history without rebuilding the crosswalk
+  # would drop coverage silently rather than error.
+  cal_at <- deployed_calibration(D)
 
   xwa <- setDT(arrow::read_parquet(file.path(D, "athlete_crosswalk_athletics.parquet")))
   pa <- unique(xwa[source == "crs_glasgow2026" & !is.na(athlete_name),
@@ -109,10 +115,10 @@ if (file.exists(f_ent) && file.exists(f_hist)) {
       format(sum(ua$person_id %in% have_a), big.mark = ","),
       100 * mean(ua$person_id %in% have_a))
 
-  ab_at <- estimate_ability(at[!is.na(perf) & !is.na(person_id),
+  ab_at <- deployed_ability(at[!is.na(perf) & !is.na(person_id),
                                .(athlete_id = person_id, event_id, date, perf,
                                  round, competition_id)],
-                            as_of = CUT, half_life = 365, calibration = cal_at)
+                            as_of = CUT, calibration = cal_at)
   res_at <- rbindlist(lapply(unique(fa$event_id),
                              function(e) sim_event(fa, ab_at, e, cal_at, "Athletics")),
                       fill = TRUE)
@@ -122,7 +128,14 @@ if (file.exists(f_ent) && file.exists(f_hist)) {
 
 all <- rbindlist(list(res_sw, res_at), fill = TRUE)
 all[, generated_at := Sys.time()][, cutoff := CUT]
-saveRDS(all, file.path(D, "glasgow2026_pretournament.rds"))
-arrow::write_parquet(all, file.path(D, "glasgow2026_pretournament.parquet"))
-say("\n%s rows | %s events | wrote glasgow2026_pretournament.{rds,parquet}",
-    format(nrow(all), big.mark = ","), uniqueN(all$event_id))
+# Output name carries the configuration tag, so re-running under a promoted
+# model cannot overwrite the artefact an already-published score was measured
+# on. The 2026-07-29 run scored 13 of 21 finals at gold skill +0.375; that claim
+# is only checkable while the file behind it still exists.
+TAG <- Sys.getenv("CITIUS_PRED_TAG", "")
+base <- paste0("glasgow2026_pretournament", if (nzchar(TAG)) paste0("_", TAG) else "")
+all[, config := if (nzchar(TAG)) TAG else "2026-07-29 baseline"]
+saveRDS(all, file.path(D, paste0(base, ".rds")))
+arrow::write_parquet(all, file.path(D, paste0(base, ".parquet")))
+say("\n%s rows | %s events | wrote %s.{rds,parquet}",
+    format(nrow(all), big.mark = ","), uniqueN(all$event_id), base)
