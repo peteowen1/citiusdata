@@ -1,0 +1,151 @@
+# The scorer the framework mandates. One arm in, six metrics out, three
+# populations, always against the five-race baseline.
+#
+# Replaces the ad-hoc scoring that let a week of tuning optimise Brier over
+# 3,621 mixed races -- of which 172 were majors -- against a uniform-within-race
+# prior that is trivial to beat. See docs/plans/OPTIMISATION-FRAMEWORK.md.
+#
+#   the pick, gold    gold Brier      gold logloss
+#   the pick, medal   medal Brier     medal logloss
+#   the mark          MAE             RMSE        (raw and centred)
+#
+# Within each pair the first is robust and the second is tail-sensitive, and the
+# GAP between them is the diagnostic: flat Brier with moving logloss means the
+# change touched confidence, not ordering.
+#
+# Usage:
+#   CITIUS_SCORE_ARM=backtest_crob.rds Rscript scripts/score_arm.R
+#   CITIUS_SCORE_ARM=backtest_casym.rds CITIUS_SCORE_VS=backtest_crob.rds ...
+#
+# With CITIUS_SCORE_VS the comparison is arm-vs-arm; without it, arm-vs-baseline.
+suppressMessages(devtools::load_all(here::here("citius")))
+library(data.table)
+source(here::here("citiusdata", "scripts", "_deployed.R"))
+OUT <- here::here("citiusdata", "data")
+
+ARM <- Sys.getenv("CITIUS_SCORE_ARM", "backtest_crob.rds")
+VS  <- Sys.getenv("CITIUS_SCORE_VS", "")
+HOLDOUT <- as.Date(Sys.getenv("CITIUS_SCORE_HOLDOUT", "2023-01-01"))
+
+load_arm <- function(f) {
+  b <- readRDS(file.path(OUT, f))
+  merge(as.data.table(b$predictions)[, .(race_id, athlete_id = as.character(athlete_id),
+                                         p_gold, p_medal, median_mark)],
+        as.data.table(b$outcomes)[, .(race_id, athlete_id = as.character(athlete_id),
+                                      hit, hit_medal)],
+        by = c("race_id", "athlete_id"))
+}
+d <- load_arm(ARM)
+setnames(d, c("p_gold", "p_medal", "median_mark"), c("a_gold", "a_medal", "a_mark"))
+
+ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+ch[, athlete_id := as.character(athlete_id)]
+act <- ch[!is.na(mark) & !is.na(race_key) & !is.na(place) & place > 0,
+          .(race_id = race_key, athlete_id, actual = mark, event_id, date, competition_id)]
+d <- merge(d, act, by = c("race_id", "athlete_id"))
+d <- merge(d, as.data.table(citius_events())[, .(event_id, orientation, family)], by = "event_id")
+cat_tbl <- setDT(arrow::read_parquet(file.path(OUT, "competition_catalogue.parquet")))
+d <- merge(d, cat_tbl[, .(competition_id, class, strength)], by = "competition_id", all.x = TRUE)
+
+if (nzchar(VS)) {
+  o <- load_arm(VS)
+  setnames(o, c("p_gold", "p_medal", "median_mark"), c("b_gold", "b_medal", "b_mark"))
+  d <- merge(d, o[, .(race_id, athlete_id, b_gold, b_medal, b_mark)],
+             by = c("race_id", "athlete_id"))
+  BLAB <- VS
+} else {
+  # The baseline: last five oriented performances, one global sigma fitted on
+  # the pre-holdout period, through our own simulator. No shrinkage, no context,
+  # no aging, no per-athlete uncertainty.
+  hist <- deployed_history(OUT, events = unique(d$event_id),
+                           from = min(d$date) - 3650, to = max(d$date))
+  hist <- hist[!is.na(perf) & !is.na(date)]; hist[, athlete_id := as.character(athlete_id)]
+  setorder(hist, athlete_id, event_id, date); g <- c("athlete_id", "event_id")
+  hist[, k := seq_len(.N), by = g][, cs := cumsum(perf), by = g][, cs5 := shift(cs, 5L, fill = 0), by = g]
+  q <- d[, .(athlete_id, event_id, date = date - 1L, race_id)]
+  setkeyv(hist, c("athlete_id", "event_id", "date"))
+  m <- hist[q, on = .(athlete_id, event_id, date), roll = TRUE, mult = "last",
+            .(race_id, athlete_id, k, cs, cs5)]
+  m[, l5 := (cs - cs5) / pmin(k, 5)]
+  d <- merge(d, m[, .(race_id, athlete_id, l5)], by = c("race_id", "athlete_id"))[!is.na(l5)]
+  # Two baseline flavours. `global` fits ONE sigma for the whole sport, which
+  # is the crudest honest baseline. `event` gives it the measured per-event
+  # sigma_within instead -- still trivially simple, no shrinkage and no context,
+  # but no longer artificially over-confident. The second matters because the
+  # logloss gap between model and baseline IS an over-confidence gap, so a
+  # baseline handicapped on uncertainty would flatter us.
+  BASE <- Sys.getenv("CITIUS_SCORE_BASE", "event")
+  evs <- as.data.table(deployed_calibration(OUT)$events)[, .(event_id, sigma_within)]
+  d <- merge(d, evs, by = "event_id", all.x = TRUE)
+  d[!is.finite(sigma_within), sigma_within := median(evs$sigma_within, na.rm = TRUE)]
+  sim <- function(dd, sg, n) rbindlist(lapply(split(dd, dd$race_id), function(r) {
+    sig <- if (BASE == "event") r$sigma_within else sg
+    ab <- data.table(athlete_id = r$athlete_id, event_id = r$event_id[1],
+                     ability = r$l5, sigma = sig)
+    mp <- medal_probs(simulate_event(ab, n_sims = n, condition_sd = 0, seed = 11L))
+    data.table(race_id = r$race_id[1], athlete_id = mp$athlete_id,
+               b_gold = mp$p_gold, b_medal = mp$p_medal)
+  }))
+  tr <- d[date < HOLDOUT]
+  fit <- rbindlist(lapply(seq(0.012, 0.024, by = 0.004), function(s) {
+    x <- merge(tr, sim(tr, s, 1200L), by = c("race_id", "athlete_id"))
+    data.table(sigma = s, brier = mean((x$b_gold - x$hit)^2))}))
+  SG <- fit$sigma[which.min(fit$brier)]
+  cli::cli_alert_info(if (BASE == "event")
+    "Baseline sigma: measured per-event sigma_within." else
+    "Baseline sigma: one global value fitted on pre-{HOLDOUT} races: {SG}")
+  d <- merge(d, sim(d, SG, 4000L), by = c("race_id", "athlete_id"))
+  d[, b_mark := exp(l5 / orientation)]
+  BLAB <- paste0("last-5 baseline (", BASE, " sigma)")
+}
+
+d <- d[date >= HOLDOUT]
+d[, `:=`(act_perf = orientation * log(actual),
+         a_perf = orientation * log(a_mark), b_perf = orientation * log(b_mark))]
+EPS <- 1e-4
+llf <- function(p, y) { p <- pmin(pmax(p, EPS), 1 - EPS); -(y * log(p) + (1 - y) * log(1 - p)) }
+
+pop <- function(dd, label) {
+  nr <- uniqueN(dd$race_id); if (nr < 25) return(invisible(NULL))
+  pair <- function(am, bm, nm) {
+    t <- t.test(bm, am, paired = TRUE)
+    sprintf("  %-16s %9.5f  %9.5f   %+7.2f%%  %s  p=%.3g", nm, mean(am), mean(bm),
+            100 * (mean(am) - mean(bm)) / mean(bm),
+            ifelse(mean(am) < mean(bm), "ARM ", "base"), t$p.value)
+  }
+  byrace <- function(f) dd[, .(a = f(.SD, "a"), b = f(.SD, "b")), by = race_id]
+  gB <- byrace(function(s, p) mean((s[[paste0(p, "_gold")]] - s$hit)^2))
+  gL <- byrace(function(s, p) mean(llf(s[[paste0(p, "_gold")]], s$hit)))
+  mB <- byrace(function(s, p) mean((s[[paste0(p, "_medal")]] - s$hit_medal)^2))
+  mL <- byrace(function(s, p) mean(llf(s[[paste0(p, "_medal")]], s$hit_medal)))
+  ea <- 100 * (dd$a_perf - dd$act_perf); eb <- 100 * (dd$b_perf - dd$act_perf)
+  eac <- ea - mean(ea, na.rm = TRUE); ebc <- eb - mean(eb, na.rm = TRUE)
+  # `post` turns the mean of the per-prediction quantity into the reported
+  # statistic: identity for MAE, sqrt for RMSE. The paired test still runs on
+  # the untransformed quantities, which is where the pairing lives.
+  mk <- function(x, y, nm, f, post = identity) {
+    t <- t.test(f(y), f(x), paired = TRUE)
+    ax <- post(mean(f(x), na.rm = TRUE)); ay <- post(mean(f(y), na.rm = TRUE))
+    sprintf("  %-16s %9.4f  %9.4f   %+7.2f%%  %s  p=%.3g", nm, ax, ay,
+            100 * (ax - ay) / ay, ifelse(ax < ay, "ARM ", "base"), t$p.value)
+  }
+  cat(sprintf("\n%s  |  %d races, %s predictions\n", label, nr, format(nrow(dd), big.mark = ",")))
+  cat(sprintf("  %-16s %9s  %9s   %8s\n", "", "arm", "base", "rel"))
+  cat(pair(gB$a, gB$b, "gold Brier"), "\n")
+  cat(pair(gL$a, gL$b, "gold logloss"), "\n")
+  cat(pair(mB$a, mB$b, "medal Brier"), "\n")
+  cat(pair(mL$a, mL$b, "medal logloss"), "\n")
+  cat(mk(ea, eb, "marks MAE", abs), "\n")
+  cat(mk(ea, eb, "marks RMSE", function(v) v^2, sqrt), "\n")
+  cat(mk(eac, ebc, "marks MAE ctr", abs), "\n")
+  cat(mk(eac, ebc, "marks RMSE ctr", function(v) v^2, sqrt), "\n")
+  fa <- dd[, .(w = athlete_id[which.max(a_gold)] == athlete_id[hit == TRUE][1]), by = race_id]
+  fb <- dd[, .(w = athlete_id[which.max(b_gold)] == athlete_id[hit == TRUE][1]), by = race_id]
+  cat(sprintf("  %-16s %8.1f%%  %8.1f%%\n", "favourite wins",
+              100 * mean(fa$w, na.rm = TRUE), 100 * mean(fb$w, na.rm = TRUE)))
+}
+cli::cli_h1("{ARM} vs {BLAB}   (holdout from {HOLDOUT})")
+MAJ <- c("olympics", "world_champs", "commonwealth")
+pop(d[class %in% MAJ], "PRIMARY: majors")
+pop(d[class %in% c(MAJ, "world_indoor", "diamond_league")], "SECONDARY: elite")
+pop(d, "CONTEXT: all scored finals")
