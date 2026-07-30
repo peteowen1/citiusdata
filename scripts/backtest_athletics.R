@@ -113,6 +113,28 @@ if (!is.null(hl_map)) cli::cli_alert_info(
 # everyone toward the field mean compresses the field and blurs the favourite's
 # edge. 0.5 takes most of the mark gain without paying that.
 PRIOR_WEIGHT <- as.numeric(Sys.getenv("CITIUS_PRIOR_WEIGHT", "0.5"))
+# "event" gives every athlete their event's measured spread instead of their own.
+# A test, not a preference: per-athlete sigma REORDERS the field at the
+# simulation stage -- in the men's 100m, rank correlation with recent form falls
+# from 0.736 at the ability stage to 0.573 at p_gold -- because the win
+# probability rewards being unpredictable. This asks whether that reordering
+# carries information or destroys it.
+SIGMA_MODE <- Sys.getenv("CITIUS_BT_SIGMA_MODE", "athlete")
+# Use the catalogue's meet_tier for the context adjustment instead of the feed's
+# per-result `tier`, which varies within a single meet and labels the Diamond
+# League "low". Off by default so it is measured as its own arm.
+USE_MEET_TIER <- nzchar(Sys.getenv("CITIUS_BT_MEET_TIER", ""))
+if (USE_MEET_TIER) {
+  ctl <- setDT(arrow::read_parquet(file.path(OUT, "competition_catalogue.parquet")))
+  # The catalogue round-trips competition_id through parquet as character while
+  # the harvest holds an integer. A silent type mismatch here would abort the
+  # join, or worse, match nothing and leave every meet_tier NA -- which looks
+  # exactly like "the fix did nothing".
+  ctl[, competition_id := as.character(competition_id)]
+  ctl <- ctl[, .(competition_id, meet_tier)]
+  cli::cli_alert_info("Context adjustment uses meet_tier from the catalogue.")
+}
+if (SIGMA_MODE != "athlete") cli::cli_alert_info("Sigma mode: {SIGMA_MODE}")
 
 # --- DEV HARNESS: restrict to a named set of athletes ------------------------
 # The full run takes ~2.8 hours on the corpus, which is too slow to iterate on.
@@ -285,12 +307,21 @@ for (i in seq_len(n)) {
             event_id %in% meet_events]
   })
   if (!is.null(dev_ids)) past <- past[as.character(athlete_id) %in% dev_ids]
+  if (USE_MEET_TIER && "competition_id" %in% names(past)) {
+    past[, .cid := as.character(competition_id)]
+    past <- merge(past, ctl, by.x = ".cid", by.y = "competition_id",
+                  all.x = TRUE, sort = FALSE)
+    past[, .cid := NULL]
+    if (i == 1L) cli::cli_alert_info(
+      "meet_tier attached to {round(100*mean(!is.na(past$meet_tier)))}% of history rows.")
+  }
   TIMING$rows <- TIMING$rows + nrow(past)
   if (nrow(past) < 2000L) { saveRDS(list(), file.path(BT_CACHE, paste0(cid, ".rds"))); next }
   ability <- if (is.null(hl_map)) {
     tick("ability", estimate_ability(past, as_of = cut_date,
                                      half_life = half_life,
-                                     calibration = calibration))
+                                     calibration = calibration,
+                                     sigma_mode = SIGMA_MODE))
   } else {
     # Refit per family. estimate_ability takes a single half-life, so split the
     # history by family and stack -- each event only ever belongs to one family,
@@ -301,7 +332,7 @@ for (i in seq_len(n)) {
       hl <- if (!is.na(g$family[1]) && g$family[1] %in% names(hl_map))
         hl_map[[g$family[1]]] else half_life
       estimate_ability(g[, !"family"], as_of = cut_date, half_life = hl,
-                       calibration = calibration)
+                       calibration = calibration, sigma_mode = SIGMA_MODE)
     }), fill = TRUE))
   }
 
@@ -460,6 +491,7 @@ saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc,
                history_md5 = tryCatch(tools::md5sum(file.path(OUT, HISTORY))[[1]],
                                       error = function(e) NA_character_),
                half_life = half_life, prior_weight = PRIOR_WEIGHT,
+               sigma_mode = SIGMA_MODE,
                history_days = HISTORY_DAYS, n_sims = N_SIMS,
                races_scored = length(keep), run_at = Sys.time())),
         file.path(OUT, Sys.getenv("CITIUS_BT_OUT", "backtest.rds")))

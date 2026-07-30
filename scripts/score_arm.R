@@ -45,7 +45,8 @@ act <- ch[!is.na(mark) & !is.na(race_key) & !is.na(place) & place > 0,
 d <- merge(d, act, by = c("race_id", "athlete_id"))
 d <- merge(d, as.data.table(citius_events())[, .(event_id, orientation, family)], by = "event_id")
 cat_tbl <- setDT(arrow::read_parquet(file.path(OUT, "competition_catalogue.parquet")))
-d <- merge(d, cat_tbl[, .(competition_id, class, strength)], by = "competition_id", all.x = TRUE)
+d <- merge(d, cat_tbl[, .(competition_id, class, strength, meet_tier)],
+           by = "competition_id", all.x = TRUE)
 
 if (nzchar(VS)) {
   o <- load_arm(VS)
@@ -154,7 +155,13 @@ pop <- function(dd, label) {
               100 * mean(fa$w, na.rm = TRUE), 100 * mean(fb$w, na.rm = TRUE)))
 }
 cli::cli_h1("{ARM} vs {BLAB}   (holdout from {HOLDOUT})")
+# Populations by TIER, not by class. T1 is the tier the catalogue assigns, so it
+# picks up the strong meets we could not classify by name as well as the ones we
+# could -- which is what "elite racing" actually means. Majors stay separate
+# because they are the goal, but 86 test races cannot resolve a 1% effect, so
+# decisions are made on T1 and confirmed on majors.
 MAJ <- c("olympics", "world_champs", "commonwealth")
-pop(d[class %in% MAJ], "PRIMARY: majors")
-pop(d[class %in% c(MAJ, "world_indoor", "diamond_league")], "SECONDARY: elite")
+pop(d[class %in% MAJ], "PRIMARY: majors (the goal)")
+pop(d[meet_tier == "T1_elite"], "DECISIONS: T1 elite")
+pop(d[meet_tier == "T2_strong"], "T2 strong")
 pop(d, "CONTEXT: all scored finals")
