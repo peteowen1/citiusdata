@@ -47,9 +47,30 @@ NOT_THE_EVENT <- paste(
   "Trials|Qualifier|Qualifying|Anniversary|Open Meeting|Selection|",
   "Warm.?up|Test Event|Festival|Classic -", sep = "")
 
+# Never an elite senior track meeting, whatever else the name contains. A
+# marathon held in a Diamond League city is a marathon; a youth meeting under a
+# DL banner is a youth meeting. These are applied to the elite classes only, so
+# a road race still classifies correctly as a road race elsewhere.
+NEVER_ELITE <- paste0(
+  "Marathon|Half.?Marathon|10 ?[Kk]m?\\b|5 ?[Kk]m?\\b|Road Race|",
+  "karusell|Bislettmila|Distanseserie|Distance challenge|Bislett Spring|",
+  "Bislett Open|KM Oslo|Nasjonalt|Sommerstevne|Elite Series|Street Tour|",
+  # `m.odzie` rather than a \\u escape: PCRE2 rejects \\u outright, and the
+  # Polish "mlodziezowy" (youth) carries a character we should not have to encode.
+  "Stabhochsprung|Kugelsto|m.odzie|youth|junior|U1[0-9]|U2[0-3]|",
+  "Silesian Meeting|pre-programme|pre-event")
+
 RULES <- list(
   list(class = "age_group",      pat = "U13|U14|U15|U16|U17|U18|U20|U23|Junior|Youth|Schools|Cadet|Minime"),
-  list(class = "ncaa",           pat = "NCAA|NAIA|NJCAA|Division I|Division II|Division III|Big Ten|SEC Outdoor|Pac-12|ACC Outdoor"),
+  # NCAA splits. Division I outdoor and indoor score 81-86 and are genuinely
+  # world-class in sprints and jumps -- many Olympic finalists come through them.
+  # Division II (65-71), Division III (50-56) and the conference meets (48-54)
+  # are not the same competition and should not share a tier with them.
+  list(class = "ncaa_lower", pat = paste0(
+    "Division II|Division III|Div. II|Div. III|NAIA|NJCAA|Conference USA|",
+    "Big Ten|SEC Outdoor|SEC Indoor|Pac-12|ACC Outdoor|ACC Indoor|",
+    "Inter-University|Intervarsity|Students Open")),
+  list(class = "ncaa", pat = "NCAA|Division I|Div. I|Collegiate|University Championships"),
   list(class = "olympics",       pat = "Olympic Games|XXX+ Olympic"),
   # The body was the IAAF until 2019, so London 2017 and Doha 2019 are "IAAF
   # World Championships in Athletics". Fixing this pattern in the HARVESTER and
@@ -58,12 +79,88 @@ RULES <- list(
   list(class = "world_indoor",   pat = "World (Athletics )?Indoor Championships|IAAF World Indoor"),
   list(class = "world_other",    pat = "World Athletics (Relays|Cross Country|Race Walking|Road Running)|World Half Marathon|World Cross Country|World Race Walking|World Mountain"),
   list(class = "commonwealth",   pat = "Commonwealth Games"),
-  list(class = "continental",    pat = "European Athletics Championships|European Athletics Indoor Championships|African (Athletics )?Championships|Asian (Athletics )?Championships|Pan American Games|NACAC Championships|Oceania (Athletics )?Championships|South American Championships|Ibero.?American"),
-  list(class = "regional_games", pat = "Asian Games|African Games|Mediterranean Games|Islamic Solidarity|Universiade|World University|Southeast Asian Games|Bolivarian|Central American"),
-  list(class = "diamond_league", pat = "Weltklasse|Prefontaine|Athletissima|Bislett|Herculis|Golden Gala|Anniversary Games|Diamond League|Meeting de Paris|Memorial Van Damme|Shanghai|Doha|Rabat|Silesia|Skolimowska|Bauhaus|Xiamen|Suzhou|Oslo"),
-  list(class = "continental_tour", pat = "Continental Tour|Golden Spike|Kusoci|Szewi|Rieti|Zag|Hanzekovic|Padova|Turku|Motonet|Meeting"),
+  # Continental championships, indoor ones included. Pan American Athletics
+  # Championships, the Asian Indoor and the South American Indoor were all
+  # sitting in `unclassified` and reaching T1 on strength alone -- they are
+  # continental titles and should say so.
+  # The European Championships, outdoor and indoor, score 83 and 86 -- above
+  # the Commonwealth Games, which is already T1 -- because European depth in
+  # most events is second only to a global final. Separated from the other
+  # continental titles (African 73, Asian 75, South American 63), which are
+  # correctly T2.
+  list(class = "european_champs", pat = paste0(
+    "European Athletics Championships$|European Athletics Championships |",
+    "European Athletics Indoor Championships|European Championships$")),
+  list(class = "continental",    pat = paste0(
+    "European Athletics Championships|European Athletics Indoor Championships|",
+    "African (Athletics )?Championships|Asian (Athletics )?Championships|",
+    "Asian Indoor Athletics Championships|Pan American Games|",
+    "Pan American Athletics Championships|NACAC Championships|",
+    "Oceania (Athletics )?Championships|South American (Athletics )?Championships|",
+    "South American Indoor|Ibero.?American")),
+
+  # ROAD RACING is a meet type, not just an event family.
+  #
+  # `family` is per EVENT -- a marathon is family "road", and that has always
+  # worked. `class` is per MEET, and every rule here was written for
+  # championship-shaped meets, so "Shanghai Marathon" had no class at all and
+  # reached T1 through the strength fallback. The event was classified; the
+  # meeting was not.
+  #
+  # Elite road racing belongs in T1 (Pete, 2026-07-31) and the strength measure
+  # sorts the Berlin marathon from a local half, so the class just needs to
+  # exist for the tiering to be honest about what it is looking at.
+  list(class = "road_race", pat = paste0(
+    "Marathon|Half.?Marathon|\\b10 ?[Kk]m?\\b|\\b5 ?[Kk]m?\\b|",
+    "Road Running|Road Race|Elite 10K|10K Elite|Great North Run|",
+    "City Run|Corrida|Maraton")),
+
+  # The World Indoor Tour is a real elite circuit with Gold/Silver/Bronze
+  # levels, and its Gold meetings are the strongest indoor fields outside a
+  # championship.
+  list(class = "indoor_tour", pat = "World Indoor Tour|Indoor Tour Gold|Millrose|Mill\u00earose"),
+  list(class = "regional_games", pat = paste0(
+    "Asian Games|African Games|Mediterranean Games|Islamic Solidarity|",
+    "Universiade|World University|Southeast Asian Games|Bolivarian|",
+    "Central American|South American Games|GCC Games|Military Games|",
+    "Military World|Gulf Games|Pacific Games|Maccabiah")),
+  # Diamond League by MEETING name, not by city.
+  #
+  # The first version matched "Shanghai", "Doha", "Rabat", "Oslo", "Silesia",
+  # "Xiamen", "Bislett" and "Weltklasse" anywhere in a name, which swept in 73
+  # editions of things that merely happen in those places: the Xiamen, Shanghai,
+  # Rabat and Oslo marathons, nine Norwegian club meets at Bislett stadium, a
+  # German shot put meeting called "Kugelstossmeeting Weltklasse", and a YOUTH
+  # meeting in Silesia carrying 39 finals at strength 18. All of them landed in
+  # the elite evaluation population. 36% of the class was noise.
+  #
+  # A real DL meeting is a specific fixture. Named ones only, and never a road
+  # race or an age-group meeting held under the same banner.
+  list(class = "diamond_league",
+       pat = paste0("Weltklasse Z|Athletissima|Prefontaine Classic|Herculis|",
+                    "Golden Gala|Bislett Games|Memorial Van Damme|",
+                    "Anniversary Games|London Athletics Meet|Meeting de Paris|",
+                    "Skolimowska Memorial|BAUHAUS.?galan|Diamond League|",
+                    "Mohammed VI|Shanghai Golden Grand Prix|Qatar Athletic|",
+                    "Bauhaus Galan|Dream Mile|Keqiao|Suzhou")),
+  # Named club-level and warm-up meets. Listed BEFORE continental_tour so a
+  # "Bislett Spring" or a "pre-programme" cannot be swept up by a broader rule
+  # and land in T1 next to the Olympics -- which is exactly what happened.
+  list(class = "club_meet", pat = paste0(
+    "pre-programme|pre-event|Bislett Spring|Bislett Open|Bislett 600|",
+    "Bislettmila|karusell|Distanseserie|Distance challenge|",
+    "Lambertseter|Sommerstevne|Nasjonalt|KM Oslo|Street Tour|",
+    "Boysen Memorial|Aspire Indoor Invitational|Challenge Games")),
+  list(class = "continental_tour", pat = "Continental Tour|Golden Spike|Kusoci|Szewi|Rieti|Zag|Hanzekovic|Padova|Turku|Motonet|Racers Grand Prix|Meeting"),
   list(class = "national_champs", pat = "National Championships|Championships of|(USA|British|Jamaican|Kenyan|Australian|Japanese|Chinese|German|French|Italian|Spanish|Polish|South African|Canadian|Indian|Nigerian|Ethiopian|Dutch|Swedish|Norwegian|Finnish|Czech|Swiss|Belgian|Irish|Portuguese|Greek|Turkish|Brazilian|Mexican|Cuban|New Zealand) Championships"),
-  list(class = "team_champs",    pat = "Team Championships|European Athletics Team|Cup$|Super League|First League|First Division")
+  # Team championships split by division. The Super League and First Division
+  # (71-75) are real; the Second Division (57), First League (33) and Third
+  # Division (19) are not, and nor are the Pan American race walking cups
+  # (37 and 23).
+  list(class = "team_champs_lower", pat = paste0(
+    "Second Division|Third Division|Second League|First League|1st League|",
+    "2nd League|3rd League|Race Walking Cup|Throwing Cup")),
+  list(class = "team_champs",    pat = "Team Championships|European Athletics Team|Cup$|Super League|First Division")
 )
 cat_of <- function(nm) {
   out <- rep(NA_character_, length(nm))
@@ -72,8 +169,11 @@ cat_of <- function(nm) {
   for (r in RULES) {
     senior <- r$class %in% c("olympics","world_champs","world_indoor","world_other",
                              "commonwealth","continental","regional_games")
+    elite <- r$class %in% c("olympics","world_champs","world_indoor","commonwealth",
+                            "continental","diamond_league")
+    never <- grepl(NEVER_ELITE, nm, ignore.case = TRUE, perl = TRUE)
     hit <- is.na(out) & grepl(r$pat, nm, ignore.case = TRUE, perl = TRUE) &
-      !(senior & excluded)
+      !(senior & excluded) & !(elite & never)
     out[hit] <- r$class
   }
   out[is.na(out)] <- "unclassified"
@@ -131,6 +231,24 @@ ev_q <- ev_q[n_meets >= 3]                       # need something to rank agains
 ev_q[, ev_pct := 100 * frank(q, ties.method = "average") / .N, by = .(event_id, era)]
 strength <- ev_q[, .(strength = round(mean(ev_pct), 1), s_raw = round(100 * mean(q), 1),
                      races_won = .N), by = competition_id]
+
+# STRENGTH IS UNRELIABLE AT SMALL n, and it was quietly promoting exhibitions.
+#
+# "Whatgravity Challenge" scored 96, "Drake Relays Vault at Jordan Creek" 91,
+# "Zurich Rock n Roll Running Series Madrid" 90, "Filothei Women Gala" 85. Every
+# one is a one- or two-event specialist meet: with a handful of races the
+# winners' percentiles come from a tiny sample and land wherever chance puts
+# them. A pole vault exhibition reads 91 because the two vaulters who turned up
+# happen to be decent vaulters.
+#
+# Below this many scored events the number is not evidence, so it is withheld
+# rather than trusted -- the same reason fit_half_life() refuses a boundary
+# optimum and match_event() refuses a fuzzy match.
+MIN_EVENTS_FOR_STRENGTH <- 5L
+thin <- strength[races_won < MIN_EVENTS_FOR_STRENGTH]
+if (nrow(thin)) cli::cli_alert_info(
+  "{nrow(thin)} competition{?s} have fewer than {MIN_EVENTS_FOR_STRENGTH} scored events; strength withheld.")
+strength[races_won < MIN_EVENTS_FOR_STRENGTH, strength := NA_real_]
 
 cat_tbl <- ch[, .(
   comp_name   = comp_name[1],
@@ -193,27 +311,48 @@ cat_tbl[, class := cat_of(comp_name)]
 # So: tier comes from CLASS wherever the class is known, and from measured
 # strength only for the 504 meets we could not classify. Measurement is used
 # where knowledge is absent, not as a substitute for it.
+# world_other is the senior WORLD title in its discipline -- cross country,
+# relays, race walking teams, half marathon. World Cross Country has the deepest
+# distance fields on earth and has no business below a Diamond League meeting.
+# indoor_tour is the World Indoor Tour Gold circuit, where world records are set.
 KNOWN_T1 <- c("olympics", "world_champs", "commonwealth", "world_indoor",
-              "diamond_league")
+              "diamond_league", "world_other", "indoor_tour", "european_champs")
 KNOWN_T2 <- c("continental", "national_champs", "ncaa", "team_champs",
-              "continental_tour", "regional_games", "world_other")
-KNOWN_T3 <- c("age_group")
+              "continental_tour", "regional_games")
+KNOWN_T3 <- c("age_group", "club_meet", "ncaa_lower", "team_champs_lower")
+# Road racing spans the Berlin marathon and a local 10K, so it is the one class
+# where measured strength genuinely decides the tier rather than the label.
+BY_STRENGTH <- c("road_race")
 cat_tbl[, meet_tier := fcase(
   class %in% KNOWN_T1, "T1_elite",
   class %in% KNOWN_T2, "T2_strong",
   class %in% KNOWN_T3, "T3_development",
+  class %in% BY_STRENGTH & !is.na(strength) & strength >= 75, "T1_elite",
+  class %in% BY_STRENGTH & !is.na(strength) & strength >= 50, "T2_strong",
+  class %in% BY_STRENGTH, "T3_development",
   # unclassified: fall back to the measured field strength, banded on its own
   # distribution among unclassified meets so the bands mean something.
   default = NA_character_)]
-uq <- stats::quantile(cat_tbl[is.na(meet_tier)]$strength, c(0.80, 0.45), na.rm = TRUE)
+# An UNCLASSIFIED meet is never T1.
+#
+# 89 unidentified meets carrying 1,381 finals -- 23% of T1 -- were admitted on
+# strength alone, and inspection found not one elite meeting among them: a Swiss
+# national memorial, the Japan Inter-University Championships, a Conference USA
+# indoor meet, the Africa Military Games, a "National Programme" support fixture.
+#
+# `match_event()` returns NA rather than guessing, because snapping an unknown
+# event onto a neighbour corrupts histories undetectably. The same applies here:
+# unclassified means we do not know what the meet IS, and a meet we cannot name
+# has no business in the population the model is judged on. Strength was built
+# to RANK meets we had identified, not to identify them.
+uq <- stats::quantile(cat_tbl[is.na(meet_tier)]$strength, 0.55, na.rm = TRUE)
 cat_tbl[is.na(meet_tier), meet_tier := fcase(
   is.na(strength), "T3_development",
-  strength >= uq[[1]], "T1_elite",
-  strength >= uq[[2]], "T2_strong",
+  strength >= uq[[1]], "T2_strong",
   default = "T3_development")]
 cat(sprintf("
-unclassified meets banded on strength at %.1f / %.1f
-", uq[[1]], uq[[2]]))
+unclassified meets capped at T2, split at strength %.1f
+", uq[[1]]))
 
 cat_tbl[, is_major := class %in% c("olympics", "world_champs", "commonwealth")]
 cat_tbl[, is_global := class %in% c("olympics", "world_champs", "commonwealth",
@@ -273,7 +412,39 @@ ok3 <- anchor("most Diamond League is T1", mean(dl$meet_tier == "T1_elite") > 0.
               sprintf("%.0f%%", 100 * mean(dl$meet_tier == "T1_elite")))
 ok4 <- anchor("no age-group meet is T1", !any(age$meet_tier == "T1_elite"),
               sprintf("%d of %d", sum(age$meet_tier == "T1_elite"), nrow(age)))
-if (!all(ok1, ok2, ok3, ok4)) {
+
+# NEGATIVE anchors. The set above only said what must be IN, which is why a
+# youth meeting at strength 18 sat in T1 and every check passed. Naming what
+# must be true catches under-inclusion; you also have to name what must be FALSE.
+t1 <- cat_tbl[meet_tier == "T1_elite"]
+ok5 <- anchor("no T1 meet is named as a youth/junior meeting",
+              !any(grepl("m.odzie|youth|junior|U1[0-9]|U2[0-3]", t1$comp_name,
+                         ignore.case = TRUE, perl = TRUE)),
+              paste(utils::head(grep("m.odzie|youth|junior|U1[0-9]|U2[0-3]",
+                    t1$comp_name, ignore.case = TRUE, perl = TRUE, value = TRUE), 2),
+                    collapse = "; "))
+ok6 <- anchor("no T1 meet sits below strength 40",
+              !any(t1$strength < 40, na.rm = TRUE),
+              sprintf("%d below", sum(t1$strength < 40, na.rm = TRUE)))
+ok10 <- anchor("no NCAA D2/D3 or conference meet is above T3",
+               !any(cat_tbl[class == "ncaa_lower"]$meet_tier != "T3_development"),
+               sprintf("%d above", sum(cat_tbl[class == "ncaa_lower"]$meet_tier != "T3_development")))
+ok11 <- anchor("world_other (senior world titles) is T1",
+               all(cat_tbl[class == "world_other"]$meet_tier == "T1_elite"),
+               paste(sort(unique(cat_tbl[class == "world_other"]$meet_tier)), collapse = "/"))
+ok9 <- anchor("no unclassified meet is T1",
+              !any(cat_tbl[meet_tier == "T1_elite"]$class == "unclassified"),
+              sprintf("%d found", sum(cat_tbl[meet_tier == "T1_elite"]$class == "unclassified")))
+ok8 <- anchor("no club or warm-up meet is T1",
+              !any(cat_tbl[meet_tier == "T1_elite"]$class == "club_meet"),
+              sprintf("%d found", sum(cat_tbl[meet_tier == "T1_elite"]$class == "club_meet")))
+ok7 <- anchor("no Diamond League entry is a road race",
+              !any(grepl("Marathon|Half|10 ?[Kk]m?\\b", cat_tbl[class == "diamond_league"]$comp_name,
+                         ignore.case = TRUE, perl = TRUE)),
+              sprintf("%d found", sum(grepl("Marathon|Half|10 ?[Kk]m?\\b",
+                      cat_tbl[class == "diamond_league"]$comp_name,
+                      ignore.case = TRUE, perl = TRUE))))
+if (!all(ok1, ok2, ok3, ok4, ok5, ok6, ok7, ok8, ok9, ok10, ok11)) {
   cat("
 An anchor failed. The tier metric is measuring something other than
 ")
