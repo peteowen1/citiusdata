@@ -67,11 +67,20 @@ d[, t_perf := orientation * log(actual)]
 for (n in c("ref", "cevent", "noctx")) {
   d[, (paste0(n, "_perf")) := orientation * log(get(paste0(n, "_mark")))]
 }
-# Centred within race: the metric is within-race differentiation, not level.
-d[, t_c := t_perf - mean(t_perf), by = race_id]
+# MATCH score_arm.R's DEFINITION OF "CENTRED", WHICH IS NOT WITHIN-RACE.
+#
+# score_arm.R:190 computes `ea - mean(ea)` over the WHOLE scored population, so
+# its "marks MAE ctr" removes each arm's global bias. It is a level metric with
+# systematic bias taken out, not a measure of within-race ordering.
+#
+# This script originally centred by race, which measures a genuinely different
+# failure -- discrimination rather than calibration -- and the two disagree
+# completely: cevent scores -0.79% on the target and exactly -0.00% within race.
+# A mechanical evaluator applying pre-registered rules to the wrong quantity is
+# worse than no evaluator, because it produces a confident verdict.
 for (n in c("ref", "cevent", "noctx")) {
-  d[, (paste0(n, "_c")) := get(paste0(n, "_perf")) - mean(get(paste0(n, "_perf"))), by = race_id]
-  d[, (paste0(n, "_ae")) := abs(get(paste0(n, "_c")) - t_c)]
+  e <- 100 * (d[[paste0(n, "_perf")]] - d$t_perf)
+  d[, (paste0(n, "_ae")) := abs(e - mean(e, na.rm = TRUE))]
 }
 
 d[, grp := fcase(event_id %like% "AT-400Metres", "400m/400mH",
