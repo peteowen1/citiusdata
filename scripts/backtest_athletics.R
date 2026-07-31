@@ -43,7 +43,13 @@ OUTCOMES <- Sys.getenv("CITIUS_BT_OUTCOMES", "championship_results.rds")
 HISTORY  <- Sys.getenv("CITIUS_BT_HISTORY", "athletics_corpus.rds")
 champs      <- readRDS(file.path(OUT, OUTCOMES))
 hist_raw    <- if (identical(HISTORY, OUTCOMES)) champs else readRDS(file.path(OUT, HISTORY))
-calibration <- readRDS(file.path(OUT, Sys.getenv("CITIUS_BT_CALIBRATION", "calibration_corpus.rds")))
+# Resolved ONCE. This line and the meta block below used to call Sys.getenv()
+# separately with DIFFERENT defaults -- "calibration_corpus.rds" here and
+# "calibration.rds" there -- so an arm run without the variable set loaded one
+# calibration and recorded the name and md5 of another. cp0's meta claims
+# "calibration.rds", a file it never opened.
+CALIBRATION <- Sys.getenv("CITIUS_BT_CALIBRATION", "calibration_corpus.rds")
+calibration <- readRDS(file.path(OUT, CALIBRATION))
 # The aging curve. Found missing from this script on 2026-07-29: project_ability()
 # is applied in predict_glasgow2026.R but was never called here, so the backtest
 # was measuring a DIFFERENT pipeline from the one that ships -- and every
@@ -477,19 +483,34 @@ saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc,
                cohort_n = if (is.null(cohort_ids)) NA_integer_ else length(cohort_ids),
                history_restricted = !is.null(dev_ids),
                history = HISTORY, outcomes_file = OUTCOMES,
-               calibration = Sys.getenv("CITIUS_BT_CALIBRATION", "calibration.rds"),
+               calibration = CALIBRATION,
                # HASHES, not just filenames. `aging.rds` meant three different
                # curves on 2026-07-29, and an A/B that recorded only the name
                # attributed an aging change to a calibration change. A stamp that
                # cannot distinguish two versions of the same path is not a stamp.
-               calibration_md5 = tryCatch(tools::md5sum(
-                 file.path(OUT, Sys.getenv("CITIUS_BT_CALIBRATION", "calibration.rds")))[[1]],
+               calibration_md5 = tryCatch(tools::md5sum(file.path(OUT, CALIBRATION))[[1]],
                  error = function(e) NA_character_),
                aging_file = AGING_FILE,
                aging_md5 = tryCatch(tools::md5sum(file.path(OUT, AGING_FILE))[[1]],
                                     error = function(e) NA_character_),
                history_md5 = tryCatch(tools::md5sum(file.path(OUT, HISTORY))[[1]],
                                       error = function(e) NA_character_),
+               # WHERE THE HISTORY ACTUALLY CAME FROM. When the parquet store
+               # exists it is read instead of the .rds, so history_md5 was
+               # stamping a file the run never opened -- and the store can be
+               # rebuilt from a different corpus than the .rds sitting next to
+               # it. score_arm.R compares these hashes to decide whether two
+               # arms are comparable at all, so a hash describing the wrong
+               # source is worse than no hash: it makes a mismatch look like a
+               # match. Fingerprinted by name+size rather than content because
+               # hashing a multi-GB partitioned dataset per arm is not worth it.
+               history_source = if (USE_STORE) "store" else "rds",
+               store_md5 = if (!USE_STORE) NA_character_ else tryCatch({
+                 f <- sort(list.files(STORE, recursive = TRUE, full.names = TRUE))
+                 tf <- tempfile(); on.exit(unlink(tf), add = TRUE)
+                 writeLines(paste0(basename(f), ":", file.size(f)), tf)
+                 unname(tools::md5sum(tf))
+               }, error = function(e) NA_character_),
                half_life = half_life, prior_weight = PRIOR_WEIGHT,
                sigma_mode = SIGMA_MODE,
                history_days = HISTORY_DAYS, n_sims = N_SIMS,

@@ -65,8 +65,16 @@ if (nzchar(VS)) {
   # which is the tell: real single-variable effects do not move in lockstep.
   #
   # backtest_athletics.R has always recorded history_md5. Nothing read it.
-  h_arm <- get(ARM, envir = arm_meta)$history_md5
-  h_vs  <- get(VS,  envir = arm_meta)$history_md5
+  # Fingerprint whatever the run ACTUALLY read. When the parquet store exists
+  # the .rds is never opened, so comparing history_md5 alone can pass two arms
+  # that read different stores. Arms written before history_source existed fall
+  # back to the .rds hash, which is what they really used.
+  vintage <- function(f) {
+    m <- get(f, envir = arm_meta)
+    if (is.null(m$history_md5)) return(NULL)
+    if (identical(m$history_source, "store")) c(m$history_md5, m$store_md5) else m$history_md5
+  }
+  h_arm <- vintage(ARM); h_vs <- vintage(VS)
   if (is.null(h_arm) || is.null(h_vs)) {
     cli::cli_abort(c("x" = "{.file {if (is.null(h_arm)) ARM else VS}} has no {.field history_md5}.",
                      "i" = "Pre-dates provenance tracking; re-run it before comparing."))
@@ -74,8 +82,8 @@ if (nzchar(VS)) {
   if (!identical(h_arm, h_vs)) {
     cli::cli_abort(c(
       "x" = "{.file {ARM}} and {.file {VS}} were built on different history vintages.",
-      "*" = "{ARM}: {substr(h_arm, 1, 8)}",
-      "*" = "{VS}: {substr(h_vs, 1, 8)}",
+      "*" = "{ARM}: {paste(substr(h_arm, 1, 8), collapse = '/')}",
+      "*" = "{VS}: {paste(substr(h_vs, 1, 8), collapse = '/')}",
       "i" = "Any difference confounds the arm variable with the data. Re-run one
              on the other's corpus, or score both against the baseline instead."))
   }
