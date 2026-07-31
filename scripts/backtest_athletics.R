@@ -126,6 +126,13 @@ PRIOR_WEIGHT <- as.numeric(Sys.getenv("CITIUS_PRIOR_WEIGHT", "0.5"))
 # probability rewards being unpredictable. This asks whether that reordering
 # carries information or destroys it.
 SIGMA_MODE <- Sys.getenv("CITIUS_BT_SIGMA_MODE", "athlete")
+
+# Round and tier adjustment, on unless explicitly switched off. There was no way
+# to run without it, so the layer had never been measured against its own
+# absence -- and it is the current suspect for the 400m and throws, where our
+# ability estimate correlates with the truth WORSE than a plain last-five mean
+# (0.595 vs 0.648 and 0.694 vs 0.726). Set CITIUS_BT_CONTEXT=off for that arm.
+ADJUST_CONTEXT <- !identical(tolower(Sys.getenv("CITIUS_BT_CONTEXT", "on")), "off")
 # Use the catalogue's meet_tier for the context adjustment instead of the feed's
 # per-result `tier`, which varies within a single meet and labels the Diamond
 # League "low". Off by default so it is measured as its own arm.
@@ -327,6 +334,7 @@ for (i in seq_len(n)) {
     tick("ability", estimate_ability(past, as_of = cut_date,
                                      half_life = half_life,
                                      calibration = calibration,
+                                     adjust_context = ADJUST_CONTEXT,
                                      sigma_mode = SIGMA_MODE))
   } else {
     # Refit per family. estimate_ability takes a single half-life, so split the
@@ -338,7 +346,8 @@ for (i in seq_len(n)) {
       hl <- if (!is.na(g$family[1]) && g$family[1] %in% names(hl_map))
         hl_map[[g$family[1]]] else half_life
       estimate_ability(g[, !"family"], as_of = cut_date, half_life = hl,
-                       calibration = calibration, sigma_mode = SIGMA_MODE)
+                       calibration = calibration, adjust_context = ADJUST_CONTEXT,
+                       sigma_mode = SIGMA_MODE)
     }), fill = TRUE))
   }
 
@@ -512,7 +521,7 @@ saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc,
                  unname(tools::md5sum(tf))
                }, error = function(e) NA_character_),
                half_life = half_life, prior_weight = PRIOR_WEIGHT,
-               sigma_mode = SIGMA_MODE,
+               sigma_mode = SIGMA_MODE, adjust_context = ADJUST_CONTEXT,
                history_days = HISTORY_DAYS, n_sims = N_SIMS,
                races_scored = length(keep), run_at = Sys.time())),
         file.path(OUT, Sys.getenv("CITIUS_BT_OUT", "backtest.rds")))
