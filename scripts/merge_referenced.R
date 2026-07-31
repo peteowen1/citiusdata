@@ -64,8 +64,23 @@ stopifnot(nrow(ch) == before + nrow(new))
 # miss.
 stopifnot(!any(ch$competition_id == 0, na.rm = TRUE))
 
+if (!nrow(new)) {
+  cli::cli_alert_warning("Nothing new to merge; leaving the store untouched.")
+  quit(save = "no")
+}
+
+# NEVER OVERWRITE AN EXISTING ROLLBACK. Re-running the merge would otherwise
+# copy the ALREADY-MERGED store over the backup, so the second run silently
+# destroys the only route back to the pre-harvest state -- exactly when you most
+# want it, because a re-run usually means something went wrong the first time.
+# The dedup above makes a second run a no-op for the data, which is precisely
+# what would make this easy to miss.
 backup <- file.path(OUT, "championship_results_premerge.rds")
-saveRDS(readRDS(ch_f), backup)
+if (file.exists(backup)) {
+  say("rollback already exists at championship_results_premerge.rds; keeping it")
+} else {
+  saveRDS(readRDS(ch_f), backup)
+}
 saveRDS(ch, ch_f)
 say("merged -> ", format(nrow(ch), big.mark = ","), " rows / ",
     format(uniqueN(ch$competition_id), big.mark = ","), " comps",

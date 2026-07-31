@@ -41,6 +41,27 @@ load_arm <- function(f) {
 d <- load_arm(ARM)
 setnames(d, c("p_gold", "p_medal", "median_mark"), c("a_gold", "a_medal", "a_mark"))
 
+# AN ARM TOO SMALL TO MEAN ANYTHING MUST NOT PRODUCE A SCORECARD.
+#
+# backtest_athletics.R caps meets per run at CITIUS_BT_MEETS, which DEFAULTS TO
+# 25. Forget to set it and the arm finishes early, writes a perfectly well-formed
+# artefact, and scores clean -- on a sample that cannot separate anything. There
+# is no error anywhere in that chain, which is what makes it dangerous: the
+# output looks exactly like a real result. Caught in review on 2026-07-31 before
+# a three-arm queue ran that way.
+#
+# Same principle as withholding meet strength below five scored events: when the
+# sample is too thin, decline rather than report.
+MIN_RACES <- as.integer(Sys.getenv("CITIUS_SCORE_MIN_RACES", "200"))
+n_races <- uniqueN(d$race_id)
+if (n_races < MIN_RACES) {
+  cli::cli_abort(c(
+    "x" = "{.file {ARM}} scored only {n_races} race{?s}; refusing to report.",
+    "i" = "Almost always CITIUS_BT_MEETS unset (it defaults to 25). Re-run the
+           arm with it set, or lower {.envvar CITIUS_SCORE_MIN_RACES} if this
+           small a sample is genuinely what you want."))
+}
+
 ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 ch[, athlete_id := as.character(athlete_id)]
 act <- ch[!is.na(mark) & !is.na(race_key) & !is.na(place) & place > 0,
