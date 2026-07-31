@@ -25,9 +25,16 @@ OUT <- here::here("citiusdata", "data")
 cal <- readRDS(file.path(OUT, "calibration_corpus_csigma.rds"))
 x <- flag_implausible(setDT(readRDS(file.path(OUT, "athletics_corpus.rds"))))
 
-ctx <- estimate_context_effects(x, per_family = TRUE, per_event = TRUE)
-cal$round_family <- ctx$round_family
-cal$tier_family  <- ctx$tier_family
+# per_family STAYS OFF. Turning it on here would have made this a two-variable
+# arm -- per-family offsets AND per-event ones, against a reference that has
+# neither -- so a win could not be attributed to the grain under test. Worse,
+# per-family is already refuted (`cstack`, `cround`), so bundling it in would
+# mix a known-bad change into the candidate.
+#
+# With it off, `prior_for()` falls back to the pooled offset, and the arm is
+# exactly: pooled + per-event, against the reference's pooled.
+ctx <- estimate_context_effects(x, per_family = FALSE, per_event = TRUE)
+stopifnot(is.null(ctx$round_family), is.null(ctx$tier_family))
 cal$round_event  <- ctx$round_event
 cal$tier_event   <- ctx$tier_event
 
