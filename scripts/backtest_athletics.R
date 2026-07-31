@@ -149,8 +149,29 @@ USE_MEET_TIER <- nzchar(Sys.getenv("CITIUS_BT_MEET_TIER", ""))
 #
 # The T2 and "all finals" blocks of the scorecard go empty when this is set, so
 # it is a deliberate narrowing rather than a default.
+# FAST ITERATION MODE: restrict the HISTORY to athletes who have contested a T1
+# final, plus the meet's own entrants.
+#
+# Not free, and not adopted -- an opt-in screening mode. Measured on a real meet
+# (7214023, 16 events, 191 entrants): history rows 2,121,195 -> 453,978 and
+# ability estimation 36.2s -> 7.5s, a 4.8x cut, while the median change in final
+# ability was 0.014% of a mark against the ~0.8% effects being chased. The max
+# was 3.68%, concentrated in athletes whose record is mostly non-elite meets --
+# the thinly evidenced ones whose shrinkage leans hardest on the population just
+# removed.
+#
+# It is nearly free because `condition_prior()` runs afterwards and re-conditions
+# ability onto the field's own prior. That step is exact and linear
+# (ability_new = ability_old + shrinkage * (prior_new - prior_old)), so the
+# estimation prior CANCELS. Only sigma_between and the robust-sigma scale k
+# survive the restriction, and both move very little.
+#
+# Use it to screen hypotheses at ~10x with the tier filter, then confirm the
+# winner on full history before adopting anything. The median says a screening
+# result will nearly always survive; the max says confirmation is not optional.
+ELITE_HISTORY <- nzchar(Sys.getenv("CITIUS_BT_ELITE_HISTORY", ""))
 TIER_FILTER <- Sys.getenv("CITIUS_BT_TIER", "")
-if (USE_MEET_TIER || nzchar(TIER_FILTER)) {
+if (USE_MEET_TIER || nzchar(TIER_FILTER) || ELITE_HISTORY) {
   ctl <- setDT(arrow::read_parquet(file.path(OUT, "competition_catalogue.parquet")))
   # The catalogue round-trips competition_id through parquet as character while
   # the harvest holds an integer. A silent type mismatch here would abort the
@@ -277,6 +298,21 @@ if (!is.null(sel)) {
   finals <- finals[.n_sel >= 4L][, .n_sel := NULL]
 }
 
+elite_ids <- NULL
+if (ELITE_HISTORY) {
+  ec <- outcome_rows[!is.na(place) & grepl("final", round, ignore.case = TRUE) &
+                       !grepl("semi", round, ignore.case = TRUE),
+                     .(competition_id = as.character(competition_id),
+                       athlete_id = as.character(athlete_id))]
+  ec <- merge(ec, ctl, by = "competition_id", all.x = TRUE)
+  elite_ids <- unique(ec[meet_tier == "T1_elite"]$athlete_id)
+  cli::cli_alert_info("Elite history mode: {length(elite_ids)} athlete{?s} have a T1 final.")
+  # Zero would silently mean "history is just the entrants", which is a
+  # different and much worse model, not a faster one.
+  if (!length(elite_ids)) cli::cli_abort(
+    "Elite history mode found no T1 finalists; check the catalogue join.")
+}
+
 if (nzchar(TIER_FILTER)) {
   want <- trimws(strsplit(TIER_FILTER, ",")[[1]])
   keep <- ctl[meet_tier %in% want]$competition_id
@@ -349,6 +385,12 @@ for (i in seq_len(n)) {
             event_id %in% meet_events]
   })
   if (!is.null(dev_ids)) past <- past[as.character(athlete_id) %in% dev_ids]
+  if (!is.null(elite_ids)) {
+    # Always union the entrants: an entrant without a prior T1 final still needs
+    # their own history, or they would be estimated from nothing.
+    past <- past[as.character(athlete_id) %in%
+                   union(elite_ids, as.character(block$athlete_id))]
+  }
   if (USE_MEET_TIER && "competition_id" %in% names(past)) {
     past[, .cid := as.character(competition_id)]
     past <- merge(past, ctl, by.x = ".cid", by.y = "competition_id",
@@ -560,6 +602,9 @@ saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc,
                # Recorded because an arm scored on T1 only is not comparable to
                # one scored on every tier, and nothing else in the meta would say so.
                tier_filter = if (nzchar(TIER_FILTER)) TIER_FILTER else NA_character_,
+               # Screening mode changes the history, so an arm run this way is
+               # not comparable to one run on full history.
+               elite_history = ELITE_HISTORY,
                history_days = HISTORY_DAYS, n_sims = N_SIMS,
                races_scored = length(keep), run_at = Sys.time())),
         file.path(OUT, Sys.getenv("CITIUS_BT_OUT", "backtest.rds")))

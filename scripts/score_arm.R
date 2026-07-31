@@ -99,8 +99,13 @@ if (nzchar(VS)) {
   # numbers are not comparable even on the T1 block -- the pool selection is
   # evenly spaced across time, so narrowing it changes WHICH T1 meets are in.
   tf <- function(f) {
-    v <- get(f, envir = arm_meta)$tier_filter
-    if (is.null(v) || is.na(v)) "all" else v
+    m <- get(f, envir = arm_meta)
+    v <- m$tier_filter
+    v <- if (is.null(v) || is.na(v)) "all" else v
+    # Elite-history screening mode restricts the history, so it belongs in the
+    # same comparability key as the meet pool: a screening arm and a full arm
+    # are not measuring the same model.
+    paste0(v, if (isTRUE(m$elite_history)) " +elite-history" else "")
   }
   if (!identical(tf(ARM), tf(VS))) {
     cli::cli_abort(c(
