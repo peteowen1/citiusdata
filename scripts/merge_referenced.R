@@ -25,10 +25,29 @@ if (!file.exists(new_f)) cli::cli_abort("No {.file championship_results_referenc
 # different corpora and a history_md5 that describes neither. This is the same
 # class of mistake as editing backtest_athletics.R while it ran, which cost a
 # completed 380-meet arm on 2026-07-30.
-running <- system2("powershell.exe", c("-NoProfile", "-Command",
-  "\"(Get-Process Rscript -ErrorAction SilentlyContinue).Count\""), stdout = TRUE)
+# COUNTING Rscript PROCESSES FROM INSIDE ONE NEEDS THE SELF-TREE EXCLUDED.
+#
+# A single `Rscript foo.R` on Windows produces TWO processes both named
+# Rscript -- a launcher and the worker R runs in. The first version of this
+# guard counted them and compared against 1, so it fired on every clean run and
+# refused a merge with nothing else in the machine. It failed safe, but a guard
+# that always trips gets disabled, which is worse than not having it.
+#
+# So: exclude this process, its parent (the launcher), and any child of it.
+# Anything left is genuinely someone else's R.
+# Identify our own by COMMAND LINE, not by process tree. Both the launcher and
+# the worker carry the same command line, so matching on the script name
+# excludes exactly our pair. Parent-PID walking was tried and is not reliable
+# here: Windows recycles PIDs, and the two Rscript.exe processes of one run came
+# back with unrelated ParentProcessIds.
+ps <- paste0(
+  "@(Get-CimInstance Win32_Process -Filter \"Name='Rscript.exe'\" | ",
+  "Where-Object { $_.CommandLine -notlike '*merge_referenced.R*' }).Count")
+running <- system2("powershell.exe", c("-NoProfile", "-Command", shQuote(ps)),
+                   stdout = TRUE, stderr = FALSE)
 running <- suppressWarnings(as.integer(tail(running[nzchar(running)], 1)))
-if (!is.na(running) && running > 1L) {
+say("other R processes detected: ", if (is.na(running)) "unknown" else running)
+if (!is.na(running) && running > 0L) {
   cli::cli_alert_warning("{running} Rscript processes are running.")
   if (!nzchar(Sys.getenv("CITIUS_MERGE_FORCE"))) {
     cli::cli_abort(c("x" = "Refusing to swap the corpus while another R process may be reading it.",
