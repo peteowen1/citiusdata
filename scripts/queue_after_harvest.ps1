@@ -142,4 +142,13 @@ foreach ($n in $ran) {
   Run "diagnose_marks.R" @{ CITIUS_DIAG_ARM = "backtest_$n.rds" } -Fatal:$false
 }
 
+# 7. The pre-registered rules, applied by code rather than by whoever reads the
+#    numbers first. Requires all three arms, so it is skipped if any failed.
+if ($ran.Count -eq 3) {
+  Say "--- pre-registered evaluation"
+  Run "evaluate_prereg.R" @{} -Fatal:$false
+} else {
+  Say "skipping pre-registered evaluation: needs all three arms, got $($ran -join ', ')"
+}
+
 Say "queue complete"
