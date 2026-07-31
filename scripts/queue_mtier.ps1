@@ -34,9 +34,25 @@ function Say($m) {
 }
 
 Set-Location $repo
-Say "mtier queue waiting for the main queue to finish"
-while (Get-Process Rscript -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 60 }
-Say "main queue done; starting mtier"
+
+# WAIT ON THE QUEUE PROCESS, NOT ON Rscript. The first version waited for
+# Rscript to disappear, which is true for a few seconds BETWEEN arms -- so it
+# would have started during the gap after `cevent` and run alongside `noctx`,
+# contending for the memory this sequencing exists to protect. One arm holds
+# ~3.7 GB against ~6.9 GB free.
+Say "mtier queue waiting for queue_after_harvest.ps1 to exit"
+$waited = 0
+while ($true) {
+  $main = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
+          Where-Object { $_.CommandLine -like '*queue_after_harvest.ps1*' }
+  if (-not $main) { break }
+  Start-Sleep -Seconds 60
+  $waited += 1
+  if ($waited % 30 -eq 0) { Say "still waiting ($waited min)" }
+}
+# The main queue can exit while its last Rscript is still shutting down.
+while (Get-Process Rscript -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 20 }
+Say "main queue done after $waited min; starting mtier"
 
 # BOTH halves, or neither. Fitting the offsets on meet_tier without applying by
 # meet_tier -- or the reverse -- is the mismatch this arm exists to remove.
