@@ -38,11 +38,16 @@ Say "mtier queue waiting for the main queue to finish"
 while (Get-Process Rscript -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 60 }
 Say "main queue done; starting mtier"
 
-# Single variable against ref3: same calibration, same corpus, meet_tier ON.
+# BOTH halves, or neither. Fitting the offsets on meet_tier without applying by
+# meet_tier -- or the reverse -- is the mismatch this arm exists to remove.
+Say "=== build_calibration_mtier.R (fit tier offsets on meet_tier)"
+& Rscript "$scripts\build_calibration_mtier.R"
+if ($LASTEXITCODE -ne 0) { Say "FAILED ($LASTEXITCODE): mtier calibration"; exit 1 }
+
 $env:CITIUS_BT_OUT = "backtest_mtier.rds"
 $env:CITIUS_BT_CACHE = "backtest_cache_mtier"
 $env:CITIUS_BT_MEETS = "3000"
-$env:CITIUS_BT_CALIBRATION = "calibration_corpus_csigma.rds"
+$env:CITIUS_BT_CALIBRATION = "calibration_corpus_mtier.rds"
 $env:CITIUS_BT_MEET_TIER = "on"      # a real sentinel: "" would read as UNSET
 Say "=== backtest_athletics.R (meet_tier ON)"
 & Rscript "$scripts\backtest_athletics.R"
