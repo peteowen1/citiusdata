@@ -137,7 +137,20 @@ ADJUST_CONTEXT <- !identical(tolower(Sys.getenv("CITIUS_BT_CONTEXT", "on")), "of
 # per-result `tier`, which varies within a single meet and labels the Diamond
 # League "low". Off by default so it is measured as its own arm.
 USE_MEET_TIER <- nzchar(Sys.getenv("CITIUS_BT_MEET_TIER", ""))
-if (USE_MEET_TIER) {
+
+# Restrict the SCORED MEETS to given tiers. Decisions are made on T1 (see
+# OPTIMISATION-FRAMEWORK.md), but the arm was scoring every tier: of 367 meets,
+# 105 are T1 and 262 are T2/T3 -- so 72% of a 90-minute run went to populations
+# the framework calls "context only, never the headline".
+#
+# CITIUS_BT_TIER=T1_elite keeps everything the T1 decision needs: 43 scored
+# meets after the holdout, plus 62 before it, which is what score_arm.R fits the
+# baseline sigma on. ~25 minutes instead of ~90.
+#
+# The T2 and "all finals" blocks of the scorecard go empty when this is set, so
+# it is a deliberate narrowing rather than a default.
+TIER_FILTER <- Sys.getenv("CITIUS_BT_TIER", "")
+if (USE_MEET_TIER || nzchar(TIER_FILTER)) {
   ctl <- setDT(arrow::read_parquet(file.path(OUT, "competition_catalogue.parquet")))
   # The catalogue round-trips competition_id through parquet as character while
   # the harvest holds an integer. A silent type mismatch here would abort the
@@ -145,7 +158,7 @@ if (USE_MEET_TIER) {
   # exactly like "the fix did nothing".
   ctl[, competition_id := as.character(competition_id)]
   ctl <- ctl[, .(competition_id, meet_tier)]
-  cli::cli_alert_info("Context adjustment uses meet_tier from the catalogue.")
+  if (USE_MEET_TIER) cli::cli_alert_info("Context adjustment uses meet_tier from the catalogue.")
 }
 if (SIGMA_MODE != "athlete") cli::cli_alert_info("Sigma mode: {SIGMA_MODE}")
 
@@ -264,6 +277,22 @@ if (!is.null(sel)) {
   finals <- finals[.n_sel >= 4L][, .n_sel := NULL]
 }
 
+if (nzchar(TIER_FILTER)) {
+  want <- trimws(strsplit(TIER_FILTER, ",")[[1]])
+  keep <- ctl[meet_tier %in% want]$competition_id
+  before <- uniqueN(finals$competition_id)
+  finals <- finals[as.character(competition_id) %in% keep]
+  after <- uniqueN(finals$competition_id)
+  cli::cli_alert_info("Tier filter {.val {want}}: {after} of {before} meets kept.")
+  # An empty result here would run zero meets and write an artefact that scores
+  # as a clean null. Fail loudly instead -- the usual cause is the parquet/harvest
+  # competition_id type mismatch above silently matching nothing.
+  if (!after) cli::cli_abort(c(
+    "x" = "Tier filter {.val {want}} matched no meets.",
+    "i" = "Check the catalogue has those meet_tier values and that
+           competition_id types agree."))
+}
+
 # Sample meets evenly across time rather than taking the most recent, so the
 # backtest is not all one era.
 pool <- unique(finals[, .(competition_id, comp_start)])[!is.na(comp_start) &
@@ -335,7 +364,13 @@ for (i in seq_len(n)) {
                                      half_life = half_life,
                                      calibration = calibration,
                                      adjust_context = ADJUST_CONTEXT,
-                                     sigma_mode = SIGMA_MODE))
+                                     sigma_mode = SIGMA_MODE,
+                                     # Only the entrants are ever read. The rest
+                                     # of the history still sets the priors and
+                                     # the robust-sigma scale, which is why
+                                     # `only` narrows the output and not the
+                                     # inputs -- predictions are unchanged.
+                                     only = unique(as.character(block$athlete_id))))
   } else {
     # Refit per family. estimate_ability takes a single half-life, so split the
     # history by family and stack -- each event only ever belongs to one family,
@@ -522,6 +557,9 @@ saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc,
                }, error = function(e) NA_character_),
                half_life = half_life, prior_weight = PRIOR_WEIGHT,
                sigma_mode = SIGMA_MODE, adjust_context = ADJUST_CONTEXT,
+               # Recorded because an arm scored on T1 only is not comparable to
+               # one scored on every tier, and nothing else in the meta would say so.
+               tier_filter = if (nzchar(TIER_FILTER)) TIER_FILTER else NA_character_,
                history_days = HISTORY_DAYS, n_sims = N_SIMS,
                races_scored = length(keep), run_at = Sys.time())),
         file.path(OUT, Sys.getenv("CITIUS_BT_OUT", "backtest.rds")))

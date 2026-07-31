@@ -95,6 +95,20 @@ if (nzchar(VS)) {
     if (is.null(m$history_md5)) return(NULL)
     if (identical(m$history_source, "store")) c(m$history_md5, m$store_md5) else m$history_md5
   }
+  # A T1-only arm and an all-tier arm score different meet pools, so their
+  # numbers are not comparable even on the T1 block -- the pool selection is
+  # evenly spaced across time, so narrowing it changes WHICH T1 meets are in.
+  tf <- function(f) {
+    v <- get(f, envir = arm_meta)$tier_filter
+    if (is.null(v) || is.na(v)) "all" else v
+  }
+  if (!identical(tf(ARM), tf(VS))) {
+    cli::cli_abort(c(
+      "x" = "{.file {ARM}} and {.file {VS}} were scored on different meet pools.",
+      "*" = "{ARM}: tier filter {tf(ARM)}",
+      "*" = "{VS}: tier filter {tf(VS)}",
+      "i" = "Re-run one with the other's {.envvar CITIUS_BT_TIER}."))
+  }
   h_arm <- vintage(ARM); h_vs <- vintage(VS)
   if (is.null(h_arm) || is.null(h_vs)) {
     cli::cli_abort(c("x" = "{.file {if (is.null(h_arm)) ARM else VS}} has no {.field history_md5}.",
