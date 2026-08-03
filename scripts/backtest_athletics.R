@@ -289,9 +289,15 @@ outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
 # `wind` is read by estimate_ability() when the calibration carries a wind
 # coefficient. Narrowing it away would silently disable the adjustment and the
 # A/B would report a dead heat.
+# `indoor` and `venue_country` are read by estimate_ability() when the
+# calibration carries indoor or season offsets. Narrowing them away silently
+# disables those adjustments and the A/B reports a dead heat -- the same trap
+# the `wind` note above describes. `venue_country` additionally decides the
+# hemisphere for the seasonal phase, and its absence is what blocked the season
+# effect from being wired on 2026-07-30.
 keep_cols <- c("athlete_id", "event_id", "date", "perf", "age", "round", "tier",
                "competition_id", "comp_start", "place", "race_key", "wind",
-               "momentum")
+               "momentum", "indoor", "venue_country")
 clean <- clean[, intersect(keep_cols, names(clean)), with = FALSE]
 outcome_rows <- outcome_rows[, intersect(keep_cols, names(outcome_rows)), with = FALSE]
 
@@ -382,6 +388,19 @@ tick <- function(slot, expr) {
   assign(slot, get(slot, TIMING) + as.numeric(difftime(Sys.time(), t0, units = "secs")), TIMING)
   out
 }
+
+# Age-projection warnings are COUNTED, not silenced.
+#
+# `project_ability()` warns when a projection shifts ability by more than
+# `max_shift`, which is the exact signature of `age_ref` being a career mean
+# rather than the weighted mean age -- the bug that once projected a sprinter
+# faster than his own personal best and put sprinters atop the triple jump.
+# Wrapping the call in `suppressWarnings()` made the backtest run silently
+# through a regression of it. cli already rate-limits that warning to once per
+# session, so the suppression was not even buying quiet; it was only buying
+# blindness. Counted here and reported with the summary.
+AGE_WARN <- new.env(parent = emptyenv())
+AGE_WARN$n <- 0L; AGE_WARN$last <- NA_character_
 
 n <- min(nrow(todo), MAX_PER_RUN)
 for (i in seq_len(n)) {
@@ -524,7 +543,13 @@ for (i in seq_len(n)) {
                on = "athlete_id", age_now := i.age_now]
       ok <- entrants[!is.na(age_now) & !is.na(age_ref)]
       if (nrow(ok)) {
-        proj <- suppressWarnings(project_ability(ok, aging))
+        proj <- withCallingHandlers(
+          project_ability(ok, aging),
+          warning = function(w) {
+            AGE_WARN$n <- AGE_WARN$n + 1L
+            AGE_WARN$last <- conditionMessage(w)
+            invokeRestart("muffleWarning")
+          })
         entrants[proj, on = "athlete_id", ability := i.ability]
       }
     }
@@ -575,6 +600,15 @@ gold <- score_predictions(pred[race_id %in% keep], outc[race_id %in% keep], "p_g
 medal <- score_predictions(pred[race_id %in% keep],
                            outc[race_id %in% keep, .(race_id, athlete_id, hit = hit_medal)],
                            "p_medal")
+
+if (AGE_WARN$n > 0L) {
+  cli::cli_alert_warning(
+    "Age projection warned on {AGE_WARN$n} meet{?s}. Last: {AGE_WARN$last}")
+  cli::cli_alert_info(
+    "Check {.field age_ref} is the weighted mean age from {.fn estimate_ability}.")
+} else {
+  cli::cli_alert_success("Age projection: no oversized shifts on any meet.")
+}
 
 cli::cli_h2("Athletics backtest (winner-in-field)")
 cat(sprintf("gold  brier %.4f vs %.4f  skill %+.3f  (%d races)\n",

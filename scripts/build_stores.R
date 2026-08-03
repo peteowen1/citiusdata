@@ -42,9 +42,15 @@ build <- function(src, dest, label) {
   # flag_implausible() does grouped work that REORDERS rows, and parquet's
   # dictionary and run-length encoding depend on row order. Sorted data
   # compresses; shuffled data does not.
+  # `venue_country` is carried for `fit_season_effect()`, which splits the
+  # seasonal phase by hemisphere. Without it every mark classifies northern and
+  # southern-hemisphere athletes get a calendar that is six months out of phase
+  # -- the same silent-default failure as wind being dropped on corpus
+  # promotion. It is low-cardinality (~200 codes) and the rows are already
+  # sorted by event and date, so dictionary encoding keeps the cost small.
   keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "round",
             "tier", "competition_id", "comp_start", "place", "race_key",
-            "sex", "discipline", "wind", "indoor", "comp_name")
+            "sex", "discipline", "wind", "indoor", "comp_name", "venue_country")
   present <- intersect(keep, names(d))
   dropped <- setdiff(names(d), present)
   d <- d[, ..present]
