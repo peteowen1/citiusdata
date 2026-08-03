@@ -113,6 +113,14 @@ podium_from_standings <- function(page) {
     # while places 4 onward are numeric. Falling back to row order only when
     # EVERY position is NA therefore missed exactly the rows we want; fill each
     # missing position from its row index instead.
+    # Filling a missing placing from its row index assumes the table is ordered
+    # by finish. Check that against the placings that DID parse before relying
+    # on it: if the numeric ones are not ascending in row order, the table is
+    # sorted some other way and row index would swap gold with bronze -- a
+    # swap the medallist validation downstream cannot see, because both are
+    # genuine medallists in that edition.
+    known <- which(!is.na(pos))
+    if (length(known) >= 2 && is.unsorted(pos[known])) next
     pos[is.na(pos)] <- seq_len(nrow(d))[is.na(pos)]
     got <- vapply(1:3, function(k) {
       v <- nat[which(pos == k)]

@@ -322,9 +322,14 @@ loo <- rbindlist(lapply(sort(unique(d$sport)), function(s) {
   dd <- copy(dd); dd[, .wt := sport_golds]
   f <- lm(effect_pp ~ subjectivity + team_sport + log(sport_golds) + base_share,
           data = dd, weights = .wt)
-  se <- tryCatch(cluster_se(f, paste(dd$games, dd$year)), error = function(e) NA)
+  se <- tryCatch(cluster_se(f, paste(dd$games, dd$year)),
+                 error = function(e) rep(NA_real_, length(coef(f))))
   # Index the SE by NAME. Positional indexing breaks silently the moment a term
-  # is dropped for having no variation in the subset.
+  # is dropped for having no variation in the subset. The error handler returns
+  # a full-length vector for the same reason: a scalar NA would make this
+  # assignment throw and kill the whole script, which is how a singular fit in
+  # one leave-one-out iteration would have taken the run down.
+  if (length(se) != length(coef(f))) se <- rep(NA_real_, length(coef(f)))
   names(se) <- names(coef(f))
   data.table(dropped = s, coef = round(unname(coef(f)["subjectivity"]), 2),
              se = round(unname(se["subjectivity"]), 2))

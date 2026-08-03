@@ -7,13 +7,23 @@
 #   1. HOW MUCH INFORMATION IS IN "MONOTONE"? With four bands there are 24
 #      orderings and 2 of them are monotone, so a random ordering comes out
 #      monotone 8.3% of the time. A clean gradient across four points is worth
-#      about p = 0.08 on its own -- which is, to the decimal, what the
-#      regression on the continuous score already said.
+#      about p = 0.08 on its own -- close to what the FULL regression on the
+#      continuous score reports (subjectivity + team + log size + baseline).
+#      That comparison is computed live below rather than quoted, because an
+#      earlier version of this comment hardcoded a p-value that went stale.
+#      Note it is the full model that lands near 0.08; subjectivity ALONE is
+#      p = 0.003, and the difference between those two is the whole point.
 #
-#   2. IS IT SIZE? Judged sports average 3.7 golds each, measured sports 8.0,
-#      and small sports gain more per gold available. The two gradients are
-#      collinear by construction. The test that separates them is whether the
+#   2. IS IT SIZE? Small sports gain more per gold available, and the two
+#      gradients are collinear. The test that separates them is whether the
 #      subjectivity gradient survives WITHIN size strata.
+#
+#      Mean sport size per sport-edition, printed below: measured is the LARGE
+#      band (~17 golds), judged is mid (~10), and refereed is the smallest
+#      (~5). An earlier version of this comment said "judged 3.7, measured 8.0"
+#      -- those divided a per-edition gold total by a sport count and are not
+#      mean sizes. The real ordering matters: the smallest band has nearly the
+#      lowest gain rate, which cuts against a pure size explanation.
 
 library(data.table)
 DATA <- "C:/dev/citiusverse/citiusdata/data"
@@ -40,8 +50,33 @@ print(obs)
 cat("\n--- what a monotone ordering of four bands is worth ---\n")
 cat(sprintf("  orderings of 4 bands: %d; monotone ones: 2; by chance: %.1f%%\n",
             factorial(4), 100 * 2 / factorial(4)))
-cat("  So the shape alone carries about p = 0.083 -- the same as the\n")
-cat("  regression's p = 0.075 on the continuous score. It is not extra evidence.\n")
+# Derived, not quoted. The regression is refitted here on the same panel so the
+# comparison cannot drift out of date the way a hardcoded p-value did.
+cluster_se <- function(fit, cl) {
+  X <- model.matrix(fit); u <- residuals(fit)
+  w <- weights(fit); if (is.null(w)) w <- rep(1, length(u))
+  bread <- solve(t(X) %*% (X * w)); meat <- matrix(0, ncol(X), ncol(X))
+  for (k in unique(cl)) {
+    i <- which(cl == k); s <- t(X[i, , drop = FALSE]) %*% (u[i] * w[i])
+    meat <- meat + s %*% t(s)
+  }
+  G <- length(unique(cl)); N <- nrow(X); K <- ncol(X)
+  sqrt(diag(bread %*% meat %*% bread) * (G / (G - 1)) * ((N - 1) / (N - K)))
+}
+pval <- function(form) {
+  dd <- copy(panel); dd[, .wt := sport_golds]
+  f <- lm(form, data = dd, weights = .wt)
+  cl <- dd$edition; se <- cluster_se(f, cl)
+  names(se) <- names(coef(f))
+  t <- coef(f)[["subjectivity"]] / se[["subjectivity"]]
+  2 * pt(abs(t), df = length(unique(cl)) - 1, lower.tail = FALSE)
+}
+p_full  <- pval(effect_pp ~ subjectivity + team_sport + log(sport_golds) + base_share)
+p_alone <- pval(effect_pp ~ subjectivity)
+cat(sprintf("  the shape alone carries p ~ %.3f\n", 2 / factorial(4)))
+cat(sprintf("  full regression on the continuous score: p = %.4f\n", p_full))
+cat(sprintf("  subjectivity ALONE, no controls:         p = %.4f\n", p_alone))
+cat("  The shape adds nothing the full model did not already say.\n")
 
 # --- bootstrap the rates, resampling HOST EDITIONS -------------------------
 # Sports within an edition share that nation's form, so the edition is the

@@ -22,13 +22,19 @@ dir.create(OUT,  showWarnings = FALSE, recursive = TRUE)
 dir.create(INST, showWarnings = FALSE, recursive = TRUE)
 
 fetch_indicator <- function(indicator, value_name) {
-  page <- 1L; out <- list()
+  page <- 1L; out <- list(); total_pages <- NA_integer_; failed_at <- NA_integer_
   repeat {
     url <- sprintf(
       "https://api.worldbank.org/v2/country/all/indicator/%s?date=1960:2024&format=json&per_page=15000&page=%d",
       indicator, page)
     res <- tryCatch(fromJSON(url), error = function(e) NULL)
-    if (is.null(res) || length(res) < 2 || is.null(res[[2]])) break
+    # A dropped connection on page k of N used to exit this loop exactly like
+    # reaching the last page, and printed nothing, so a truncated fetch looked
+    # like ordinary missing data downstream. Record where it stopped.
+    if (is.null(res) || length(res) < 2 || is.null(res[[2]])) {
+      failed_at <- page
+      break
+    }
     df <- res[[2]]
     out[[length(out) + 1]] <- data.table(
       iso3         = df$countryiso3code,
@@ -40,6 +46,12 @@ fetch_indicator <- function(indicator, value_name) {
     cat(sprintf("  %s page %d/%d\n", indicator, page, total_pages))
     if (page >= total_pages) break
     page <- page + 1L
+  }
+  if (!is.na(failed_at)) {
+    stop(sprintf("%s: fetch failed at page %d of %s -- refusing to return a
+truncated series, which would look like missing data for whole countries.",
+                 indicator, failed_at,
+                 if (is.na(total_pages)) "unknown" else total_pages), call. = FALSE)
   }
   dt <- rbindlist(out)
   dt <- dt[!is.na(value) & nzchar(iso3)]

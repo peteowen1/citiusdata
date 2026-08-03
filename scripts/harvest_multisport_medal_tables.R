@@ -257,6 +257,25 @@ if (nrow(miss_nations)) {
   print(miss_nations)
 }
 
+# The reconciliation result travels ON the data, not just to the console.
+# Printing a warning and then writing the unfiltered table means a consumer
+# three functions downstream cannot tell that a specific edition failed this
+# pipeline's own audit -- and an unattended re-run reproduces the bad numbers
+# with nobody reading the log.
+master_dt <- merge(master_dt, audit_dt[, .(games, year, reconciliation = check)],
+                   by = c("games", "year"), all.x = TRUE)
+master_dt[is.na(reconciliation), reconciliation := "unchecked"]
+
+n_bad <- uniqueN(master_dt[reconciliation != "ok", .(games, year)])
+cat(sprintf("\n%d edition(s) carry a non-ok reconciliation flag in the saved data.\n", n_bad))
+
+# A wholesale failure means the parse broke, not that Wikipedia is inconsistent.
+# Fail rather than ship it.
+if (n_bad > 0.1 * uniqueN(master_dt[, .(games, year)])) {
+  stop(sprintf("%d of %d editions failed reconciliation (>10%%) -- refusing to save.",
+               n_bad, uniqueN(master_dt[, .(games, year)])), call. = FALSE)
+}
+
 write_parquet(master_dt, file.path(OUT, "multisport_medal_tables.parquet"))
 saveRDS(master_dt, file.path(OUT, "multisport_medal_tables.rds"))
 saveRDS(master_dt, file.path(INST, "multisport_medal_tables.rds"))

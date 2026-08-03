@@ -38,7 +38,18 @@ fetch_cached <- function(slug) {
   u <- paste0("https://en.wikipedia.org/wiki/", slug)
   r <- tryCatch(GET(u, user_agent(ua), timeout(25)), error = function(e) NULL)
   if (is.null(r) || status_code(r) != 200) {
-    writeLines("__404__", cf)
+    # Cache the negative ONLY for a real 404. Writing "__404__" for any non-200
+    # made a rate limit (429), a server error or a timeout permanently
+    # indistinguishable from "this sport was never contested" -- and because the
+    # cache never expires, one transient blip would remove a sport from an
+    # edition for good. Anything else is left uncached so the next run retries.
+    code <- if (is.null(r)) NA_integer_ else status_code(r)
+    if (!is.na(code) && code == 404L) {
+      writeLines("__404__", cf)
+    } else {
+      message(sprintf("  transient fetch failure (%s) for %s -- not cached",
+                      if (is.na(code)) "no response" else code, slug))
+    }
     return(NULL)
   }
   txt <- content(r, "text", encoding = "UTF-8")
@@ -219,20 +230,33 @@ harvest_series_sports <- function(series, years) {
   for (y in years) {
     suffix <- EDITION_SUFFIX[[series]](y)
     seen <- character(0)     # canonical titles already taken this edition
-    found <- 0; redirected <- 0
+    found <- 0; redirected <- 0; errored <- 0; untitled <- 0
     for (sp in SPORTS) {
       slug <- paste0(slugify(sp), "_at_", suffix)
       page <- fetch_cached(slug)
       if (is.null(page)) next
 
       canon_title <- canonical_title(page)
-      if (is.na(canon_title)) next
+      # Counted, not silently skipped: a page that fetched but whose title
+      # could not be read is a parser problem, and lumping it in with slugs
+      # that 404'd hides it from every diagnostic this loop prints.
+      if (is.na(canon_title)) { untitled <- untitled + 1; next }
       # Must still be a "{Something} at the {this edition}" article. A redirect
       # to the Games article itself, or to another edition, is rejected.
       if (!grepl(paste0("_at_", suffix, "$"), canon_title)) { redirected <- redirected + 1; next }
       if (canon_title %in% seen) { redirected <- redirected + 1; next }
 
-      p <- tryCatch(parse_sport_page(page), error = function(e) NULL)
+      # A real parse EXCEPTION and a documented "this page has no NOC table"
+      # are different events. Collapsing both to NULL meant a malformed table
+      # or an unexpected column shape vanished into the same silence as a sport
+      # that simply was not contested.
+      p <- tryCatch(parse_sport_page(page),
+                    error = function(e) {
+                      errored <<- errored + 1
+                      message(sprintf("  parse error on %s: %s", slug,
+                                      conditionMessage(e)))
+                      NULL
+                    })
       if (is.null(p)) next
 
       # Name the sport from the article we actually landed on, not the guess.
@@ -252,8 +276,10 @@ harvest_series_sports <- function(series, years) {
       )
       found <- found + 1
     }
-    cat(sprintf("  %s %d: %d sports (%d redirects/aliases dropped)\n",
-                series, y, found, redirected))
+    cat(sprintf("  %s %d: %d sports (%d redirects/aliases%s%s)\n",
+                series, y, found, redirected,
+                if (errored)  sprintf(", %d PARSE ERRORS", errored) else "",
+                if (untitled) sprintf(", %d untitled", untitled) else ""))
   }
   list(rows = rbindlist(rows, fill = TRUE), meta = rbindlist(meta, fill = TRUE))
 }
@@ -310,6 +336,21 @@ print(ed[gap > 0][order(-gap)][1:min(15, sum(ed$gap > 0, na.rm = TRUE))])
 cat("\nWorst shortfalls (sports missing from the harvest):\n")
 print(head(ed[gap < 0][order(gap)], 15))
 fwrite(ed, file.path(OUT, "sport_medal_tables_edition_recon.csv"))
+
+# Both reconciliations travel on the data. Without this the checks below are
+# console decoration: a wrong-table pick or a demonstration sport is correctly
+# detected, printed among hundreds of lines, and then written to the file the
+# analysis actually reads with nothing marking the row.
+sport_dt <- merge(sport_dt, meta_dt[, .(games, year, sport, page_recon = recon)],
+                  by = c("games", "year", "sport"), all.x = TRUE)
+sport_dt <- merge(sport_dt, ed[, .(games, year, edition_pct = pct)],
+                  by = c("games", "year"), all.x = TRUE)
+sport_dt[, edition_overshoots := !is.na(edition_pct) & edition_pct > 102]
+
+cat(sprintf("\nRows carrying a non-ok page reconciliation: %d\n",
+            nrow(sport_dt[page_recon != "ok"])))
+cat(sprintf("Rows in an edition overshooting its official total: %d\n",
+            nrow(sport_dt[edition_overshoots == TRUE])))
 
 saveRDS(sport_dt, file.path(OUT, "sport_medal_tables.rds"))
 fwrite(sport_dt, file.path(OUT, "sport_medal_tables.csv"))

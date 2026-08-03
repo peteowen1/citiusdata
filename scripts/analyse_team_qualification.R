@@ -80,11 +80,21 @@ for (i in seq_len(nrow(hosts))) {
       v <- shr[games == g & year == z & sport == s & canon == n, share]
       if (length(v)) v[1] else 0
     }
+    # Keep the RAW away observations, not just their mean. The decomposition
+    # below needs "mean share given the nation was in the tournament", and that
+    # cannot be recovered from a pre-averaged share_away: a row's share_away is
+    # already divided by the neighbour count, so re-weighting it by
+    # frac_in_away divides by that count a second time. Carrying the sum of
+    # present shares and the count of present neighbours makes the weighted
+    # mean exact.
+    away_shares <- vapply(nb_ok, sh, numeric(1))
     rows[[length(rows) + 1]] <- data.table(
       games = g, year = y, nation = n, sport = s,
       sport_golds = tot[games == g & year == y & sport == s, sport_golds],
       in_home = in_home, frac_in_away = mean(in_away),
-      share_home = sh(y), share_away = mean(vapply(nb_ok, sh, numeric(1))),
+      share_home = sh(y), share_away = mean(away_shares),
+      sum_share_present = sum(away_shares[in_away]),
+      n_present = sum(in_away),
       n_neighbours = length(nb_ok))
   }
 }
@@ -145,9 +155,18 @@ if (nrow(gained)) {
 }
 
 cat("\n--- the decomposition ---\n")
+# The identity is
+#   E[share_home] - E[share_away] = (P_home - P_away)*S_away
+#                                 + P_home*(S_home - S_away)
+# and it closes ONLY when S is defined as a ratio of means, because a row's
+# share is already averaged over its neighbours. Two other definitions were
+# tried and neither closes: sum(share_away*frac_in_away)/sum(frac_in_away)
+# divides by the neighbour count twice, and sum(present shares)/sum(present
+# count) drops the 1/n_neighbours weight each row carries. The residual check
+# below is what caught both -- 0.18 pp and 0.69 pp respectively.
 p_home <- mean(d$in_home); p_away <- mean(d$frac_in_away)
-s_home <- d[in_home == TRUE, mean(share_home)]
-s_away <- d[frac_in_away > 0, sum(share_away * frac_in_away) / sum(frac_in_away)]
+s_home <- mean(d$share_home) / p_home
+s_away <- mean(d$share_away) / p_away
 cat(sprintf("  P(in tournament)  home %.3f  away %.3f\n", p_home, p_away))
 cat(sprintf("  share when in     home %.2f%%  away %.2f%%\n", s_home, s_away))
 access_term <- (p_home - p_away) * s_away
@@ -156,6 +175,14 @@ cat(sprintf("  access  (turning up more)  : %+.2f pp\n", access_term))
 cat(sprintf("  performance (winning more) : %+.2f pp\n", perf_term))
 cat(sprintf("  sum                        : %+.2f pp  (observed %+.2f pp)\n",
             access_term + perf_term, mean(d$share_gain)))
+# The decomposition is an identity, so this must close. It is asserted rather
+# than eyeballed: the gap is exactly how the s_away bug announced itself.
+resid <- abs((access_term + perf_term) - mean(d$share_gain))
+cat(sprintf("  identity residual          : %.4f pp\n", resid))
+if (resid > 1e-8) {
+  stop(sprintf("decomposition does not close (residual %.6f pp) -- the terms are wrong",
+               resid), call. = FALSE)
+}
 
 # ---------------------------------------------------------------------------
 # 3. Compare with individual sports on the same footing

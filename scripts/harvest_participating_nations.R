@@ -28,7 +28,15 @@ fetch_cached <- function(slug) {
   }
   r <- tryCatch(GET(paste0("https://en.wikipedia.org/wiki/", slug),
                     user_agent(ua), timeout(25)), error = function(e) NULL)
-  if (is.null(r) || status_code(r) != 200) { writeLines("__404__", cf); return(NULL) }
+  if (is.null(r) || status_code(r) != 200) {
+    # Only a real 404 is cached as absent; see harvest_sport_medal_tables.R for
+    # why caching every non-200 as "__404__" is a permanent data loss.
+    code <- if (is.null(r)) NA_integer_ else status_code(r)
+    if (!is.na(code) && code == 404L) writeLines("__404__", cf)
+    else message(sprintf("  transient fetch failure (%s) for %s -- not cached",
+                         if (is.na(code)) "no response" else code, slug))
+    return(NULL)
+  }
   txt <- content(r, "text", encoding = "UTF-8")
   writeLines(txt, cf, useBytes = TRUE)
   read_html(txt)

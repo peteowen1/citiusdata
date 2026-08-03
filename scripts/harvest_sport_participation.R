@@ -119,7 +119,13 @@ for (i in seq_len(nrow(meta))) {
 part <- rbindlist(rows, fill = TRUE)
 tot  <- rbindlist(tots, fill = TRUE)
 part[, canon := canonical_nation(nation)]
-part <- part[, .(competitors = sum(competitors)), by = .(games, year, sport, canon)]
+# `na.rm = TRUE`, but keep NA when EVERY variant of a nation lacks a count.
+# A plain sum() turned a nation with one counted and one uncounted entry into
+# NA, which then failed the `n_counted == n_listed` usability test and cost the
+# whole sport-edition -- discarding a number we actually had.
+part <- part[, .(competitors = if (all(is.na(competitors))) NA_integer_
+                               else as.integer(sum(competitors, na.rm = TRUE))),
+             by = .(games, year, sport, canon)]
 
 cat(sprintf("\n%d sport-editions probed.\n", nrow(tot)))
 cat(sprintf("  with a participating-nations list ....... %d\n", sum(!is.na(tot$listed_nations))))

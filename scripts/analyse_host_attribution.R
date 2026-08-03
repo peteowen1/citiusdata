@@ -119,8 +119,10 @@ tq[, golds_expected := share_away / 100 * sport_golds]
 tq[, golds_gained   := golds_actual - golds_expected]
 n_tq <- uniqueN(tq[, .(games, year)])
 p_home <- mean(tq$in_home); p_away <- mean(tq$frac_in_away)
-s_home <- tq[in_home == TRUE, mean(share_home)]
-s_away <- tq[frac_in_away > 0, sum(share_away * frac_in_away) / sum(frac_in_away)]
+# Ratio of means, so the decomposition closes exactly -- see the derivation in
+# analyse_team_qualification.R.
+s_home <- mean(tq$share_home) / p_home
+s_away <- mean(tq$share_away) / p_away
 frac_access <- ((p_home - p_away) * s_away) /
                ((p_home - p_away) * s_away + p_home * (s_home - s_away))
 
