@@ -79,6 +79,10 @@ RULES <- list(
   list(class = "world_indoor",   pat = "World (Athletics )?Indoor Championships|IAAF World Indoor"),
   list(class = "world_other",    pat = "World Athletics (Relays|Cross Country|Race Walking|Road Running)|World Half Marathon|World Cross Country|World Race Walking|World Mountain"),
   list(class = "commonwealth",   pat = "Commonwealth Games"),
+  list(class = "asian_games",    pat = "Asian Games"),
+  list(class = "panam_games",    pat = "Pan American Games"),
+  list(class = "african_games",  pat = "African Games|All-Africa Games"),
+  list(class = "european_games", pat = "European Games"),
   # Continental championships, indoor ones included. Pan American Athletics
   # Championships, the Asian Indoor and the South American Indoor were all
   # sitting in `unclassified` and reaching T1 on strength alone -- they are
@@ -94,7 +98,7 @@ RULES <- list(
   list(class = "continental",    pat = paste0(
     "European Athletics Championships|European Athletics Indoor Championships|",
     "African (Athletics )?Championships|Asian (Athletics )?Championships|",
-    "Asian Indoor Athletics Championships|Pan American Games|",
+    "Asian Indoor Athletics Championships|",
     "Pan American Athletics Championships|NACAC Championships|",
     "Oceania (Athletics )?Championships|South American (Athletics )?Championships|",
     "South American Indoor|Ibero.?American")),
@@ -120,7 +124,7 @@ RULES <- list(
   # championship.
   list(class = "indoor_tour", pat = "World Indoor Tour|Indoor Tour Gold|Millrose|Mill\u00earose"),
   list(class = "regional_games", pat = paste0(
-    "Asian Games|African Games|Mediterranean Games|Islamic Solidarity|",
+    "Mediterranean Games|Islamic Solidarity|",
     "Universiade|World University|Southeast Asian Games|Bolivarian|",
     "Central American|South American Games|GCC Games|Military Games|",
     "Military World|Gulf Games|Pacific Games|Maccabiah")),

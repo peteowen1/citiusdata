@@ -25,6 +25,7 @@ cli::cli_alert_info(
 
 clean <- flag_implausible(champs)
 cal2 <- calibrate(clean, min_races = 30L)
+cal2$coasting_trait <- fit_coasting_trait(clean, min_heats = 2L, shrink_k = 5.0)
 hl2  <- fit_half_life(clean[!is.na(perf) & !is.na(event_id)])
 ag2  <- fit_aging_curve(clean[!is.na(perf) & !is.na(event_id)])
 

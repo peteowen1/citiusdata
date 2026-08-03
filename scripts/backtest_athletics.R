@@ -63,6 +63,9 @@ calibration <- readRDS(file.path(OUT, CALIBRATION))
 MOM_FILE <- Sys.getenv("CITIUS_BT_MOMENTUM", "")
 mom_eff <- if (nzchar(MOM_FILE) && file.exists(file.path(OUT, MOM_FILE)))
   as.data.table(readRDS(file.path(OUT, MOM_FILE))) else NULL
+PEAK_GAMMA <- as.numeric(Sys.getenv("CITIUS_BT_PEAK_GAMMA", "0"))
+ROBUST_LOCATION <- as.logical(Sys.getenv("CITIUS_BT_ROBUST_LOCATION", "FALSE"))
+DECOUPLE_PEAK <- as.logical(Sys.getenv("CITIUS_BT_DECOUPLE_PEAK", "FALSE"))
 if (!is.null(mom_eff)) {
   calibration$momentum <- mom_eff
   cli::cli_alert_info("Momentum enabled from {.file {MOM_FILE}} ({nrow(mom_eff)} famil{?y/ies}).")
@@ -407,12 +410,10 @@ for (i in seq_len(n)) {
                                      calibration = calibration,
                                      adjust_context = ADJUST_CONTEXT,
                                      sigma_mode = SIGMA_MODE,
-                                     # Only the entrants are ever read. The rest
-                                     # of the history still sets the priors and
-                                     # the robust-sigma scale, which is why
-                                     # `only` narrows the output and not the
-                                     # inputs -- predictions are unchanged.
-                                     only = unique(as.character(block$athlete_id))))
+                                     only = unique(as.character(block$athlete_id)),
+                                     peak_gamma = PEAK_GAMMA,
+                                     robust_location = ROBUST_LOCATION,
+                                     decouple_peak = DECOUPLE_PEAK))
   } else {
     # Refit per family. estimate_ability takes a single half-life, so split the
     # history by family and stack -- each event only ever belongs to one family,
@@ -424,7 +425,9 @@ for (i in seq_len(n)) {
         hl_map[[g$family[1]]] else half_life
       estimate_ability(g[, !"family"], as_of = cut_date, half_life = hl,
                        calibration = calibration, adjust_context = ADJUST_CONTEXT,
-                       sigma_mode = SIGMA_MODE)
+                       sigma_mode = SIGMA_MODE, peak_gamma = PEAK_GAMMA,
+                       robust_location = ROBUST_LOCATION,
+                       decouple_peak = DECOUPLE_PEAK)
     }), fill = TRUE))
   }
 
