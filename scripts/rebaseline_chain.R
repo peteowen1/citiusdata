@@ -31,6 +31,24 @@ clean <- flag_implausible(x); rm(x); invisible(gc())
 
 say("calibrating ...")
 cal <- calibrate(clean, min_races = 30L)
+
+# Stamp what this was fitted on. Without it there is no way to tell, later,
+# whether a calibration overlaps the meets a backtest scores against it -- and
+# the per-athlete `sensitivity` it carries IS consumed at prediction time by
+# condition_sensitivity(), so that overlap is real leakage rather than a
+# theoretical one. Measured 2026-08-03 on the then-current pair: all 49 scored
+# meets were inside the calibration corpus, and a scored athlete's own races
+# were a median 7.4% of the history behind their sensitivity.
+cal$provenance <- list(
+  input = "athletics_corpus.rds",
+  fitted_at = Sys.time(),
+  n_rows = nrow(clean),
+  n_races = data.table::uniqueN(clean$race_key),
+  n_meets = data.table::uniqueN(clean$competition_id),
+  date_min = min(clean$date, na.rm = TRUE),
+  date_max = max(clean$date, na.rm = TRUE),
+  competition_ids = sort(unique(as.character(clean$competition_id)))
+)
 saveRDS(cal, file.path(OUT, "calibration_corpus.rds"))
 say("calibrated in ", round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 1), " min")
 

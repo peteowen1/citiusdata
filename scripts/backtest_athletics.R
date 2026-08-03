@@ -50,6 +50,31 @@ hist_raw    <- if (identical(HISTORY, OUTCOMES)) champs else readRDS(file.path(O
 # "calibration.rds", a file it never opened.
 CALIBRATION <- Sys.getenv("CITIUS_BT_CALIBRATION", "calibration_corpus.rds")
 calibration <- readRDS(file.path(OUT, CALIBRATION))
+
+# LEAKAGE CHECK. The per-meet ability refit below is strictly out-of-sample, but
+# the CALIBRATION is loaded whole and applied to every scored meet -- and it
+# carries per-athlete `sensitivity`, which condition_sensitivity() consumes at
+# prediction time. If the calibration was fitted on a corpus containing the
+# meets being scored, an athlete's response to conditions was fitted partly on
+# the race being predicted.
+#
+# Measured 2026-08-03 on calibration_corpus_athfoul.rds against the 49-meet run:
+# 100% of scored meets were inside the calibration corpus, contributing 0.27% of
+# its races overall but a median 7.4% (90th pct 23.5%) of the races behind an
+# individual scored athlete's sensitivity. Sensitivity spread is sd 0.121, and
+# it only scales a shock of ~1.3% of a mark, so the implied bias on Brier skill
+# is orders of magnitude below the effects being reported -- real, but not
+# invalidating. Fix properly by fitting the calibration on a corpus that excludes
+# the scored window; until then this makes the overlap visible instead of silent.
+.cal_prov <- calibration$provenance
+if (is.null(.cal_prov)) {
+  cli::cli_alert_warning(c(
+    "{.file {CALIBRATION}} carries no provenance stamp, so its overlap with the ",
+    "scored meets cannot be checked. Rebuild it with rebaseline_chain.R."))
+} else {
+  cli::cli_alert_info(
+    "Calibration fitted on {.val {.cal_prov$n_meets}} meets, {.val {as.character(.cal_prov$date_min)}} to {.val {as.character(.cal_prov$date_max)}}.")
+}
 # The aging curve. Found missing from this script on 2026-07-29: project_ability()
 # is applied in predict_glasgow2026.R but was never called here, so the backtest
 # was measuring a DIFFERENT pipeline from the one that ships -- and every
