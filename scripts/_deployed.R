@@ -188,3 +188,29 @@ deployed_field <- function(entrants, aging = NULL, ages = NULL) {
   }
   entrants[]
 }
+
+
+#' The Glasgow 2026 swimming capture, as a single table
+#'
+#' The Commonwealth results system is scraped by hand, and it was scraped twice.
+#' The first sweep (27 July) ran while the meet was still going and holds 17 of
+#' the 34 individual events; the second (4 August) re-walked every schedule day
+#' and picked up 27, including five the first sweep never listed. Neither is a
+#' superset of the other, so **both are read and the union is what counts**.
+#'
+#' Every caller must go through this rather than naming a file. Five scripts
+#' independently hardcoded `glasgow2026_swimming.json`, so a second capture
+#' would otherwise have improved coverage for whichever one was edited and left
+#' the rest quietly reading half the meet.
+glasgow_swimming <- function(dir) {
+  fs <- file.path(dir, c("glasgow2026_swimming.json",
+                         "glasgow2026_swimming_sweep2.json"))
+  fs <- fs[file.exists(fs)]
+  if (!length(fs)) stop("no Glasgow swimming capture found in ", dir)
+  m <- data.table::rbindlist(
+    lapply(fs, function(f) data.table::as.data.table(parse_crs_export(f))),
+    fill = TRUE)
+  key <- c("event_id", "round", "athlete_name", "mark_string")
+  m <- m[!duplicated(m[, ..key])]
+  m[]
+}

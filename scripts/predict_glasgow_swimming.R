@@ -27,7 +27,7 @@ OUT <- here::here("citiusdata", "data")
 N_SIMS <- 20000L
 HALF_LIFE <- as.numeric(Sys.getenv("CITIUS_SWIM_HALF_LIFE", "180"))
 
-g <- setDT(parse_crs_export(file.path(OUT, "glasgow2026_swimming.json")))
+g <- glasgow_swimming(OUT)
 g <- g[!is.na(event_id)]
 sw <- setDT(readRDS(file.path(OUT, "swimming_history.rds")))
 cal <- readRDS(file.path(OUT, "calibration_swimming.rds"))

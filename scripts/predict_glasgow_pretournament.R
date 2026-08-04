@@ -25,7 +25,7 @@ person <- unique(xw[source == "crs_glasgow2026" & !is.na(athlete_name),
 
 # ---- swimming --------------------------------------------------------------
 say("\n=== swimming ===")
-g <- setDT(parse_crs_export(file.path(D, "glasgow2026_swimming.json")))[!is.na(event_id)]
+g <- glasgow_swimming(D)[!is.na(event_id)]
 sw <- setDT(readRDS(file.path(D, "swimming_corpus.rds")))
 cal_sw <- readRDS(file.path(D, "calibration_swimming.rds"))
 # Leak guard, asserted rather than assumed: no Glasgow swim may reach the model.

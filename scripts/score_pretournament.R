@@ -35,7 +35,7 @@ ath <- ath[!is.na(place) & place > 0L & round == "Final",
            .(sport = "Athletics", event_id, k = athlete_key(athlete_name),
              athlete_name, place)]
 
-swm <- setDT(parse_crs_export(file.path(OUT, "glasgow2026_swimming.json")))
+swm <- glasgow_swimming(OUT)
 swm <- swm[!is.na(place) & place > 0L &
              grepl("final", round, ignore.case = TRUE) &
              !grepl("semi", round, ignore.case = TRUE),
