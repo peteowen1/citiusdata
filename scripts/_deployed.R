@@ -204,7 +204,8 @@ deployed_field <- function(entrants, aging = NULL, ages = NULL) {
 #' the rest quietly reading half the meet.
 glasgow_swimming <- function(dir) {
   fs <- file.path(dir, c("glasgow2026_swimming.json",
-                         "glasgow2026_swimming_sweep2.json"))
+                         "glasgow2026_swimming_sweep2.json",
+                         "glasgow2026_swimming_sweep3.json"))
   fs <- fs[file.exists(fs)]
   if (!length(fs)) stop("no Glasgow swimming capture found in ", dir)
   m <- data.table::rbindlist(
@@ -212,5 +213,129 @@ glasgow_swimming <- function(dir) {
     fill = TRUE)
   key <- c("event_id", "round", "athlete_name", "mark_string")
   m <- m[!duplicated(m[, ..key])]
+
+  # Distance finals are swum in SECTIONS -- "Final - Slowest Heat 1" and
+  # "Final - Fastest Heat" are both the final, and rank restarts in each. Taken
+  # at face value the slow section contributes its own 1-2-3, so a swimmer who
+  # finished eleventh overall appears on the podium. Re-rank the whole final on
+  # time, which is how the medals are actually decided.
+  isfin <- grepl("final", m$round, ignore.case = TRUE) &
+           !grepl("semi|qual", m$round, ignore.case = TRUE)
+  sect <- m[isfin & !is.na(event_id), .N, by = .(event_id, round)][
+    , .(nsect = .N), by = event_id][nsect > 1L]
+  if (nrow(sect)) {
+    for (ev in sect$event_id) {
+      i <- which(isfin & m$event_id == ev & is.finite(m$mark))
+      if (!length(i)) next
+      ord <- order(m$mark[i])                       # lower time is better
+      m$place[i[ord]] <- seq_along(ord)
+      m$round[i] <- "Final"
+    }
+  }
   m[]
+}
+
+
+#' The Glasgow 2026 athletics results, feed and results-system combined
+#'
+#' Athletics is normally taken from the World Athletics feed, which is why the
+#' CRS recipe says not to scrape it. The feed did not deliver for Glasgow: it
+#' carries four competition days (27, 28, 30, 31 July) and never populated 29
+#' July or 1 August, so 16 of the 40 individual events had no final -- both
+#' Miles, both long jumps, 400m men and women, the men's 5000m among them.
+#' Re-querying on 4 August returned the identical 1,000 rows.
+#'
+#' The results system has them, so both are read and the union is returned. The
+#' feed is preferred where an event appears in both: it carries the full
+#' canonical schema, while the CRS is a rendered-page scrape.
+glasgow_athletics <- function(dir) {
+  fromfeed <- readRDS(file.path(dir, "glasgow2026_results.rds"))
+  fromfeed <- data.table::as.data.table(fromfeed)
+  fromfeed[, source_feed := "wa"]
+  f <- file.path(dir, "glasgow2026_athletics_crs.rds")
+  if (!file.exists(f)) return(fromfeed[])
+  crs <- data.table::as.data.table(readRDS(f))
+  crs[, source_feed := "crs"]
+  keep <- intersect(names(fromfeed), names(crs))
+  both <- rbind(fromfeed[, ..keep], crs[, ..keep], fill = TRUE)
+  # Feed rows win on collision: same event, round, athlete and mark.
+  key <- c("event_id", "round", "athlete_name", "mark_string")
+  data.table::setorderv(both, "source_feed")          # "crs" < "wa" so reverse
+  both <- both[order(match(source_feed, c("wa", "crs")))]
+  both[!duplicated(both[, ..key])][]
+}
+
+
+#' Refuse a per-athlete spread that no athlete could have
+#'
+#' A merged identity shows up as one number: a fitted `sigma` far above what the
+#' event itself measures. Guy BROOKS reached the Glasgow card at 43% on a median
+#' 25th place because "Guy BROOKS" and "George Brooks" share the surname-plus-
+#' initial loose key and were linked into one person_id (`BROOKSGEORGE`), giving
+#' a sigma of 0.7897 where the event median is 0.008 -- ninety-nine times too
+#' big. A race is decided by the MINIMUM, so spread converts directly into win
+#' probability and a physically impossible sigma buys a podium place outright.
+#'
+#' This is a guard, not the fix. The fix is in the crosswalk, which should not
+#' merge Guy with George; until that lands, an athlete whose spread exceeds the
+#' field's by this margin is treated as UNRATED rather than as a live threat.
+#' The threshold is set against the event's own fitted distribution rather than
+#' as an absolute, so it carries no assumption about a sport's scale: legitimate
+#' outliers here run to about 1.7x the median, so 10x is far outside anything
+#' real and well inside the defect.
+#'
+#' @param ab An `estimate_ability()` table.
+#' @param factor How many times the event's median sigma is still credible.
+#' @return `ab` with impossible rows dropped, and a `dropped` attribute naming
+#'   them so the caller can report rather than silently lose athletes.
+drop_impossible_sigma <- function(ab, factor = 10) {
+  ab <- data.table::as.data.table(ab)
+  if (!all(c("sigma", "event_id") %in% names(ab))) return(ab[])
+  ab[, .med := stats::median(sigma, na.rm = TRUE), by = event_id]
+  bad <- ab[is.finite(sigma) & is.finite(.med) & .med > 0 & sigma > factor * .med]
+  if (nrow(bad)) {
+    keep <- ab[!(is.finite(sigma) & is.finite(.med) & .med > 0 & sigma > factor * .med)]
+    keep[, .med := NULL]
+    data.table::setattr(keep, "dropped",
+      bad[, .(athlete_id, event_id, sigma, event_median = .med,
+              times = round(sigma / .med, 1))])
+    return(keep[])
+  }
+  ab[, .med := NULL]
+  ab[]
+}
+
+
+#' Stop an athlete being credited for having no history at all
+#'
+#' `drop_impossible_sigma()` catches a merged identity, whose spread is absurd.
+#' This catches the other half of the same symptom: an athlete whose evidence has
+#' decayed to nothing. `ability_se` is `sigma / sqrt(w_total + kappa)`, so at
+#' `w_total = 0` it sits at its maximum, the simulator draws that uncertainty,
+#' and the athlete wins often enough to reach the card while typically finishing
+#' fortieth. James SANDERSON made the men's 100m freestyle top five on a
+#' predicted 54.8s exactly this way -- normal sigma, seven results, zero weight.
+#'
+#' This is the effect ce4881e measured out of sample: athletes with `w_total < 1`
+#' were credited 0.0509 gold and won 0.0412.
+#'
+#' They are real entrants and stay in the field -- they can win, and removing
+#' them would misstate everyone else's chances. What is removed is the PREMIUM
+#' for knowing nothing: their posterior uncertainty is set to the event's typical
+#' value instead of the maximum. Ability itself is untouched; with no evidence it
+#' is already the prior mean, which is the honest estimate.
+#'
+#' @param ab An `estimate_ability()` table.
+#' @param min_w Total weight below which an athlete carries no usable evidence.
+temper_unevidenced <- function(ab, min_w = 0.05) {
+  ab <- data.table::as.data.table(ab)
+  if (!all(c("w_total", "ability_se", "event_id") %in% names(ab))) return(ab[])
+  ab[, .se_med := stats::median(ability_se[w_total >= min_w], na.rm = TRUE), by = event_id]
+  n <- ab[is.finite(w_total) & w_total < min_w & is.finite(.se_med) &
+          is.finite(ability_se) & ability_se > .se_med, .N]
+  ab[is.finite(w_total) & w_total < min_w & is.finite(.se_med) &
+     is.finite(ability_se) & ability_se > .se_med, ability_se := .se_med]
+  ab[, .se_med := NULL]
+  data.table::setattr(ab, "tempered", n)
+  ab[]
 }
