@@ -205,12 +205,17 @@ deployed_field <- function(entrants, aging = NULL, ages = NULL) {
 glasgow_swimming <- function(dir) {
   fs <- file.path(dir, c("glasgow2026_swimming.json",
                          "glasgow2026_swimming_sweep2.json",
-                         "glasgow2026_swimming_sweep3.json"))
+                         "glasgow2026_swimming_sweep3.json",
+                         # Carries the women's 1500m freestyle, whose plain
+                         # /FNL-/000100 route is empty because the final was swum
+                         # in two sections.
+                         "glasgow2026_gapfill.json"))
   fs <- fs[file.exists(fs)]
   if (!length(fs)) stop("no Glasgow swimming capture found in ", dir)
   m <- data.table::rbindlist(
     lapply(fs, function(f) data.table::as.data.table(parse_crs_export(f))),
     fill = TRUE)
+  m <- m[is.na(event_id) | grepl("^SW-", event_id)]   # gapfill also holds athletics
   key <- c("event_id", "round", "athlete_name", "mark_string")
   m <- m[!duplicated(m[, ..key])]
 
@@ -253,8 +258,17 @@ glasgow_athletics <- function(dir) {
   fromfeed <- data.table::as.data.table(fromfeed)
   fromfeed[, source_feed := "wa"]
   f <- file.path(dir, "glasgow2026_athletics_crs.rds")
-  if (!file.exists(f)) return(fromfeed[])
-  crs <- data.table::as.data.table(readRDS(f))
+  crs <- if (file.exists(f)) data.table::as.data.table(readRDS(f)) else NULL
+  # The gap-fill carries the two athletics events the sweeps could not reach:
+  # the women's heptathlon, whose overall points live on the `athletic-summaries`
+  # route family rather than `athletic-result`, and the women's 10,000m walk.
+  gf <- file.path(dir, "glasgow2026_gapfill.json")
+  if (file.exists(gf)) {
+    g <- data.table::as.data.table(parse_crs_export(gf))
+    g <- g[!is.na(event_id) & grepl("^AT-", event_id)]
+    crs <- if (is.null(crs)) g else data.table::rbindlist(list(crs, g), fill = TRUE)
+  }
+  if (is.null(crs) || !nrow(crs)) return(fromfeed[])
   crs[, source_feed := "crs"]
   keep <- intersect(names(fromfeed), names(crs))
   both <- rbind(fromfeed[, ..keep], crs[, ..keep], fill = TRUE)
