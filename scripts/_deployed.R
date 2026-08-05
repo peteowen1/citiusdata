@@ -190,6 +190,54 @@ deployed_field <- function(entrants, aging = NULL, ages = NULL) {
 }
 
 
+#' A name key that survives being rendered differently by two sources
+#'
+#' The World Athletics feed writes "Camryn Rogers"; the results system writes
+#' "Camryn ROGERS". Deduplicating the union of the two on `athlete_name` matches
+#' nothing, so every podium present in both sources appeared twice -- visibly, as
+#' two golds in the same event. Compare an order-free, case-free set of name
+#' tokens instead, which also absorbs "Meshack Kitsubuli BABU" against
+#' "Meshack Kitsubuli Babu".
+.name_key <- function(x) {
+  x <- toupper(trimws(gsub("[[:space:]]+", " ", gsub("[^A-Za-z ]", " ", x))))
+  vapply(strsplit(x, " ", fixed = TRUE),
+         function(w) paste(sort(w[nzchar(w)]), collapse = "|"), character(1))
+}
+
+#' Trust the page title over the route it was captured under
+#'
+#' The results app is a single-page app: a capture sets `location.hash`, waits,
+#' then reads the DOM. If the render has not finished, the DOM still holds the
+#' PREVIOUS page while the route says otherwise, and the rows are filed under the
+#' wrong event. A staleness check that only rejects the schedule shell will not
+#' catch this, because what was captured is a perfectly valid results page --
+#' just the wrong one.
+#'
+#' Sweep 2 filed the women's 200m individual medley final under the men's route,
+#' putting Jenna Forrester's 2:09.24 in the same event as Duncan Scott's 1:56.38.
+#' The heading on the captured page said WOMEN'S, so the disagreement is
+#' detectable and repairable: the title describes what is on the page, the route
+#' only describes what was asked for.
+.repair_sex_from_title <- function(g) {
+  g <- data.table::as.data.table(g)
+  if (!all(c("title", "sex", "event_id") %in% names(g))) return(g[])
+  # Check WOMEN first -- "WOMEN'S" contains "MEN'S" -- which then makes a plain
+  # "MEN" test safe. It must be plain: "\bMEN" in an R string is a BACKSPACE
+  # followed by MEN, not a word boundary, so it matches nothing and silently
+  # repaired only the women's-filed-as-men's direction.
+  tsex <- data.table::fifelse(grepl("WOMEN", g$title, ignore.case = TRUE), "W",
+          data.table::fifelse(grepl("MEN", g$title, ignore.case = TRUE), "M",
+                              NA_character_))
+  bad <- !is.na(tsex) & !is.na(g$sex) & tsex != g$sex & !is.na(g$event_id)
+  if (any(bad)) {
+    g[bad & tsex == "W", event_id := sub("-M$", "-W", event_id)]
+    g[bad & tsex == "M", event_id := sub("-W$", "-M", event_id)]
+    g[bad, sex := tsex[bad]]
+    data.table::setattr(g, "sex_repaired", sum(bad))
+  }
+  g[]
+}
+
 #' The Glasgow 2026 swimming capture, as a single table
 #'
 #' The Commonwealth results system is scraped by hand, and it was scraped twice.
@@ -213,11 +261,20 @@ glasgow_swimming <- function(dir) {
   fs <- fs[file.exists(fs)]
   if (!length(fs)) stop("no Glasgow swimming capture found in ", dir)
   m <- data.table::rbindlist(
-    lapply(fs, function(f) data.table::as.data.table(parse_crs_export(f))),
+    lapply(fs, function(f) .repair_sex_from_title(parse_crs_export(f))),
     fill = TRUE)
   m <- m[is.na(event_id) | grepl("^SW-", event_id)]   # gapfill also holds athletics
-  key <- c("event_id", "round", "athlete_name", "mark_string")
+  # Normalise the round before deduplicating. The same final was captured by more
+  # than one sweep under different labels -- "Final", "Final - Fastest Heat",
+  # "Final - Slowest Heat 1" -- so keying on the raw label let one race
+  # contribute two or three podiums. An athlete swims a given round once.
+  m[, .nk := .name_key(athlete_name)]
+  m[, .rk := data.table::fifelse(
+      grepl("final", round, ignore.case = TRUE) &
+        !grepl("semi|qual", round, ignore.case = TRUE), "Final", round)]
+  key <- c("event_id", ".rk", ".nk")
   m <- m[!duplicated(m[, ..key])]
+  m[, c(".nk", ".rk") := NULL]
 
   # Distance finals are swum in SECTIONS -- "Final - Slowest Heat 1" and
   # "Final - Fastest Heat" are both the final, and rank restarts in each. Taken
@@ -264,7 +321,7 @@ glasgow_athletics <- function(dir) {
   # route family rather than `athletic-result`, and the women's 10,000m walk.
   gf <- file.path(dir, "glasgow2026_gapfill.json")
   if (file.exists(gf)) {
-    g <- data.table::as.data.table(parse_crs_export(gf))
+    g <- .repair_sex_from_title(parse_crs_export(gf))
     g <- g[!is.na(event_id) & grepl("^AT-", event_id)]
     crs <- if (is.null(crs)) g else data.table::rbindlist(list(crs, g), fill = TRUE)
   }
@@ -272,11 +329,21 @@ glasgow_athletics <- function(dir) {
   crs[, source_feed := "crs"]
   keep <- intersect(names(fromfeed), names(crs))
   both <- rbind(fromfeed[, ..keep], crs[, ..keep], fill = TRUE)
-  # Feed rows win on collision: same event, round, athlete and mark.
-  key <- c("event_id", "round", "athlete_name", "mark_string")
-  data.table::setorderv(both, "source_feed")          # "crs" < "wa" so reverse
+  # Feed rows win on collision: same event, round, athlete and mark. The athlete
+  # is compared on a normalised name key, NOT the raw string -- the two sources
+  # render the same person differently and a raw comparison deduplicates nothing.
+  # Key on event + round + athlete, NOT the mark. Including the mark makes a
+  # WRONG mark look like a different row and survive deduplication: the results
+  # system reports a reaction time where the feed reports a finishing time for
+  # sprints and hurdles, so Emmanuel Eseme appeared twice in the 100m final, once
+  # at 9.83 and once at 0.139. One athlete cannot finish a round twice, so the
+  # athlete is the key and the feed's value is the one kept.
+  both[, .nk := .name_key(athlete_name)]
+  key <- c("event_id", "round", ".nk")
   both <- both[order(match(source_feed, c("wa", "crs")))]
-  both[!duplicated(both[, ..key])][]
+  both <- both[!duplicated(both[, ..key])]
+  both[, .nk := NULL]
+  both[]
 }
 
 

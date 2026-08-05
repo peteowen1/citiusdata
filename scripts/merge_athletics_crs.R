@@ -13,7 +13,11 @@ suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
 suppressMessages({library(data.table); library(jsonlite)})
 D <- "C:/dev/citiusverse/citiusdata/data"
 
-crs <- as.data.table(parse_crs_export(file.path(D, "glasgow2026_athletics_crs.json")))
+source("C:/dev/citiusverse/citiusdata/scripts/_deployed.R")
+crs <- .repair_sex_from_title(parse_crs_export(file.path(D, "glasgow2026_athletics_crs.json")))
+if (!is.null(attr(crs, "sex_repaired")))
+  cat("repaired", attr(crs, "sex_repaired"), "rows whose route disagreed with the page title
+")
 cat(sprintf("CRS athletics: %s rows, %d matched events, %d unmatched\n",
             format(nrow(crs), big.mark=","), uniqueN(crs$event_id[!is.na(crs$event_id)]),
             sum(is.na(crs$event_id))))
