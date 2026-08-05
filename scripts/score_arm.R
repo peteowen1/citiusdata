@@ -153,7 +153,22 @@ if (nzchar(VS)) {
   # logloss gap between model and baseline IS an over-confidence gap, so a
   # baseline handicapped on uncertainty would flatter us.
   BASE <- Sys.getenv("CITIUS_SCORE_BASE", "event")
-  evs <- as.data.table(deployed_calibration(OUT)$events)[, .(event_id, sigma_within)]
+  # Restricted to CALIBRATED events. An uncalibrated event still carries a
+  # `sigma_within`, but it is the registry's `cv_prior` placeholder rather than
+  # anything measured -- so taking the column wholesale hands the baseline a
+  # guessed spread for those events AND contaminates the fallback median with
+  # guesses. The baseline is what the arm is judged against, so a wrong sigma
+  # there moves the verdict in a direction nothing reports.
+  ev_all <- as.data.table(deployed_calibration(OUT)$events)
+  evs <- ev_all[calibrated %in% TRUE, .(event_id, sigma_within)]
+  if (!nrow(evs)) {
+    cli::cli_abort(c(
+      "x" = "No calibrated events in the deployed calibration.",
+      "i" = "The per-event baseline sigma would be entirely placeholder values."))
+  }
+  cli::cli_alert_info(
+    "Baseline sigma from {nrow(evs)} calibrated event{?s} of {nrow(ev_all)}; \\
+     uncalibrated events take the calibrated median.")
   d <- merge(d, evs, by = "event_id", all.x = TRUE)
   d[!is.finite(sigma_within), sigma_within := median(evs$sigma_within, na.rm = TRUE)]
   sim <- function(dd, sg, n) rbindlist(lapply(split(dd, dd$race_id), function(r) {
@@ -187,6 +202,26 @@ if (nzchar(VS)) {
 }
 
 d <- d[date >= HOLDOUT]
+
+# Re-assert the floor on what is ACTUALLY SCORED, not on what was predicted.
+#
+# The check at the top runs before the merge to real outcomes, before the
+# catalogue join and before this holdout filter, so it counts races the arm made
+# a prediction for -- not races that survive to contribute a number. An arm can
+# clear 200 predicted races there and report on 30 here, which is precisely the
+# thin-sample-reported-as-real failure the first guard exists to prevent, just
+# displaced past the point where the sample is decided.
+n_scored <- uniqueN(d$race_id)
+if (n_scored < MIN_RACES) {
+  cli::cli_abort(c(
+    "x" = "{.file {ARM}} has {n_scored} race{?s} left after the holdout filter
+           and the merge to actual results; refusing to report.",
+    "i" = "{n_races} race{?s} were predicted, so the loss is in the outcome
+           merge or {.envvar CITIUS_BT_HOLDOUT}, not in the backtest itself.",
+    "i" = "Lower {.envvar CITIUS_SCORE_MIN_RACES} if this small a sample is
+           genuinely what you want."))
+}
+
 d[, `:=`(act_perf = orientation * log(actual),
          a_perf = orientation * log(a_mark), b_perf = orientation * log(b_mark))]
 EPS <- 1e-4

@@ -45,7 +45,7 @@ linked <- xw[, .(n = uniqueN(source)), by = person_id][n > 1L, person_id]
 miss <- xw[source == "crs_glasgow2026" & !person_id %in% linked,
            .(athlete_name, country)]
 
-g <- setDT(parse_crs_export(file.path(D, "glasgow2026_swimming.json")))[!is.na(event_id)]
+g <- glasgow_swimming(D)[!is.na(event_id)]
 g[, lvl := fifelse(grepl("final", round, ignore.case = TRUE) &
                      !grepl("semi", round, ignore.case = TRUE), 1L,
            fifelse(grepl("semi", round, ignore.case = TRUE), 2L, 3L))]

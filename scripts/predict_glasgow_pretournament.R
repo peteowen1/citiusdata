@@ -14,6 +14,7 @@ suppressMessages({library(citius); library(data.table)})
 D <- file.path(VERSE, "citiusdata", "data")
 # Model inputs come from DEPLOYED, never from literals here. See _deployed.R.
 source(file.path(VERSE, "citiusdata", "scripts", "_deployed.R"))
+`%||%` <- function(a, b) if (is.null(a)) b else a
 say <- function(...) cat(sprintf(...), "\n", sep = "")
 N_SIMS <- 20000L
 CUT <- as.Date("2026-07-23")          # the Games opened on the 24th
@@ -25,7 +26,7 @@ person <- unique(xw[source == "crs_glasgow2026" & !is.na(athlete_name),
 
 # ---- swimming --------------------------------------------------------------
 say("\n=== swimming ===")
-g <- setDT(parse_crs_export(file.path(D, "glasgow2026_swimming.json")))[!is.na(event_id)]
+g <- glasgow_swimming(D)[!is.na(event_id)]
 sw <- setDT(readRDS(file.path(D, "swimming_corpus.rds")))
 cal_sw <- readRDS(file.path(D, "calibration_swimming.rds"))
 # Leak guard, asserted rather than assumed: no Glasgow swim may reach the model.
@@ -48,6 +49,15 @@ say("entrants %s | with pre-Games history %s (%.0f%%)",
 
 ab_sw <- estimate_ability(sw[!is.na(perf)], as_of = CUT, half_life = 180,
                           calibration = cal_sw)
+# A spread no athlete could have means a merged identity, not a wild swimmer.
+ab_sw <- drop_impossible_sigma(ab_sw)
+ab_sw <- temper_unevidenced(ab_sw)
+say("  tempered %d athlete-event(s) with no usable evidence", attr(ab_sw, "tempered") %||% 0L)
+if (!is.null(attr(ab_sw, "dropped"))) {
+  d <- attr(ab_sw, "dropped")
+  say("  dropped %d athlete-event(s) with an impossible spread (merged identities):", nrow(d))
+  print(d)
+}
 
 sim_event <- function(field, ab, ev, cal, label) {
   f <- field[event_id == ev & !is.na(person_id)]
@@ -119,6 +129,17 @@ if (file.exists(f_ent) && file.exists(f_hist)) {
                                .(athlete_id = person_id, event_id, date, perf,
                                  round, competition_id)],
                             as_of = CUT, calibration = cal_at)
+  # Same two guards as swimming. Athletics history comes through a different
+  # crosswalk but the failure modes are identical -- a merged identity gives an
+  # impossible spread, and an athlete whose evidence has decayed to nothing is
+  # credited for the not-knowing.
+  ab_at <- drop_impossible_sigma(ab_at)
+  if (!is.null(attr(ab_at, "dropped"))) {
+    say("  dropped %d athlete-event(s) with an impossible spread:", nrow(attr(ab_at, "dropped")))
+    print(attr(ab_at, "dropped"))
+  }
+  ab_at <- temper_unevidenced(ab_at)
+  say("  tempered %d athlete-event(s) with no usable evidence", attr(ab_at, "tempered") %||% 0L)
   res_at <- rbindlist(lapply(unique(fa$event_id),
                              function(e) sim_event(fa, ab_at, e, cal_at, "Athletics")),
                       fill = TRUE)

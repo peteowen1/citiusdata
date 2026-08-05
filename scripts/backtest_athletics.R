@@ -50,6 +50,31 @@ hist_raw    <- if (identical(HISTORY, OUTCOMES)) champs else readRDS(file.path(O
 # "calibration.rds", a file it never opened.
 CALIBRATION <- Sys.getenv("CITIUS_BT_CALIBRATION", "calibration_corpus.rds")
 calibration <- readRDS(file.path(OUT, CALIBRATION))
+
+# LEAKAGE CHECK. The per-meet ability refit below is strictly out-of-sample, but
+# the CALIBRATION is loaded whole and applied to every scored meet -- and it
+# carries per-athlete `sensitivity`, which condition_sensitivity() consumes at
+# prediction time. If the calibration was fitted on a corpus containing the
+# meets being scored, an athlete's response to conditions was fitted partly on
+# the race being predicted.
+#
+# Measured 2026-08-03 on calibration_corpus_athfoul.rds against the 49-meet run:
+# 100% of scored meets were inside the calibration corpus, contributing 0.27% of
+# its races overall but a median 7.4% (90th pct 23.5%) of the races behind an
+# individual scored athlete's sensitivity. Sensitivity spread is sd 0.121, and
+# it only scales a shock of ~1.3% of a mark, so the implied bias on Brier skill
+# is orders of magnitude below the effects being reported -- real, but not
+# invalidating. Fix properly by fitting the calibration on a corpus that excludes
+# the scored window; until then this makes the overlap visible instead of silent.
+.cal_prov <- calibration$provenance
+if (is.null(.cal_prov)) {
+  cli::cli_alert_warning(c(
+    "{.file {CALIBRATION}} carries no provenance stamp, so its overlap with the ",
+    "scored meets cannot be checked. Rebuild it with rebaseline_chain.R."))
+} else {
+  cli::cli_alert_info(
+    "Calibration fitted on {.val {.cal_prov$n_meets}} meets, {.val {as.character(.cal_prov$date_min)}} to {.val {as.character(.cal_prov$date_max)}}.")
+}
 # The aging curve. Found missing from this script on 2026-07-29: project_ability()
 # is applied in predict_glasgow2026.R but was never called here, so the backtest
 # was measuring a DIFFERENT pipeline from the one that ships -- and every
@@ -63,6 +88,9 @@ calibration <- readRDS(file.path(OUT, CALIBRATION))
 MOM_FILE <- Sys.getenv("CITIUS_BT_MOMENTUM", "")
 mom_eff <- if (nzchar(MOM_FILE) && file.exists(file.path(OUT, MOM_FILE)))
   as.data.table(readRDS(file.path(OUT, MOM_FILE))) else NULL
+PEAK_GAMMA <- as.numeric(Sys.getenv("CITIUS_BT_PEAK_GAMMA", "0"))
+ROBUST_LOCATION <- as.logical(Sys.getenv("CITIUS_BT_ROBUST_LOCATION", "FALSE"))
+DECOUPLE_PEAK <- as.logical(Sys.getenv("CITIUS_BT_DECOUPLE_PEAK", "FALSE"))
 if (!is.null(mom_eff)) {
   calibration$momentum <- mom_eff
   cli::cli_alert_info("Momentum enabled from {.file {MOM_FILE}} ({nrow(mom_eff)} famil{?y/ies}).")
@@ -261,9 +289,15 @@ outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
 # `wind` is read by estimate_ability() when the calibration carries a wind
 # coefficient. Narrowing it away would silently disable the adjustment and the
 # A/B would report a dead heat.
+# `indoor` and `venue_country` are read by estimate_ability() when the
+# calibration carries indoor or season offsets. Narrowing them away silently
+# disables those adjustments and the A/B reports a dead heat -- the same trap
+# the `wind` note above describes. `venue_country` additionally decides the
+# hemisphere for the seasonal phase, and its absence is what blocked the season
+# effect from being wired on 2026-07-30.
 keep_cols <- c("athlete_id", "event_id", "date", "perf", "age", "round", "tier",
                "competition_id", "comp_start", "place", "race_key", "wind",
-               "momentum")
+               "momentum", "indoor", "venue_country")
 clean <- clean[, intersect(keep_cols, names(clean)), with = FALSE]
 outcome_rows <- outcome_rows[, intersect(keep_cols, names(outcome_rows)), with = FALSE]
 
@@ -355,6 +389,19 @@ tick <- function(slot, expr) {
   out
 }
 
+# Age-projection warnings are COUNTED, not silenced.
+#
+# `project_ability()` warns when a projection shifts ability by more than
+# `max_shift`, which is the exact signature of `age_ref` being a career mean
+# rather than the weighted mean age -- the bug that once projected a sprinter
+# faster than his own personal best and put sprinters atop the triple jump.
+# Wrapping the call in `suppressWarnings()` made the backtest run silently
+# through a regression of it. cli already rate-limits that warning to once per
+# session, so the suppression was not even buying quiet; it was only buying
+# blindness. Counted here and reported with the summary.
+AGE_WARN <- new.env(parent = emptyenv())
+AGE_WARN$n <- 0L; AGE_WARN$last <- NA_character_
+
 n <- min(nrow(todo), MAX_PER_RUN)
 for (i in seq_len(n)) {
   cid <- todo$competition_id[i]
@@ -407,12 +454,10 @@ for (i in seq_len(n)) {
                                      calibration = calibration,
                                      adjust_context = ADJUST_CONTEXT,
                                      sigma_mode = SIGMA_MODE,
-                                     # Only the entrants are ever read. The rest
-                                     # of the history still sets the priors and
-                                     # the robust-sigma scale, which is why
-                                     # `only` narrows the output and not the
-                                     # inputs -- predictions are unchanged.
-                                     only = unique(as.character(block$athlete_id))))
+                                     only = unique(as.character(block$athlete_id)),
+                                     peak_gamma = PEAK_GAMMA,
+                                     robust_location = ROBUST_LOCATION,
+                                     decouple_peak = DECOUPLE_PEAK))
   } else {
     # Refit per family. estimate_ability takes a single half-life, so split the
     # history by family and stack -- each event only ever belongs to one family,
@@ -424,7 +469,9 @@ for (i in seq_len(n)) {
         hl_map[[g$family[1]]] else half_life
       estimate_ability(g[, !"family"], as_of = cut_date, half_life = hl,
                        calibration = calibration, adjust_context = ADJUST_CONTEXT,
-                       sigma_mode = SIGMA_MODE)
+                       sigma_mode = SIGMA_MODE, peak_gamma = PEAK_GAMMA,
+                       robust_location = ROBUST_LOCATION,
+                       decouple_peak = DECOUPLE_PEAK)
     }), fill = TRUE))
   }
 
@@ -496,7 +543,13 @@ for (i in seq_len(n)) {
                on = "athlete_id", age_now := i.age_now]
       ok <- entrants[!is.na(age_now) & !is.na(age_ref)]
       if (nrow(ok)) {
-        proj <- suppressWarnings(project_ability(ok, aging))
+        proj <- withCallingHandlers(
+          project_ability(ok, aging),
+          warning = function(w) {
+            AGE_WARN$n <- AGE_WARN$n + 1L
+            AGE_WARN$last <- conditionMessage(w)
+            invokeRestart("muffleWarning")
+          })
         entrants[proj, on = "athlete_id", ability := i.ability]
       }
     }
@@ -547,6 +600,15 @@ gold <- score_predictions(pred[race_id %in% keep], outc[race_id %in% keep], "p_g
 medal <- score_predictions(pred[race_id %in% keep],
                            outc[race_id %in% keep, .(race_id, athlete_id, hit = hit_medal)],
                            "p_medal")
+
+if (AGE_WARN$n > 0L) {
+  cli::cli_alert_warning(
+    "Age projection warned on {AGE_WARN$n} meet{?s}. Last: {AGE_WARN$last}")
+  cli::cli_alert_info(
+    "Check {.field age_ref} is the weighted mean age from {.fn estimate_ability}.")
+} else {
+  cli::cli_alert_success("Age projection: no oversized shifts on any meet.")
+}
 
 cli::cli_h2("Athletics backtest (winner-in-field)")
 cat(sprintf("gold  brier %.4f vs %.4f  skill %+.3f  (%d races)\n",

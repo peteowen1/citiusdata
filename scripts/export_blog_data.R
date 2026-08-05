@@ -52,7 +52,7 @@ cli::cli_alert_info("Athletics: {nrow(ath)} result{?s}, {uniqueN(ath$race_key)} 
 # --- swimming results --------------------------------------------------------
 # Glasgow swimming ran 24-26 Jul and is FINISHED. This is an archive, not a
 # feed: it refreshes only when someone re-runs the CRS browser recipe.
-swim <- tryCatch(setDT(parse_crs_export(file.path(OUT, "glasgow2026_swimming.json"))),
+swim <- tryCatch(glasgow_swimming(OUT),
                  error = function(e) NULL)
 # Catching `error` is NOT enough: parse_crs_export() returns an EMPTY table
 # without erroring when the export has no rows (a truncated or malformed manual
