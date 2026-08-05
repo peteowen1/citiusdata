@@ -20,8 +20,33 @@ reg <- as.data.table(citius_events())[, .(event_id, orientation, family)]
 pre <- merge(pre, reg, by = "event_id", all.x = TRUE)
 pre[, perf_pred := orientation * log(median_mark)]
 fails <- 0L
-say <- function(ok, msg) { if (!ok) fails <<- fails + 1L
-  cat(sprintf("  [%s] %s\n", if (ok) "PASS" else "FAIL", msg)) }
+say <- function(ok, msg) {
+  # An NA verdict is a FAILED check, not a crash and not a pass. `if (!NA)`
+  # errors, which used to kill the script at check 1 and take checks 2-5 with
+  # it, reporting nothing about the four it never ran.
+  ok <- isTRUE(ok)
+  if (!ok) fails <<- fails + 1L
+  cat(sprintf("  [%s] %s\n", if (ok) "PASS" else "FAIL", msg))
+}
+
+# Every check below filters, and a filter over an empty or all-NA column matches
+# nothing and reports zero violations -- which prints as PASS. That is the exact
+# shape of the vacuous guards this repo has shipped before, so the inputs the
+# checks depend on are verified to EXIST before any of them runs. These are
+# stopifnot, not say(): if the card is empty or a column never populated, the
+# checks below are meaningless rather than failing, and should not print at all.
+stopifnot(
+  "prediction file is empty" = nrow(pre) > 0L,
+  "no events in the prediction file" = uniqueN(pre$event_id) > 0L,
+  "columns the checks read are missing" =
+    all(c("p_gold", "median_rank", "median_mark") %in% names(pre))
+)
+for (col in c("p_gold", "median_rank", "median_mark")) {
+  cov <- mean(is.finite(pre[[col]]))
+  if (cov < 0.5) stop(sprintf(
+    "`%s` is finite for only %.1f%% of rows -- the checks that read it would pass vacuously",
+    col, 100 * cov))
+}
 
 cat("card generated:", as.character(unique(pre$generated_at))[1],
     "| cutoff:", as.character(unique(pre$cutoff))[1], "\n")
@@ -38,6 +63,13 @@ say(median(ag$rho) > 0.8, sprintf("median rho %.3f", median(ag$rho)))
 
 cat("\n2. nobody is paid for their own uncertainty\n")
 pre[, favrank := frank(-p_gold, ties.method = "first"), by = event_id]
+# A data.table filter drops NA rather than matching it, so `median_rank > 10` is
+# silently FALSE for a row whose median_rank never got populated -- and this
+# check, the one the file exists for, would report zero violations. Any top-3
+# favourite without a median_rank is therefore counted as unverifiable, which
+# fails, rather than quietly passing.
+unrank <- pre[favrank <= 3 & !is.finite(median_rank)]
+say(nrow(unrank) == 0, sprintf("%d top-3 favourites have no median_rank to check", nrow(unrank)))
 bad <- pre[favrank <= 3 & median_rank > 10 & p_gold > 0.08]
 say(nrow(bad) == 0, sprintf("%d top-3 favourites with median finish outside the top 10 and p_gold > 8%%", nrow(bad)))
 if (nrow(bad)) print(bad[order(-p_gold), .(event_id, athlete_name, p_gold = round(p_gold,3),

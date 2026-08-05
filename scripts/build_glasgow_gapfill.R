@@ -115,6 +115,20 @@ cat(sprintf("\nparsed %d rows | events: %s\n", nrow(g),
 if (any(is.na(g$event_id))) {
   cat("UNMATCHED titles:\n"); print(unique(g[is.na(event_id)]$discipline))
 }
+# These rows are typed by hand off rendered pages, which is exactly the input a
+# round-trip check exists for -- a mistyped page index, a dropped row or a title
+# that matches no event are all easy and all silent. Printing a diagnostic and
+# exiting 0 is not a check; anyone regenerating this file would have to notice
+# the line. Hard-fail instead.
+stopifnot(
+  "a hand-entered row was lost in the round trip" = nrow(g) == length(rows),
+  "a page title matched no event in the registry" = !any(is.na(g$event_id)),
+  # Parenthesised on purpose: `%in%` binds TIGHTER than `-`, so the unbracketed
+  # form parses as `(idx %in% seq_along(pages)) - 1L` and compares nothing.
+  "a hand-entered page index is out of range" =
+    all(vapply(rows, function(x) x[[1]], numeric(1)) %in% (seq_along(pages) - 1L)),
+  "a hand-entered mark failed to parse" = all(is.finite(g$mark))
+)
 cat("\npodiums as parsed:\n")
 print(g[!is.na(place) & place <= 3, .(event_id, place, athlete_name, country, mark_string)][
   order(event_id, place)])

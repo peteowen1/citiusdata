@@ -264,6 +264,25 @@ glasgow_swimming <- function(dir) {
     lapply(fs, function(f) .repair_sex_from_title(parse_crs_export(f))),
     fill = TRUE)
   m <- m[is.na(event_id) | grepl("^SW-", event_id)]   # gapfill also holds athletics
+  # The same guard glasgow_athletics() applies, for the same reason. Swimming
+  # was never hit by the reaction-time-as-mark parse, but nothing about the
+  # scrape makes it immune, and the fastest swim in the programme is a ~21s 50m
+  # freestyle -- so anything under 5 seconds in a MATCHED individual event is a
+  # misparse, not a swim. Drop the mark, not the row: the entry is still real.
+  #
+  # Scoped to matched events on purpose. Relay rows come out of this scrape with
+  # a country in `athlete_name` and a lane number in `mark_string`, so an
+  # unscoped threshold flags a dozen of them and says "impossible mark" about
+  # something that was never a mark. They all carry `event_id = NA` and are
+  # dropped downstream anyway; flagging them here would only train a reader to
+  # ignore the warning that matters.
+  bad_m <- is.finite(m$mark) & m$mark < 5 & !is.na(m$event_id)
+  if (any(bad_m)) {
+    warning(sum(bad_m), " swimming marks under 5s in matched events dropped ",
+            "as impossible: ", paste(unique(m$event_id[bad_m]), collapse = ", "))
+    m$mark[bad_m] <- NA_real_
+    m$mark_string[bad_m] <- NA_character_
+  }
   # Normalise the round before deduplicating. The same final was captured by more
   # than one sweep under different labels -- "Final", "Final - Fastest Heat",
   # "Final - Slowest Heat 1" -- so keying on the raw label let one race
@@ -287,11 +306,22 @@ glasgow_swimming <- function(dir) {
     , .(nsect = .N), by = event_id][nsect > 1L]
   if (nrow(sect)) {
     for (ev in sect$event_id) {
-      i <- which(isfin & m$event_id == ev & is.finite(m$mark))
-      if (!length(i)) next
-      ord <- order(m$mark[i])                       # lower time is better
-      m$place[i[ord]] <- seq_along(ord)
-      m$round[i] <- "Final"
+      # Take EVERY row of the final, not just the ones with a time. A swimmer
+      # who was disqualified or did not finish has no mark, so re-ranking only
+      # the finite marks would leave them holding the place they were scraped
+      # with -- which for a DQ in the slow section is `place = 1`, "winning"
+      # their own heat. That duplicates the real champion's place, and their
+      # round label stays "Final - Slowest Heat 1", which still matches every
+      # downstream `grepl("final", round)` filter. `place` from this function is
+      # read as ground truth by predict_glasgow_swimming.R and
+      # score_pretournament.R, so a stale 1 is scored as an actual gold.
+      j <- which(isfin & m$event_id == ev)
+      if (!length(j)) next
+      fin <- j[is.finite(m$mark[j])]
+      ord <- order(m$mark[fin])                     # lower time is better
+      m$place[fin[ord]] <- seq_along(ord)
+      m$place[setdiff(j, fin)] <- NA_integer_       # no time means no placing
+      m$round[j] <- "Final"
     }
   }
   m[]
@@ -427,12 +457,34 @@ drop_impossible_sigma <- function(ab, factor = 10) {
 temper_unevidenced <- function(ab, min_w = 0.05) {
   ab <- data.table::as.data.table(ab)
   if (!all(c("w_total", "ability_se", "event_id") %in% names(ab))) return(ab[])
+  # The per-event median is taken over athletes who CLEAR min_w. In an event
+  # where nobody does -- the thinly covered ones, which is precisely where this
+  # guard matters most -- that subset is empty, `median(numeric(0))` is NA, and
+  # every row then fails `is.finite(.se_med)`. The whole event would be skipped
+  # silently, while the printed tempered-count still looked like protection had
+  # been applied. Fall back to the all-events median, and count the fallback
+  # separately so "nothing needed tempering" cannot be confused with "the guard
+  # could not run here".
   ab[, .se_med := stats::median(ability_se[w_total >= min_w], na.rm = TRUE), by = event_id]
-  n <- ab[is.finite(w_total) & w_total < min_w & is.finite(.se_med) &
-          is.finite(ability_se) & ability_se > .se_med, .N]
-  ab[is.finite(w_total) & w_total < min_w & is.finite(.se_med) &
-     is.finite(ability_se) & ability_se > .se_med, ability_se := .se_med]
+  se_global <- stats::median(ab$ability_se[ab$w_total >= min_w], na.rm = TRUE)
+  n_fallback <- ab[!is.finite(.se_med), uniqueN(event_id)]
+  if (n_fallback && is.finite(se_global)) ab[!is.finite(.se_med), .se_med := se_global]
+
+  hit <- is.finite(ab$w_total) & ab$w_total < min_w & is.finite(ab$.se_med) &
+         is.finite(ab$ability_se) & ab$ability_se > ab$.se_med
+  n <- sum(hit)
+  ab[hit, ability_se := .se_med]
   ab[, .se_med := NULL]
+  if (n_fallback) {
+    if (is.finite(se_global)) {
+      warning(n_fallback, " event(s) had no athlete above min_w; used the ",
+              "all-events median ability_se instead")
+    } else {
+      warning(n_fallback, " event(s) could not be tempered: no athlete above ",
+              "min_w anywhere, so there is no typical value to fall back to")
+    }
+  }
   data.table::setattr(ab, "tempered", n)
+  data.table::setattr(ab, "temper_fallback_events", n_fallback)
   ab[]
 }
