@@ -327,6 +327,22 @@ glasgow_athletics <- function(dir) {
   }
   if (is.null(crs) || !nrow(crs)) return(fromfeed[])
   crs[, source_feed := "crs"]
+
+  # Drop scraped rows whose mark cannot be a mark for the event. Sprints and
+  # hurdles split the results header over three lines, so a parser reading only
+  # the "Rank..." line falls back to the first value it finds -- the REACTION
+  # TIME -- and files 0.196 as a 400m. Nobody runs a lap in a fifth of a second,
+  # and no throw measures under a metre, so this is decidable rather than a
+  # judgement call. Feed rows are never dropped; they are the trustworthy source.
+  ori <- data.table::as.data.table(citius_events())[, .(event_id, .ori = orientation)]
+  crs <- merge(crs, ori, by = "event_id", all.x = TRUE)
+  impossible <- is.finite(crs$mark) & !is.na(crs$.ori) &
+    ((crs$.ori == -1L & crs$mark < 5) | (crs$.ori == 1L & crs$mark < 1))
+  if (any(impossible)) {
+    data.table::setattr(crs, "impossible_dropped", sum(impossible))
+    crs <- crs[!impossible]
+  }
+  crs[, .ori := NULL]
   keep <- intersect(names(fromfeed), names(crs))
   both <- rbind(fromfeed[, ..keep], crs[, ..keep], fill = TRUE)
   # Feed rows win on collision: same event, round, athlete and mark. The athlete

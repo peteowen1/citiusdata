@@ -32,7 +32,21 @@ pages <- list(
        "WOMEN'S 1500M FREESTYLE SLOWEST HEAT 1"),
   list("athletic-result/ATH/M/W/HEPTATH-----------/FNL-/000100--",
        "29 Jul 2026, 20:55  |  Finished  \u2022  Scotstoun Stadium",
-       "WOMEN'S HEPTATHLON FINAL"))
+       "WOMEN'S HEPTATHLON FINAL"),
+  # The two 400m finals are re-captured here because the sweep read their
+  # REACTION TIME as the mark. Sprints and hurdles split the results header over
+  # three lines -- "Rank...Name", then a "Reaction Time" tooltip, then the real
+  # column names "R.T. / Time / Record" -- so a parser reading only the "Rank..."
+  # line finds no value column and falls back to the first non-empty value,
+  # which is the reaction time. 216 rows across ten events were affected; the
+  # feed's correct value wins for eight of them, and only these two had no feed
+  # row to override it.
+  list("athletic-result/ATH/S/M/400M--------------/FNL-/000100--",
+       "01 Aug 2026, 12:00  |  Finished  \u2022  Scotstoun Stadium",
+       "MEN'S 400M FINAL"),
+  list("athletic-result/ATH/S/W/400M--------------/FNL-/000100--",
+       "01 Aug 2026, 12:20  |  Finished  \u2022  Scotstoun Stadium",
+       "WOMEN'S 400M FINAL"))
 
 r <- function(p, ht, rk, ln, nat, nm, rt, tm) list(p, ht, rk, ln, nat, nm, rt, tm)
 rows <- list(
@@ -71,7 +85,25 @@ rows <- list(
   r(3,"Final","11","11","GIB","Ella RUSH","","5551"),
   r(3,"Final","12","12","JEY","Lucy WOODWARD","","5530"),
   r(3,"Final","13","13","CAN","Hannah BLAIR","","5340"),
-  r(3,"Final","14","14","CMR","Adele MAFOGANG TENKEU","","5262"))
+  r(3,"Final","14","14","CMR","Adele MAFOGANG TENKEU","","5262"),
+  # --- men's 400m final (reaction time kept in its own field) ---
+  r(4,"Final","1","5","NGR","Samuel OGAZI","0.196","44.25"),
+  r(4,"Final","2","4","TTO","Jereem RICHARDS","0.153","44.82"),
+  r(4,"Final","3","2","RSA","Zakithi NENE","0.147","45.21"),
+  r(4,"Final","4","6","BOT","Lee Bhekempilo EPPIE","0.149","45.31"),
+  r(4,"Final","5","7","AUS","Thomas REYNOLDS","0.172","45.57"),
+  r(4,"Final","6","8","ZAM","Muzala SAMUKONGA","0.189","45.61"),
+  r(4,"Final","7","1","JAM","Zandrion BARNES","0.171","45.68"),
+  r(4,"Final","8","3","NGR","Edidiong Okon UDO","0.199","45.81"),
+  # --- women's 400m final ---
+  r(5,"Final","1","4","JAM","Dejanea OAKLEY","0.138","50.21"),
+  r(5,"Final","2","5","BAR","Sada WILLIAMS","0.163","50.99"),
+  r(5,"Final","3","6","NGR","Ella ONOJUVWEVWO","0.246","51.00"),
+  r(5,"Final","4","3","WAL","Charlotte HENRICH","0.148","51.16"),
+  r(5,"Final","5","1","SCO","Nicole YEARGIN","0.156","51.27"),
+  r(5,"Final","6","7","ENG","Yemi Mary JOHN","0.170","51.60"),
+  r(5,"Final","7","2","CAN","Lauren GALE","0.187","52.01"),
+  r(5,"Final","8","8","BOT","Obakeng KAMBERUKA","0.184","52.53"))
 
 f <- file.path(D, "glasgow2026_gapfill.json")
 write_json(list(p = pages, r = rows), f, auto_unbox = TRUE)
