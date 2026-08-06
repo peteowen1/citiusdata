@@ -155,7 +155,13 @@ all[, generated_at := Sys.time()][, cutoff := CUT]
 # is only checkable while the file behind it still exists.
 TAG <- Sys.getenv("CITIUS_PRED_TAG", "")
 base <- paste0("glasgow2026_pretournament", if (nzchar(TAG)) paste0("_", TAG) else "")
-all[, config := if (nzchar(TAG)) TAG else "2026-07-29 baseline"]
+# The untagged default MUST be DEPLOYED$stamp, not a literal. It was hardcoded
+# to "2026-07-29 baseline" until 2026-08-06 while DEPLOYED$stamp read
+# "2026-07-31 csigma" -- so an untagged run stamped its output TWO VINTAGES
+# STALE, and the stamp is the field every downstream staleness check reads.
+# Silent by construction: the artefact is written, nothing errors, and the
+# provenance it carries is simply wrong. Found by the ticket-15 config audit.
+all[, config := if (nzchar(TAG)) TAG else DEPLOYED$stamp]
 saveRDS(all, file.path(D, paste0(base, ".rds")))
 arrow::write_parquet(all, file.path(D, paste0(base, ".parquet")))
 say("\n%s rows | %s events | wrote %s.{rds,parquet}",
