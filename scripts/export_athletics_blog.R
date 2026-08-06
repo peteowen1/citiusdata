@@ -114,11 +114,21 @@ ev <- merge(ev, st[, .(n_rounds = max(round_index)), by = event_id],
 
 for (x in list(cal, card, lab, ev)) if (is.data.table(x)) x[, generated_at := NOW]
 
+# Nation projection, built from the joint per-simulation podiums rather than by
+# summing marginals — see predict_birmingham2026.R for why that distinction
+# carries 81% of the mass on this field.
+nat_f <- file.path(D, "birmingham2026_nations.parquet")
+if (!file.exists(nat_f)) {
+  cli::cli_abort("birmingham2026_nations.parquet missing - re-run predict_birmingham2026.R.")
+}
+nations <- setDT(as.data.frame(read_parquet(nat_f)))
+
 artefacts <- list(
   "calendar.parquet"                    = cal,
   "birmingham2026-predictions.parquet"  = card,
   "birmingham2026-rounds.parquet"       = lab,
-  "birmingham2026-events.parquet"       = ev)
+  "birmingham2026-events.parquet"       = ev,
+  "birmingham2026-nations.parquet"      = nations)
 
 for (nm in names(artefacts)) {
   write_parquet(artefacts[[nm]], file.path(BLOG, nm))

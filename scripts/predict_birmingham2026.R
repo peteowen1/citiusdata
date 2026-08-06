@@ -169,7 +169,7 @@ mk_structure <- function(ev) {
   })
 }
 
-res <- list(); skipped <- list()
+res <- list(); skipped <- list(); draws <- list()
 for (ev in events) {
   field_ids <- unique(unlist(ids[event_id == ev]$all_ids))
   ent <- ability[event_id == ev & athlete_id %in% field_ids]
@@ -180,7 +180,10 @@ for (ev in events) {
   ent <- deployed_field(ent, aging = aging, ages = ages[event_id == ev, .(athlete_id, age_now)])
   structure_ev <- mk_structure(ev)
   sim <- simulate_rounds(ent, structure = structure_ev, n_sims = N_SIMS,
-                         calibration = calibration, seed = SEED)
+                         calibration = calibration, seed = SEED,
+                         medal_draws = TRUE)
+  dr <- attr(sim, "medal_draws")
+  if (!is.null(dr)) { dr <- copy(dr); dr[, event_id := ev]; draws[[length(draws) + 1L]] <- dr }
   sim <- as.data.table(sim)
   sim[, `:=`(event_id = ev, n_rounds = length(structure_ev),
              field_modelled = nrow(ent))]
@@ -221,6 +224,52 @@ pred[, `:=`(generated_at = Sys.time(), cutoff = CUT, meet = "birmingham2026",
             half_life = DEPLOYED$half_life, config = DEPLOYED$stamp,
             counts_source = "derived",
             combined_rows_excluded = n_combined_excluded)]
+
+# --- nation projection --------------------------------------------------------
+# Built from the JOINT draws, not by summing marginals. On this field 81% of
+# expected medals sit in nation-events with two or more entrants, where the
+# athletes contest the same three medals — so their medal indicators are
+# strongly negatively dependent and an independent-Bernoulli sum would overstate
+# the spread badly. Summing per simulation preserves that automatically.
+#
+# Pairing simulation index s across DIFFERENT events is legitimate: the events
+# are independent, so pairing independent draws constructs a valid joint sample.
+nat <- unique(ids[, .(athlete_id, nation)])
+dr <- rbindlist(draws, fill = TRUE)
+dr <- merge(dr, nat, by = "athlete_id", all.x = TRUE)
+if (dr[is.na(nation), .N]) {
+  cli::cli_abort("{dr[is.na(nation), .N]} medal draw{?s} could not be attributed to a nation.")
+}
+per_sim <- dr[, .(medals = .N, golds = sum(place == 1L)), by = .(sim, nation)]
+# A nation with zero medals in a simulation must count as a zero, not be absent,
+# or every quantile is computed over winners only and the table flatters itself.
+grid <- CJ(sim = seq_len(N_SIMS), nation = unique(per_sim$nation))
+per_sim <- merge(grid, per_sim, by = c("sim", "nation"), all.x = TRUE)
+per_sim[is.na(medals), `:=`(medals = 0L, golds = 0L)]
+
+proj <- per_sim[, .(
+  exp_medals = mean(medals), exp_golds = mean(golds),
+  p10 = stats::quantile(medals, 0.10, names = FALSE),
+  p50 = stats::quantile(medals, 0.50, names = FALSE),
+  p90 = stats::quantile(medals, 0.90, names = FALSE),
+  p_any_gold  = mean(golds > 0),
+  p_any_medal = mean(medals > 0)), by = nation]
+setorder(proj, -exp_medals)
+proj[, `:=`(meet = "birmingham2026", generated_at = Sys.time(),
+            scope = "model", events_scored = uniqueN(pred$event_id),
+            n_sims = N_SIMS)]
+arrow::write_parquet(proj, file.path(D, "birmingham2026_nations.parquet"))
+
+stopifnot(
+  "expected golds must sum to the number of events" =
+    abs(sum(proj$exp_golds) - uniqueN(pred$event_id)) < 0.01,
+  "expected medals must sum to three per event" =
+    abs(sum(proj$exp_medals) - 3 * uniqueN(pred$event_id)) < 0.05)
+cli::cli_alert_success(
+  "Nation projection: {nrow(proj)} nation{?s}; expected golds sum to {round(sum(proj$exp_golds), 2)}, medals to {round(sum(proj$exp_medals), 2)}.")
+print(head(proj[, .(nation, exp_golds = round(exp_golds, 2),
+                    exp_medals = round(exp_medals, 2), p10, p50, p90,
+                    p_any_gold = round(p_any_gold, 3))], 10))
 
 stamp <- format(Sys.time(), "%Y%m%dT%H%M%S")
 f <- file.path(D, paste0("birmingham2026_pretournament_", stamp, ".parquet"))
