@@ -129,10 +129,30 @@ for (nm in names(artefacts)) {
 # and uploaded LAST and only if every data artefact landed. Publishing it
 # unconditionally puts a brand-new "as at just now" over a card that failed to
 # upload and is a run behind -- fresh-looking and wrong.
+# --- per-event notes ----------------------------------------------------------
+# Where the model says something a reader who follows the sport will find
+# surprising, say so ON THAT EVENT rather than leaving them to assume we have not
+# noticed. Published as data, keyed by event_id, so the page renders it and the
+# claim lives in one place.
+#
+# Written by hand, deliberately: an automatic "thin evidence" banner on all 17
+# flagged athlete-events would be noise. These are the ones where the model
+# actively contradicts the form book.
+EVENT_NOTES <- list(
+  "AT-800Metres-W" = paste(
+    "We make Femke Bol favourite over Keely Hodgkinson, and we are less sure of",
+    "that than the number looks. Hodgkinson beat Bol into second at the London",
+    "Diamond League on 18 July (1:56.21 to 1:56.46) and has the faster season",
+    "best, 1:54.33 against 1:55.60. Bol has moved to the 800m recently and we",
+    "hold six of her races against Hodgkinson's 105 — and with that little",
+    "evidence the model reads her as unusually consistent, which flatters her",
+    "chances. Treat this as our most disputable call of the meet."))
+
 manifest <- list(
   generated_at = format(NOW, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
   config = DEPLOYED$stamp,
   meets = nrow(cal),
+  event_notes = EVENT_NOTES,
   birmingham = list(
     events_modelled = uniqueN(card$event_id),
     events_in_programme = 44L,
