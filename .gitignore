@@ -11,6 +11,11 @@ data/*
 # It is small, reviewable, and every "% of world record" on the site is wrong
 # without it — so it belongs in git.
 !data/world_records.csv
+# Same class: the forward athletics calendar is hand-maintained and CANNOT be
+# regenerated. competition_catalogue.parquet is built from harvested history, so
+# it structurally cannot hold a meet that has not happened yet — which is the
+# whole reason this file exists. Losing it means retyping every meet.
+!data/athletics_calendar.csv
 
 # Blog export staging dir — build artefacts, republished on every run
 blog/
