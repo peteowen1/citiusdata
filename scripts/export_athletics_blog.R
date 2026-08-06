@@ -112,7 +112,13 @@ manifest <- list(
       "Heat counts are derived, not official: Technical Delegates publish them with the start lists.",
       "Advancement assumes a seeded draw. The published draw cannot be ingested.",
       "Round-level no-marks and byes are not modelled.",
-      "Athletes with little history in an event carry wider uncertainty, which raises their win probability.")))
+      # This line said the OPPOSITE until 2026-08-06 -- "wider uncertainty,
+      # which raises their win probability" -- which was an assumption, and
+      # measuring it refuted it. Within an event, sigma correlates -0.245 with
+      # race count: few races produces a SMALLER spread, so such an athlete
+      # looks more consistent than the evidence can support. Raising their
+      # uncertainty in fact LOWERS their win probability. See NEXT-STEPS.
+      "An athlete with few races in an event can look more consistent than the evidence supports, which can overstate their chances.")))
 write_json(manifest, file.path(BLOG, "athletics-manifest.json"),
            auto_unbox = TRUE, pretty = TRUE, na = "null")
 
