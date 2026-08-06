@@ -68,34 +68,24 @@ card <- pred[, intersect(KEEP, names(pred)), with = FALSE]
 card[, meet_id := "birmingham2026"]
 
 # --- predicted mark -----------------------------------------------------------
-# perf = orientation * log(mark), and orientation is +/-1, so the inverse is
-# exp(ability * orientation). Formatted HERE rather than in the page: the page
-# would otherwise need the registry's orientation and the seconds/metres/points
-# distinction, and a second implementation is a second thing to get wrong.
+# Formatted HERE rather than in the page: the page would otherwise need the
+# registry's orientation and the seconds/metres/points distinction, and a second
+# implementation is a second thing to get wrong.
 #
-# Verified against known athletes before shipping: Duplantis 6.03 m, Mahuchikh
-# 1.98 m, Skotheim 8,813 pts, a 2:08:29 marathon, a 1:56.3 800m.
+# The formatter now lives in the package as predicted_mark(), because the blog
+# shows a predicted mark in TWO places — this per-event card and the evergreen
+# athlete ratings table — and the same athlete printing two different times on
+# two pages reads as the site being wrong. One implementation, both exports.
+# Its round-trip against Duplantis 6.03 m, Mahuchikh 1.98 m, Skotheim 8,813 pts,
+# a 2:08:29 marathon and a 1:56.3 800m is asserted in the package tests.
 #
 # This is a TYPICAL mark, not a peak. The model forecasts a recency-weighted
 # average and a championship final is closer to an athlete's best day, so these
 # read slightly slow by design. The page says so.
 orient <- as.data.table(citius_events())[, .(event_id, orientation, family)]
 card <- merge(card, orient, by = "event_id", all.x = TRUE)
-card[, pred_value := exp(ability * orientation)]
-fmt_mark <- function(v, o) {
-  if (!is.finite(v)) return(NA_character_)
-  if (o < 0) {
-    if (v < 60)   return(sprintf("%.2f", v))
-    if (v < 3600) return(sprintf("%d:%05.2f", as.integer(v %/% 60), v %% 60))
-    return(sprintf("%d:%02d:%02d", as.integer(v %/% 3600),
-                   as.integer((v %% 3600) %/% 60), as.integer(round(v %% 60))))
-  }
-  if (v > 1000) return(format(round(v), big.mark = ","))
-  sprintf("%.2f", v)
-}
-card[, pred_mark := mapply(fmt_mark, pred_value, orientation)]
-card[, mark_unit := fifelse(orientation < 0, "", fifelse(pred_value > 1000, "pts", "m"))]
-card[, c("orientation", "family", "pred_value") := NULL]
+card[, c("pred_mark", "mark_unit") := predicted_mark(ability, orientation)]
+card[, c("orientation", "family") := NULL]
 stopifnot("every predicted mark must format" = !any(is.na(card$pred_mark)))
 cli::cli_alert_success("Predicted marks formatted for all {nrow(card)} rows.")
 
