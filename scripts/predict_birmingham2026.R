@@ -95,6 +95,26 @@ stopifnot(
 cli::cli_alert_info(
   "History: {format(nrow(past), big.mark = ',')} row{?s}, {min(past$date)} to {max(past$date)}.")
 
+# --- collapse split identities BEFORE estimating ability ----------------------
+# resolve_birmingham_athletes.R keeps EVERY id whose birthdate matches, because
+# several matching ids means one athlete split across ids and the right answer
+# is the union of their history. That union has to happen HERE: estimate_ability()
+# groups by the raw corpus athlete_id, so without this a split athlete produces
+# two independent rows, both enter the field, and simulate_rounds() races the
+# same person against themselves -- inflating the field and diluting everyone
+# else, with each fragment carrying only half the evidence.
+#
+# Latent rather than live on this run (every entry resolved to exactly one id),
+# which is precisely why it needs the assertion below rather than a comment.
+alias <- ids[, .(canonical = athlete_id, aid = all_ids)][, .(aid = unlist(aid)), by = canonical]
+alias <- unique(alias[as.character(aid) != as.character(canonical)])
+if (nrow(alias)) {
+  past[, athlete_id := as.character(athlete_id)]
+  past[alias, on = c(athlete_id = "aid"), athlete_id := i.canonical]
+  cli::cli_alert_info(
+    "Merged {nrow(alias)} secondary athlete id{?s} into their canonical id before estimating ability.")
+}
+
 ability <- deployed_ability(past, as_of = CUT, calibration = calibration)
 
 # --- publication guards -------------------------------------------------------
@@ -175,6 +195,15 @@ for (ev in events) {
   res[[length(res) + 1L]] <- sim
 }
 pred <- rbindlist(res, fill = TRUE)
+
+# One athlete cannot appear twice in the same event. If the alias collapse above
+# ever fails to catch a split identity, this is where it shows up -- and it must
+# fail here, loudly, rather than reach a page as two ghost competitors.
+dup <- pred[, .N, by = .(event_id, athlete_id)][N > 1]
+if (nrow(dup)) {
+  print(dup)
+  cli::cli_abort("{nrow(dup)} athlete{?s} appear{?s/} more than once in an event.")
+}
 
 if (length(skipped)) {
   sk <- rbindlist(skipped)

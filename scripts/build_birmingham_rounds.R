@@ -63,17 +63,37 @@ TWO   <- c("1500 Metres", "3000 Metres Steeplechase")
 FIELD <- c("High Jump", "Pole Vault", "Long Jump", "Triple Jump",
            "Shot Put", "Discus Throw", "Hammer Throw", "Javelin Throw")
 
+# Straight finals, named EXPLICITLY rather than inferred as "whatever is left".
+# That distinction is the whole point: `shape_of()` cannot return NA, so an
+# `is.na()` assertion on its output is a tautology, and any discipline whose
+# spelling drifts from these lists -- a hyphen, "3000m" for "3000 Metres", a
+# casing change in a re-published PDF -- would silently fall through to a
+# one-round straight final. The structure CSV would then be wrong, and
+# sanity_birmingham_card.R could not see it because it derives its expectation
+# from this same table. Unknown must ABORT, never default.
+KNOWN_SINGLE <- c("5000 Metres", "10,000 Metres", "Marathon",
+                  "Half Marathon Race Walk", "Decathlon", "Heptathlon")
+
 shape_of <- function(disc) {
   if (disc %in% THREE) "track3"
   else if (disc %in% TWO) "track2"
   else if (disc %in% FIELD) "field2"
-  else "single"          # 5000, 10,000, marathon, race walks, combined events
+  else if (disc %in% KNOWN_SINGLE) "single"
+  else NA_character_
 }
 fld[, shape := vapply(discipline, shape_of, character(1))]
 
+unknown <- fld[is.na(shape)]
+if (nrow(unknown)) {
+  print(unknown[, .(discipline, sex, field)])
+  cli::cli_abort(c(
+    "{nrow(unknown)} discipline{?s} match{?es/} no known round shape.",
+    i = "Add it to THREE / TWO / FIELD / KNOWN_SINGLE after checking the published timetable.",
+    i = "Do NOT let it default: an unrecognised event would be modelled as a straight final."))
+}
+
 cli::cli_h2("Shape, from the published timetable")
 print(fld[, .(events = .N), by = shape][order(-events)])
-stopifnot("every modellable event must have a shape" = !any(is.na(fld$shape)))
 
 # --- counts, derived ----------------------------------------------------------
 LANES <- 8L
@@ -131,9 +151,30 @@ s[, `:=`(shape_source = "official_timetable", counts_source = "derived")]
 # A structure that lets fewer athletes through than the next round seats, or
 # more, produces advancement probabilities that cannot be right. Check it.
 chk <- s[!is.na(advance), .(through = advance * races + fastest_losers), by = .(event_id, round_index)]
-nxt <- s[, .(event_id, round_index, races, seats = fifelse(round == "Final", 8L, races * LANES))]
-cmp <- merge(chk, nxt[, .(event_id, round_index = round_index - 1L, next_races = races)],
-             by = c("event_id", "round_index"))
+# Join each non-final round to the round it FEEDS, and check the count actually
+# matches that round's capacity. This comparison was previously computed into an
+# unused variable, so the invariant it describes was never enforced: it passed
+# only because split_adv()'s target happens to be the next stage's capacity by
+# construction. A new discipline shape or an edited LANES/semis constant would
+# have gone through silently, corrupting every advancement probability.
+nxt <- s[, .(event_id, feeds = round_index - 1L, races, is_final = round == "Final")]
+cmp <- merge(chk, nxt, by.x = c("event_id", "round_index"), by.y = c("event_id", "feeds"))
+# A multi-race next round is lane-bound, so its capacity is exact. A final is
+# not lane-bound (distance finals seat 14, field finals 12), so only sanity-bound it.
+lane_bound <- cmp[is_final == FALSE]
+if (nrow(lane_bound)) {
+  off <- lane_bound[through != races * LANES]
+  if (nrow(off)) { print(off); cli::cli_abort(
+    "{nrow(off)} round{?s} advance a number that does not fill the next round's lanes.") }
+}
+finals <- cmp[is_final == TRUE]
+if (nrow(finals)) {
+  off <- finals[through < 6L | through > 30L]
+  if (nrow(off)) { print(off); cli::cli_abort("{nrow(off)} final{?s} seat an implausible number.") }
+}
+cli::cli_alert_success(
+  "Round capacities consistent: {nrow(lane_bound)} lane-bound handover{?s}, {nrow(finals)} final{?s}.")
+
 bad <- s[!is.na(advance) & (advance < 1L | fastest_losers < 0L)]
 stopifnot("every non-final round must advance at least one per race" = !nrow(bad))
 stopifnot("qualifiers must never exceed the field" =

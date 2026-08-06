@@ -57,8 +57,21 @@ cand <- champs[!is.na(athlete_name) & !is.na(aid),
                .(bd = bd[which(!is.na(bd))[1]], n_all = .N), by = .(key = norm(athlete_name), aid)]
 # One string, not two: cli_alert_info()'s second positional argument is `id`,
 # not more message, so a split message silently drops its second half.
+bd_cov <- mean(!is.na(cand$bd))
 cli::cli_alert_info(
-  "{format(nrow(cand), big.mark = ',')} name-id candidates; birthdate present on {round(100*mean(!is.na(cand$bd)))}%.")
+  "{format(nrow(cand), big.mark = ',')} name-id candidates; birthdate present on {round(100*bd_cov)}%.")
+# GATE, not just a report. If `birthdate` is ever renamed or reformatted upstream
+# in championship_results.rds, every entrant silently falls through to the
+# most-event-history fallback -- which is the coin-toss-over-a-whole-career
+# failure this script exists to eliminate. Reported-but-ungated is not enough
+# during a hand-run meet where nobody is obliged to read the console.
+# Measured 68.1% on the 2026-07-31 corpus; 30% is a floor, not a target.
+if (!is.finite(bd_cov) || bd_cov < 0.30) {
+  cli::cli_abort(c(
+    "Birthdate coverage is {round(100*bd_cov, 1)}% - too low to disambiguate on.",
+    i = "Check `birthdate` in championship_results.rds. Without it every entry
+         falls back to most-event-history, which is what this script replaced."))
+}
 
 # History per (id, event), for the rule-3 fallback.
 ev_hist <- champs[!is.na(event_id), .(n_ev = .N), by = .(aid, event_id)]

@@ -44,18 +44,32 @@ say <- function(ok, msg) {
 # repo has shipped before, so the inputs are verified to EXIST first. These are
 # stopifnot, not say(): if they fail the checks below are meaningless rather
 # than failing, and should not print at all.
+# `counts_source` and `field_modelled` are in this list because the checks that
+# read them use `all(...)` and `x != y` shapes: on a MISSING column those become
+# `all(logical(0))` (TRUE) and a zero-row filter, so both would pass vacuously if
+# a future edit stopped stamping them.
 NEEDED <- c("p_gold", "p_medal", "p_final", "ability", "athlete", "nation",
-            "event_id", "config", "cutoff", "generated_at")
+            "event_id", "config", "cutoff", "generated_at",
+            "counts_source", "field_modelled", "combined_rows_excluded")
 stopifnot(
   "prediction file is empty" = nrow(p) > 0L,
   "no events in the prediction file" = uniqueN(p$event_id) > 0L,
   "columns the checks read are missing" = all(NEEDED %in% names(p)))
-for (col in c("p_gold", "p_medal", "p_final", "ability")) {
-  cov <- mean(is.finite(p[[col]]))
-  if (cov < 0.5) stop(sprintf(
-    "`%s` is finite for only %.1f%% of rows -- checks reading it would pass vacuously",
-    col, 100 * cov))
+# The probability columns must be finite on EVERY row, not merely on most. A
+# 50%-finite floor stops the wholly-vacuous case but still lets an ordering
+# violation hide: `p[p_gold > p_medal, .N]` drops NA rows from the match rather
+# than counting them, so a violation confined to an NA-heavy subset reports PASS.
+# `ability` keeps the softer floor -- it is an anchor input, not a published
+# number, and an athlete can legitimately lack one.
+for (col in c("p_gold", "p_medal", "p_final")) {
+  n_bad <- sum(!is.finite(p[[col]]))
+  if (n_bad > 0L) stop(sprintf(
+    "`%s` is NA or non-finite on %d row(s) -- the ordering checks would skip exactly those rows and still print PASS",
+    col, n_bad))
 }
+cov_ab <- mean(is.finite(p$ability))
+if (cov_ab < 0.5) stop(sprintf(
+  "`ability` is finite for only %.1f%% of rows -- the ranking anchor would pass vacuously", 100 * cov_ab))
 
 cat("card generated:", as.character(unique(p$generated_at))[1],
     "| cutoff:", as.character(unique(p$cutoff))[1],
@@ -83,6 +97,16 @@ cat("\n2. probabilities nest\n")
 say(p[p_gold > p_medal + 1e-9, .N] == 0, "p_gold <= p_medal everywhere")
 say(p[p_medal > p_final + 1e-9, .N] == 0, "p_medal <= p_final everywhere")
 if ("p_reach_r2" %in% names(p)) {
+  # A coverage floor scoped to MULTI-ROUND events. Without it this check is the
+  # one place the vacuous-guard pattern survives: `!is.na(p_reach_r2)` means an
+  # all-NA column matches zero rows and prints PASS, and because straight finals
+  # legitimately have no round 2, a total collapse is indistinguishable by eye
+  # from correct behaviour.
+  multi <- st[, .(n_rounds = max(round_index)), by = event_id][n_rounds > 1]
+  need <- p[event_id %in% multi$event_id]
+  say(nrow(need) > 0 && mean(is.finite(need$p_reach_r2)) > 0.95,
+      sprintf("p_reach_r2 is populated on %.1f%% of the %d multi-round rows",
+              100 * mean(is.finite(need$p_reach_r2)), nrow(need)))
   say(p[!is.na(p_reach_r2) & p_final > p_reach_r2 + 1e-9, .N] == 0,
       "p_final <= p_reach_r2 everywhere a round 2 exists")
 }
@@ -161,9 +185,15 @@ say("combined_rows_excluded" %in% names(p),
     "the artefact records how many combined-event rows were excluded")
 if ("combined_rows_excluded" %in% names(p)) {
   n_ex <- unique(p$combined_rows_excluded)
-  say(length(n_ex) == 1L && is.finite(n_ex[1]) && n_ex[1] > 0,
-      sprintf("%s combined-event row%s excluded from the history behind this card",
-              format(n_ex[1], big.mark = ","), if (isTRUE(n_ex[1] == 1)) "" else "s"))
+  # A bare `> 0` floor is not enough. If the "Combined" round label changes for
+  # MOST but not all rows, the exclusion partly stops working, contamination
+  # returns to the measured spread, and a count of 12 still clears zero. The
+  # measured share on this corpus is 5.44%, so bound the magnitude, not just the
+  # sign. Rebuild the corpus and this range may legitimately need revisiting —
+  # that is a deliberate prompt to re-measure, not a nuisance.
+  say(length(n_ex) == 1L && is.finite(n_ex[1]) && n_ex[1] >= 100000 && n_ex[1] <= 400000,
+      sprintf("%s combined-event rows excluded (expected 100k-400k; measured share 5.44%%)",
+              format(n_ex[1], big.mark = ",")))
 }
 
 cat(sprintf("\n%s -- %d check%s failed\n", if (fails == 0L) "ALL CHECKS PASSED" else "FAILURES",
