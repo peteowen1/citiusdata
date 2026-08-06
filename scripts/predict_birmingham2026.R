@@ -54,6 +54,40 @@ past <- past[is.na(competition_id) | competition_id != BIRMINGHAM]
 if (n_before != nrow(past)) {
   cli::cli_alert_warning("Removed {n_before - nrow(past)} row{?s} from the meet being forecast.")
 }
+
+# --- combined-event contamination --------------------------------------------
+# A decathlon 100m and a standalone 100m share an event_id. NEXT-STEPS logs this
+# ("nothing excludes them, so they inflate the standalone event's measured
+# spread"); measured over exactly this history window it is 230,458 rows, 5.44%,
+# and combined marks sit 1.6 SDs worse on average. Including them inflates the
+# measured spread by a median 10.6% and up to 27.3% in the men's discus.
+#
+# That spread is what the simulator converts into win probability, so this is
+# not cosmetic. `round` carries "Combined", which is the only thing that
+# distinguishes them.
+#
+# The combined events THEMSELVES keep their rows: AT-Decathlon-M and
+# AT-Heptathlon-W are scored on points under their own event_id, and a
+# decathlete forecast in the decathlon is not affected by this at all.
+#
+# Cost, measured before applying: 13 of 5,051 entrant athlete-events lose all
+# their history (0.26%) and fall back to the field prior, which is the designed
+# behaviour for an athlete with no usable evidence.
+COMBINED_OWN <- c("AT-Decathlon-M", "AT-Heptathlon-W")
+if (!"round" %in% names(past)) {
+  cli::cli_abort("History has no `round` column; combined-event rows cannot be identified.")
+}
+is_comb <- grepl("Combined", past$round, ignore.case = TRUE) &
+           !past$event_id %in% COMBINED_OWN
+n_combined_excluded <- sum(is_comb)
+cli::cli_alert_warning(
+  "Excluding {format(n_combined_excluded, big.mark = ',')} combined-event row{?s} ({round(100*mean(is_comb), 2)}%) filed under standalone event ids.")
+past <- past[!is_comb]
+# The count is stamped onto the artefact below. The store itself is still
+# contaminated -- that is a corpus-level defect, not something this script can
+# fix -- so a check that reads the store will always find these rows. What must
+# be auditable is that THIS FORECAST excluded them, which only the artefact can
+# record.
 stopifnot(
   "history must not contain the competition being predicted" =
     !any(past$competition_id == BIRMINGHAM, na.rm = TRUE),
@@ -130,6 +164,14 @@ for (ev in events) {
   sim <- as.data.table(sim)
   sim[, `:=`(event_id = ev, n_rounds = length(structure_ev),
              field_modelled = nrow(ent))]
+  # Carry the ability estimate the simulation ran on. Two reasons: it is what
+  # the site's own rankings view needs, and it is the only thing the sanity
+  # script can anchor p_gold against -- simulate_rounds() returns probabilities
+  # and no predicted mark, so without this there is nothing to check the
+  # ordering against except itself.
+  keep_ab <- intersect(c("athlete_id", "ability", "sigma", "ability_se", "w_total"),
+                       names(ent))
+  sim <- merge(sim, ent[, ..keep_ab], by = "athlete_id", all.x = TRUE)
   res[[length(res) + 1L]] <- sim
 }
 pred <- rbindlist(res, fill = TRUE)
@@ -148,7 +190,8 @@ pred <- merge(pred, as.data.table(citius_events())[, .(event_id, discipline, sex
 pred[, `:=`(generated_at = Sys.time(), cutoff = CUT, meet = "birmingham2026",
             competition_id = BIRMINGHAM, field_type = "official_entry_list",
             half_life = DEPLOYED$half_life, config = DEPLOYED$stamp,
-            counts_source = "derived")]
+            counts_source = "derived",
+            combined_rows_excluded = n_combined_excluded)]
 
 stamp <- format(Sys.time(), "%Y%m%dT%H%M%S")
 f <- file.path(D, paste0("birmingham2026_pretournament_", stamp, ".parquet"))
