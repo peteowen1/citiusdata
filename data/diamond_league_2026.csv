@@ -1,0 +1,33 @@
+discipline,sex,dl_group,qualifiers,lausanne,silesia,zurich,source
+100m,M,lane,8,FALSE,TRUE,FALSE,WA Book C-C1.3 Reg 4.2
+100m,W,lane,8,FALSE,TRUE,TRUE,WA Book C-C1.3 Reg 4.2
+200m,M,lane_cond,8,TRUE,FALSE,TRUE,WA Book C-C1.3 Reg 4.2 (top 7 if final has 8 lanes)
+200m,W,lane_cond,8,TRUE,FALSE,FALSE,WA Book C-C1.3 Reg 4.2 (top 7 if final has 8 lanes)
+400m,M,lane_cond,8,FALSE,TRUE,FALSE,WA Book C-C1.3 Reg 4.2 (top 7 if final has 8 lanes)
+400m,W,lane_cond,8,FALSE,TRUE,FALSE,WA Book C-C1.3 Reg 4.2 (top 7 if final has 8 lanes)
+800m,M,lane,8,TRUE,FALSE,FALSE,WA Book C-C1.3 Reg 4.2
+800m,W,lane,8,TRUE,FALSE,TRUE,WA Book C-C1.3 Reg 4.2
+1500m/Mile,M,distance,10,FALSE,TRUE,TRUE,WA Book C-C1.3 Reg 4.2
+1500m/Mile,W,distance,10,FALSE,TRUE,FALSE,WA Book C-C1.3 Reg 4.2
+3000m/5000m,M,distance,10,TRUE,FALSE,TRUE,WA Book C-C1.3 Reg 4.2
+3000m/5000m,W,distance,10,FALSE,TRUE,FALSE,WA Book C-C1.3 Reg 4.2
+3000m SC,M,distance,10,FALSE,TRUE,FALSE,WA Book C-C1.3 Reg 4.2
+3000m SC,W,distance,10,TRUE,FALSE,TRUE,WA Book C-C1.3 Reg 4.2
+110mH,M,lane,8,FALSE,TRUE,FALSE,WA Book C-C1.3 Reg 4.2
+100mH,W,lane,8,TRUE,FALSE,TRUE,WA Book C-C1.3 Reg 4.2
+400mH,M,lane_cond,8,FALSE,TRUE,TRUE,WA Book C-C1.3 Reg 4.2 (top 7 if final has 8 lanes)
+400mH,W,lane_cond,8,TRUE,FALSE,TRUE,WA Book C-C1.3 Reg 4.2 (top 7 if final has 8 lanes)
+High Jump,M,field,6,FALSE,TRUE,FALSE,WA Book C-C1.3 Reg 4.2
+High Jump,W,field,6,FALSE,TRUE,TRUE,WA Book C-C1.3 Reg 4.2
+Pole Vault,M,field,6,TRUE,FALSE,FALSE,WA Book C-C1.3 Reg 4.2
+Pole Vault,W,field,6,TRUE,FALSE,TRUE,WA Book C-C1.3 Reg 4.2
+Long Jump,M,field,6,TRUE,FALSE,TRUE,WA Book C-C1.3 Reg 4.2
+Long Jump,W,field,6,FALSE,TRUE,FALSE,WA Book C-C1.3 Reg 4.2
+Triple Jump,M,field,6,TRUE,FALSE,FALSE,WA Book C-C1.3 Reg 4.2
+Triple Jump,W,field,6,FALSE,TRUE,FALSE,WA Book C-C1.3 Reg 4.2
+Shot Put,M,field,6,FALSE,FALSE,TRUE,WA Book C-C1.3 Reg 4.2
+Shot Put,W,field,6,FALSE,FALSE,FALSE,WA Book C-C1.3 Reg 4.2
+Discus Throw,M,field,6,FALSE,TRUE,FALSE,WA Book C-C1.3 Reg 4.2
+Discus Throw,W,field,6,FALSE,FALSE,FALSE,WA Book C-C1.3 Reg 4.2
+Javelin Throw,M,field,6,TRUE,FALSE,TRUE,WA Book C-C1.3 Reg 4.2
+Javelin Throw,W,field,6,TRUE,FALSE,FALSE,WA Book C-C1.3 Reg 4.2
