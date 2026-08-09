@@ -68,11 +68,24 @@ fetch_entry_list <- function(url, path) {
         "Could not download the entry list, and there is no cached copy.",
         i = "Nothing downstream can be trusted without it, so this stops here."))
     }
+    # Abort rather than continue on the cache. Warning and carrying on was the
+    # first version of this, and it did not survive contact with the
+    # orchestrator: run_meet.ps1 discarded a successful step's output, so the
+    # warning was invisible on the normal path and the card published from a
+    # possibly stale roster under a fresh stamp -- the failure this whole change
+    # was meant to close, reintroduced one layer up.
+    #
+    # This file's chain aborts on the first failing step by design ("a partial
+    # run that uploads is worse than no run at all"), and "I cannot confirm the
+    # roster is current" belongs in that category. The deliberate escape hatch
+    # already exists and is explicit in the command line: -SkipEntries.
     age <- round(as.numeric(difftime(Sys.time(), file.mtime(path), units = "days")), 1)
-    cli::cli_alert_danger(c(
-      "Entry-list download FAILED - continuing on the CACHED copy, {age} day{?s} old. ",
-      "Treat every entry, round count and advancement probability below as that old."))
-    return(invisible(FALSE))
+    cli::cli_abort(c(
+      "Could not download the entry list; the cached copy is {age} day{?s} old.",
+      i = "Continuing would build a card from a possibly stale roster and publish
+           it under a fresh timestamp.",
+      i = "Re-run when the source is reachable, or pass -SkipEntries to
+           run_meet.ps1 to accept the cached list deliberately."))
   }
 
   if (file.exists(path) &&

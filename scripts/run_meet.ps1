@@ -110,6 +110,21 @@ try {
       Fail "$($s.f) exited $code. Nothing was published beyond this point."
     }
     Write-Host ("`r  {0,-20} ok  {1,6}s" -f $s.n, $sec) -ForegroundColor Green
+
+    # A step can succeed and still have something urgent to say. $out holds the
+    # step's merged stdout+stderr, and it used to be printed ONLY when the exit
+    # code was nonzero -- so every cli_alert_danger/warning from a step that
+    # exited 0 was discarded, and the operator saw a bare green "ok".
+    #
+    # That silently defeated citiusdata#8: when the entry-list download fails
+    # and the run continues on a cached PDF, parse_birmingham_entries.R says so
+    # loudly and exits 0. Through this orchestrator nobody would ever have seen
+    # it, and the card would publish under a fresh stamp built from a stale
+    # roster -- the precise failure this file's header is about.
+    $notes = $out | Where-Object { $_ -match '^\s*(x|!|✖|⚠)\s' -or $_ -match 'FAILED|STALE|CACHED' }
+    if ($notes) {
+      foreach ($n in $notes) { Write-Host ("      $n") -ForegroundColor Yellow }
+    }
   }
 
   $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
