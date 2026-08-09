@@ -526,11 +526,23 @@ names_lk <- unique(clean_all[!is.na(athlete_name),
                              .(athlete_id = as.character(athlete_id), athlete_name)]
                    )[, .(athlete_name = athlete_name[1]), by = athlete_id]
 ratings <- merge(ratings, names_lk, by = "athlete_id", all.x = TRUE)
-ratings <- merge(ratings, citius_events()[, .(event_id, sport, discipline, sex)],
+ratings <- merge(ratings, citius_events()[, .(event_id, sport, discipline, sex, orientation)],
                  by = "event_id", all.x = TRUE)
+
+# The rating in raw form is a log-scale number nobody can read. The mark it
+# implies is the same quantity in units a reader already knows — "9.84" needs no
+# explaining, "+3.57 standard deviations" does. Same package formatter as the
+# per-event card, so an athlete cannot show one time on the meet page and a
+# different one here.
+#
+# It is a TYPICAL mark, not a peak: the ability is a recency-weighted average, so
+# it reads slightly slow against a championship final. The column tooltip says so.
+ratings[, c("pred_mark", "mark_unit") := predicted_mark(ability, orientation)]
+ratings[, orientation := NULL]
+
 RATING_COLS <- c("athlete_id", "athlete_name", "event_id", "sport", "discipline", "sex",
-                 "ability", "ability_se", "z", "pct_best", "pct_wr", "n", "w_total",
-                 "n_event", "last_date")
+                 "ability", "ability_se", "z", "pct_best", "pct_wr", "pred_mark",
+                 "mark_unit", "n", "w_total", "n_event", "last_date")
 for (nm in setdiff(RATING_COLS, names(ratings))) ratings[, (nm) := NA]
 ratings <- ratings[, ..RATING_COLS]
 ratings[, `:=`(as_of = AS_OF, generated_at = NOW)]
