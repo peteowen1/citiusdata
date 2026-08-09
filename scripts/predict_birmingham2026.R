@@ -258,13 +258,21 @@ setorder(proj, -exp_medals)
 proj[, `:=`(meet = "birmingham2026", generated_at = Sys.time(),
             scope = "model", events_scored = uniqueN(pred$event_id),
             n_sims = N_SIMS)]
-arrow::write_parquet(proj, file.path(D, "birmingham2026_nations.parquet"))
-
+# Validate BEFORE writing, the way the duplicate-athlete check above does
+# (citiusdata#9). These two lines used to be the other way round, and the order
+# is the whole difference between a failure and a silent one: a tripped
+# invariant would abort -- but only after the bad table had already overwritten
+# the last good copy on disk. export_athletics_blog.R then checks that
+# nations.parquet EXISTS, never that it is sound, so a later export publishes it
+# under a fresh manifest stamp. The script exits non-zero and the site still
+# ends up serving the corrupt medal table.
 stopifnot(
   "expected golds must sum to the number of events" =
     abs(sum(proj$exp_golds) - uniqueN(pred$event_id)) < 0.01,
   "expected medals must sum to three per event" =
     abs(sum(proj$exp_medals) - 3 * uniqueN(pred$event_id)) < 0.05)
+arrow::write_parquet(proj, file.path(D, "birmingham2026_nations.parquet"))
+
 cli::cli_alert_success(
   "Nation projection: {nrow(proj)} nation{?s}; expected golds sum to {round(sum(proj$exp_golds), 2)}, medals to {round(sum(proj$exp_medals), 2)}.")
 print(head(proj[, .(nation, exp_golds = round(exp_golds, 2),
