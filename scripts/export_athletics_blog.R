@@ -113,6 +113,33 @@ if (!file.exists(nat_f)) {
 }
 nations <- setDT(as.data.frame(read_parquet(nat_f)))
 
+# citiusdata#9. predict_birmingham2026.R writes the card's source rds and this
+# nations table in the SAME run, seconds apart. If their stamps are far apart,
+# this export is about to publish a nations table from a different, older
+# simulation alongside a fresh card -- two views of one run that disagree,
+# under a single "as at". Nothing downstream could catch it: the only existing
+# check is that the file exists.
+card_stamp <- max(pred$generated_at)
+nat_stamp  <- max(nations$generated_at)
+prov_gap   <- as.numeric(difftime(nat_stamp, card_stamp, units = "mins"))
+if (!is.finite(prov_gap) || abs(prov_gap) > 10) {
+  cli::cli_abort(c(
+    "nations.parquet is not from the same predict run as the card - nothing published.",
+    i = "card {format(card_stamp)}, nations {format(nat_stamp)}, {round(abs(prov_gap))} min apart.",
+    i = "Re-run predict_birmingham2026.R so both come from one simulation."))
+}
+
+# Stamped like every other artefact. `generated_at` here means WHEN THIS WAS
+# PUBLISHED -- the convention the other four already follow, and what the site
+# renders its "as at" from. nations was the only one left out, so the section
+# dated one table differently from the rest for no reason a reader could act on.
+#
+# The provenance gate above is what makes stamping it safe. On its own, writing
+# NOW over this column would do the opposite of what it looks like: it would
+# erase the only evidence that the table came from an older run, hiding exactly
+# the staleness the column exists to reveal.
+nations[, generated_at := NOW]
+
 artefacts <- list(
   "calendar.parquet"                    = cal,
   "birmingham2026-predictions.parquet"  = card,
