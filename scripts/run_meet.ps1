@@ -78,29 +78,47 @@ if ([datetime]$meet.prediction_cutoff -ge [datetime]$meet.date_start) {
 if ($SkipUpload) { $env:CITIUS_SKIP_UPLOAD = "1" }
 else { Remove-Item Env:\CITIUS_SKIP_UPLOAD -ErrorAction SilentlyContinue }
 
-$t0 = Get-Date
-foreach ($s in $STEPS) {
-  if ($s.optional) { Write-Host ("  {0,-20} skipped" -f $s.n) -ForegroundColor DarkGray; continue }
-  $path = Join-Path $SCRIPTS $s.f
-  if (-not (Test-Path $path)) { Fail "missing script: $($s.f)" }
-  $st = Get-Date
-  Write-Host ("  {0,-20} running..." -f $s.n) -NoNewline
-  $out = & Rscript $path 2>&1
-  $code = $LASTEXITCODE
-  $sec = [math]::Round(((Get-Date) - $st).TotalSeconds, 1)
-  if ($code -ne 0) {
-    Write-Host ("`r  {0,-20} FAILED after {1}s" -f $s.n, $sec) -ForegroundColor Red
-    Write-Host ""
-    $out | Select-Object -Last 25 | ForEach-Object { Write-Host "    $_" }
-    Fail "$($s.f) exited $code. Nothing was published beyond this point."
+# try/finally, because the cleanup at the bottom used to be an ordinary last
+# line and so only ran when every step succeeded (citiusdata#9). Fail() calls
+# exit, and $ErrorActionPreference = "Stop" makes any unhandled error
+# terminating, so a -SkipUpload run that aborted midway left
+# CITIUS_SKIP_UPLOAD set in the environment.
+#
+# That is only inert while this is launched as `pwsh run_meet.ps1`, where the
+# variable dies with the child process. Dot-source it, or run it in an already
+# open session, and the leak persists -- and the abort message on
+# export_athletics_blog.R invites exactly that ("Run it directly to see which
+# check failed"). The next export in that session would then quietly write
+# local files and upload nothing, reporting success. A publish that silently
+# publishes nothing is the same class of failure as one that publishes stale
+# numbers: it looks like it worked.
+try {
+  $t0 = Get-Date
+  foreach ($s in $STEPS) {
+    if ($s.optional) { Write-Host ("  {0,-20} skipped" -f $s.n) -ForegroundColor DarkGray; continue }
+    $path = Join-Path $SCRIPTS $s.f
+    if (-not (Test-Path $path)) { Fail "missing script: $($s.f)" }
+    $st = Get-Date
+    Write-Host ("  {0,-20} running..." -f $s.n) -NoNewline
+    $out = & Rscript $path 2>&1
+    $code = $LASTEXITCODE
+    $sec = [math]::Round(((Get-Date) - $st).TotalSeconds, 1)
+    if ($code -ne 0) {
+      Write-Host ("`r  {0,-20} FAILED after {1}s" -f $s.n, $sec) -ForegroundColor Red
+      Write-Host ""
+      $out | Select-Object -Last 25 | ForEach-Object { Write-Host "    $_" }
+      Fail "$($s.f) exited $code. Nothing was published beyond this point."
+    }
+    Write-Host ("`r  {0,-20} ok  {1,6}s" -f $s.n, $sec) -ForegroundColor Green
   }
-  Write-Host ("`r  {0,-20} ok  {1,6}s" -f $s.n, $sec) -ForegroundColor Green
-}
 
-$mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
-Write-Host ""
-Write-Host "  Done in $mins min." -ForegroundColor Green
-if (-not $SkipUpload) {
-  Write-Host "  Published. Verify: https://pub-ee4bf5b599a047f9ac2b9facc1587008.r2.dev/athletics/athletics-manifest.json"
+  $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
+  Write-Host ""
+  Write-Host "  Done in $mins min." -ForegroundColor Green
+  if (-not $SkipUpload) {
+    Write-Host "  Published. Verify: https://pub-ee4bf5b599a047f9ac2b9facc1587008.r2.dev/athletics/athletics-manifest.json"
+  }
 }
-Remove-Item Env:\CITIUS_SKIP_UPLOAD -ErrorAction SilentlyContinue
+finally {
+  Remove-Item Env:\CITIUS_SKIP_UPLOAD -ErrorAction SilentlyContinue
+}
