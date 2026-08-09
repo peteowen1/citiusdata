@@ -28,6 +28,16 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# Native stdout/stderr captured by `& Rscript ... 2>&1` is decoded with
+# [Console]::OutputEncoding, NOT $OutputEncoding -- two different properties,
+# and the usual trap. On a box left on the OEM codepage (chcp 437) cli's danger
+# marker arrives as mojibake ("Γ£ø") instead of U+2716, so the alert filter
+# below silently matches nothing on exactly the lines that matter most. It is
+# fine on a UTF-8 console, which is why this is easy to miss: it depends on the
+# machine, not the code. Pin it so the filter cannot quietly stop working.
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 $VERSE   = "C:\dev\citiusverse"
 $SCRIPTS = Join-Path $VERSE "citiusdata\scripts"
 $CAL     = Join-Path $VERSE "citiusdata\data\athletics_calendar.csv"
@@ -121,7 +131,16 @@ try {
     # loudly and exits 0. Through this orchestrator nobody would ever have seen
     # it, and the card would publish under a fresh stamp built from a stale
     # roster -- the precise failure this file's header is about.
-    $notes = $out | Where-Object { $_ -match '^\s*(x|!|✖|⚠)\s' -or $_ -match 'FAILED|STALE|CACHED' }
+    # Match ONLY cli's alert markers at the start of a line. An earlier version
+    # also matched the words FAILED/STALE/CACHED anywhere in a line, which was
+    # a guaranteed false positive: PowerShell's -match is case-insensitive, and
+    # sanity_birmingham_card.R ends every HEALTHY run with "ALL CHECKS PASSED
+    # -- 0 checks failed". So a clean run painted a yellow alarm line, every
+    # time. That is the same trust failure as the bug this is meant to fix,
+    # inverted -- an operator who sees yellow on every run stops reading yellow.
+    # A safety net woven from ordinary English words catches success prose by
+    # construction.
+    $notes = $out | Where-Object { $_ -match '^\s*(x|!|✖|⚠)\s' }
     if ($notes) {
       foreach ($n in $notes) { Write-Host ("      $n") -ForegroundColor Yellow }
     }
