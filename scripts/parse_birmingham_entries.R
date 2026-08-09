@@ -32,10 +32,69 @@ OUT     <- file.path(VERSE, "citiusdata", "data")
 PDF     <- file.path(OUT, "birmingham2026_entries.pdf")
 JSON    <- file.path(OUT, "birmingham2026_entries.json")
 
-if (!file.exists(PDF)) {
-  cli::cli_alert_info("Downloading final entries PDF.")
-  utils::download.file(PDF_URL, PDF, mode = "wb", quiet = TRUE)
+# citiusdata#8. This used to download only `if (!file.exists(PDF))`, which meant
+# that after the very first run the pipeline could never see a reissue of the
+# entry list. European Athletics republishes this file at the SAME url as
+# withdrawals and replacements land, and the ones that matter land closest to
+# the meet -- so the window where a re-run is most worth doing was exactly the
+# window where it could not work. Every later run re-derived the same card from
+# the same snapshot and stamped it with a fresh `generated_at`: not a stale
+# file, a stale file that looks fresh, which is the failure this whole chain
+# exists to prevent.
+#
+# It also made the re-run ritual unable to answer its own question. On 9 August
+# the card was rebuilt to pick up official start lists and the output was
+# compared against live to decide whether to publish -- "nothing changed" was
+# read as "the lists are not out yet", when it could not have said otherwise.
+#
+# Compare bytes rather than trusting headers: Last-Modified is advisory, and the
+# file is ~340 KB against the four minutes this chain spends downstream, so
+# fetching it every time costs nothing worth optimising.
+fetch_entry_list <- function(url, path) {
+  tmp <- tempfile(fileext = ".pdf")
+  code <- tryCatch(
+    suppressWarnings(utils::download.file(url, tmp, mode = "wb", quiet = TRUE)),
+    error = function(e) 1L)
+
+  # A directus error is served as an HTML page with a 200-ish shape, so "we got
+  # bytes" is not "we got the entry list". Check it is actually a PDF.
+  looks_pdf <- file.exists(tmp) && file.size(tmp) > 4L &&
+    identical(rawToChar(readBin(tmp, "raw", n = 4L)), "%PDF")
+  ok <- identical(as.integer(code), 0L) && looks_pdf
+
+  if (!ok) {
+    if (!file.exists(path)) {
+      cli::cli_abort(c(
+        "Could not download the entry list, and there is no cached copy.",
+        i = "Nothing downstream can be trusted without it, so this stops here."))
+    }
+    age <- round(as.numeric(difftime(Sys.time(), file.mtime(path), units = "days")), 1)
+    cli::cli_alert_danger(c(
+      "Entry-list download FAILED - continuing on the CACHED copy, {age} day{?s} old. ",
+      "Treat every entry, round count and advancement probability below as that old."))
+    return(invisible(FALSE))
+  }
+
+  if (file.exists(path) &&
+      identical(unname(tools::md5sum(tmp)), unname(tools::md5sum(path)))) {
+    cli::cli_alert_info("Entry list unchanged upstream since the last fetch.")
+    return(invisible(FALSE))
+  }
+
+  had_copy <- file.exists(path)
+  file.copy(tmp, path, overwrite = TRUE)
+  if (had_copy) {
+    cli::cli_alert_warning(c(
+      "Entry list has CHANGED upstream and has been refreshed. ",
+      "Round structure and every advancement probability may move -- ",
+      "this is the case a re-run exists for."))
+  } else {
+    cli::cli_alert_info("Downloaded the final entries PDF for the first time.")
+  }
+  invisible(TRUE)
 }
+
+fetch_entry_list(PDF_URL, PDF)
 
 txt <- pdftools::pdf_text(PDF)
 cli::cli_alert_info("{length(txt)} page{?s} of entry list.")
