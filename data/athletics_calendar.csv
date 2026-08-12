@@ -1,6 +1,6 @@
 meet_id,name,short_name,class,city,country,date_start,date_end,wa_competition_id,has_rounds,entry_list_method,prediction_cutoff,state,notes
 glasgow2026,Commonwealth Games,Glasgow 2026,commonwealth,Glasgow,GBR,2026-07-27,2026-08-02,7187518,TRUE,manual,2026-07-23,scored,Athletics 27 Jul - 1 Aug. Scored; pages live under /multisport/.
-birmingham2026,European Athletics Championships,Birmingham 2026,european_champs,Birmingham,GBR,2026-08-10,2026-08-16,7192415,TRUE,feed,2026-08-09,upcoming,44 individual events; 42 modellable. Marathon Race Walk has no registry event_id.
+birmingham2026,European Athletics Championships,Birmingham 2026,european_champs,Birmingham,GBR,2026-08-10,2026-08-16,7192415,TRUE,feed,2026-08-09,live,44 individual events; 42 modellable. Marathon Race Walk has no registry event_id. Scored daily via score_meet.R; 9 finals through 12 Aug.
 lausanne2026,Wanda Diamond League - Athletissima,Lausanne,diamond_league,Lausanne,SUI,2026-08-21,2026-08-21,,FALSE,none,2026-08-20,upcoming,14 disciplines. One-day meet; no rounds.
 silesia2026,Wanda Diamond League - Silesia,Silesia,diamond_league,Chorzow,POL,2026-08-23,2026-08-23,,FALSE,none,2026-08-22,upcoming,15 disciplines. One-day meet; no rounds.
 zurich2026,Wanda Diamond League - Weltklasse,Zurich,diamond_league,Zurich,SUI,2026-08-27,2026-08-27,,FALSE,none,2026-08-26,upcoming,14 disciplines. One-day meet; no rounds.
