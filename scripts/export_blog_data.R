@@ -385,6 +385,13 @@ HIST_COLS <- c("athlete_id", "athlete_name", "date", "event_id", "discipline",
                "wind", "tier", "venue_city", "age", "comp_name")
 who <- unique(c(as.character(results$athlete_id), as.character(pred$athlete_id)))
 who <- who[!is.na(who)]
+# DELIBERATELY championship_results, NOT the corpus -- do not "align" this with
+# the ratings source below. This read is for DISPLAY and needs `athlete_name`,
+# `mark_string`, `comp_name` and `venue_city`; the corpus carries none of them.
+# Line 390 fills any missing column with NA rather than erroring, so swapping
+# this would blank every athlete's name on every per-athlete page and nothing
+# would fail. The ratings table is model-facing and joins on athlete_id, which
+# is why it moved to the corpus and this did not.
 hist <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 hist <- hist[as.character(athlete_id) %in% who]
 for (nm in setdiff(HIST_COLS, names(hist))) hist[, (nm) := NA]
@@ -427,17 +434,31 @@ RATING_ACTIVE_DAYS <- 730          # "current" ratings, not an all-time archive
 # fallback ship silently.
 calibration <- deployed_calibration(OUT)
 
-# OPEN DECISION, deliberately not taken here: this table is still built from the
-# 308k competition harvest while the deployed calibration is fitted on the 4.99M
-# corpus. That is the mismatch METHODOLOGY.md warns about -- a parameter fitted
-# under one history applied under another.
+# RESOLVED 2026-08-13: the page is now built from the CORPUS, the same history
+# the deployed calibration is fitted on.
 #
-# It is left alone because swapping it is a PRODUCT change, not a model
-# promotion: the corpus would multiply the active population many times over,
-# and both published scales are computed within the active population, so `z`
-# and `pct_best` would shift for every athlete on the page. That is Pete's call,
-# not a silent side effect of promoting a calibration.
-clean_all <- flag_implausible(hist_src <- setDT(readRDS(file.path(OUT, "championship_results.rds"))))
+# The objection recorded here was that the corpus "would multiply the active
+# population many times over", shifting `z` and `pct_best` for every athlete.
+# MEASURED, and it does not: the 730-day active filter absorbs almost all of the
+# extra history, so the active population grows 425,769 -> 458,240 (+7.6%), the
+# 800m W field 14,504 -> 15,109, and z moves by ~0.00 for athletes near the top.
+# The stated reason not to do this was wrong by two orders of magnitude.
+#
+# What it buys is the reason to do it. Race keys are built differently in the two
+# sources -- championship_results shares 0 of 509,650 keys with the calibration,
+# the corpus shares 100% -- so `calibration$race` was UNJOINABLE on this page.
+# Fitted race effects cover 73.06% of the corpus's races, which is what lets a
+# tactically slow race be corrected rather than charged to the athlete. That is
+# the defect behind the Werro case; see
+# ../../docs/incidents/werro-underrated-2026-08-13.md.
+#
+# Age coverage also improves 76.5% -> 84.5%, which moves the aging item closer to
+# viable without settling it.
+#
+# NOTE the consequence for anyone comparing published tables across this date:
+# ranks move because the POPULATION moved, not only because the model did.
+CITIUS_RATINGS_SOURCE <- Sys.getenv("CITIUS_RATINGS_SOURCE", "athletics_corpus.rds")
+clean_all <- flag_implausible(hist_src <- setDT(readRDS(file.path(OUT, CITIUS_RATINGS_SOURCE))))
 clean_all <- clean_all[!is.na(event_id) & !is.na(perf)]
 AS_OF <- max(clean_all$date, na.rm = TRUE)
 ratings <- deployed_ability(clean_all, as_of = AS_OF, calibration = calibration)
