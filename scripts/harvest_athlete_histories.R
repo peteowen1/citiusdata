@@ -81,19 +81,28 @@ todo <- todo[seq_len(n)]
 cli::cli_alert_info("Fetching {n} athlete{?s} on {WORKERS} worker{?s}.")
 
 fetch_one <- function(id, sx, bd, cache) {
-  r <- tryCatch(athletics_athlete_results(id, sex = sx, birthdate = bd), error = function(e) NULL)
-  # An empty file records the miss so a rerun does not retry it forever. Each
-  # worker writes its own files, so no coordination is needed.
+  ok <- TRUE
+  r <- tryCatch(athletics_athlete_results(id, sex = sx, birthdate = bd),
+                error = function(e) { ok <<- FALSE; NULL })
+  # A fetch ERROR does not write a file at all, so the athlete is retried next
+  # run instead of being cached as a permanent miss -- caching an empty result
+  # for a request that never actually completed poisons the cache the same way
+  # an empty file poisons a "no results" case, except this one was never true.
+  if (!ok) return(list(n = 0L, failed = TRUE))
+  # A genuinely empty result IS cached, so a rerun does not retry it forever.
+  # Each worker writes its own files, so no coordination is needed.
   saveRDS(if (is.null(r)) data.table::data.table() else r,
           file.path(cache, paste0(id, ".rds")))
-  !is.null(r) && nrow(r) > 0
+  list(n = if (is.null(r)) 0L else nrow(r), failed = FALSE)
 }
 
+n_failed <- 0L
 t0 <- Sys.time()
 if (WORKERS <= 1L) {
   for (i in seq_len(n)) {
-    fetch_one(todo$aid[i], if (!is.na(todo$sex[i])) todo$sex[i] else NULL,
-              if (!is.na(todo$birthdate[i])) todo$birthdate[i] else NULL, CACHE)
+    res <- fetch_one(todo$aid[i], if (!is.na(todo$sex[i])) todo$sex[i] else NULL,
+                     if (!is.na(todo$birthdate[i])) todo$birthdate[i] else NULL, CACHE)
+    if (isTRUE(res$failed)) n_failed <- n_failed + 1L
   }
 } else {
   cl <- parallel::makeCluster(WORKERS)
@@ -121,8 +130,9 @@ if (WORKERS <= 1L) {
     idx <- chunks[[k]]
     got <- parallel::parLapply(cl, jobs[idx], function(j)
       fetch_one(j$id, j$sx, j$bd, CACHE))
+    n_failed <- n_failed + sum(vapply(got, function(g) isTRUE(g$failed), logical(1)))
     # A chunk that returns nothing usable is a failure, not a quiet success.
-    if (!any(unlist(got))) {
+    if (!any(vapply(got, function(g) !isTRUE(g$failed) && g$n > 0, logical(1)))) {
       cli::cli_alert_danger("Chunk {k} returned no data for any athlete - stopping.")
       break
     }
@@ -135,6 +145,9 @@ if (WORKERS <= 1L) {
 }
 
 cli::cli_alert_info("{remaining_after} athlete{?s} still to fetch - run again.")
+if (n_failed > 0L) {
+  cli::cli_alert_warning("{n_failed} fetch{?es} failed and were left uncached for retry.")
+}
 
 # Assembly is optional and OFF by default. At ~92 results per athlete a complete
 # sweep is ~8 million rows across 87k files; rbindlist-ing all of them every run
@@ -154,6 +167,11 @@ if (!identical(Sys.getenv("CITIUS_ASSEMBLE", "0"), "1")) {
   rm(parts); invisible(gc())
   if (nrow(hist)) {
     saveRDS(hist, file.path(OUT, "athletics_history.rds"))
+    if (requireNamespace("arrow", quietly = TRUE)) {
+      arrow::write_parquet(hist, file.path(OUT, "athletics_history.parquet"))
+    } else {
+      message("arrow not installed -- skipped athletics_history.parquet")
+    }
     cat(sprintf("\n%s performance%s from %s athlete%s\n",
                 format(nrow(hist), big.mark = ","), if (nrow(hist) == 1) "" else "s",
                 format(uniqueN(hist$athlete_id), big.mark = ","),

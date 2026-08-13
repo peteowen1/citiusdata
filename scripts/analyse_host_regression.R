@@ -349,4 +349,9 @@ for (g in unique(d$games)) {
 }
 
 saveRDS(d, file.path(DATA, "host_sport_panel.rds"))
+if (requireNamespace("arrow", quietly = TRUE)) {
+  arrow::write_parquet(d, file.path(DATA, "host_sport_panel.parquet"))
+} else {
+  message("arrow not installed -- skipped host_sport_panel.parquet")
+}
 cat("\nSaved host_sport_panel.rds\n")

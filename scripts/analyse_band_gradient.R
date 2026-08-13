@@ -29,7 +29,13 @@ library(data.table)
 DATA <- here::here("citiusdata", "data")
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 
-panel <- as.data.table(readRDS(file.path(DATA, "host_sport_panel.rds")))
+panel_path <- file.path(DATA, "host_sport_panel.rds")
+panel <- as.data.table(readRDS(panel_path))
+producer <- here::here("citiusdata", "scripts", "analyse_host_regression.R")
+if (file.exists(producer) && file.mtime(producer) > file.mtime(panel_path)) {
+  warning("host_sport_panel.rds is older than analyse_host_regression.R -- ",
+          "it may be stale; re-run analyse_host_regression.R.", call. = FALSE)
+}
 panel[, golds_gained    := (host_share - base_share) / 100 * sport_golds]
 panel[, subj_band := cut(subjectivity, c(-Inf, 0.10, 0.25, 0.50, Inf),
         labels = c("measured", "refereed", "mixed", "judged"))]

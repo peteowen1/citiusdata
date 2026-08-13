@@ -42,6 +42,9 @@ MAXN <- suppressWarnings(as.integer(Sys.getenv("CITIUS_PARTIAL_MAX", "0")))
 PAUSE <- as.numeric(Sys.getenv("CITIUS_PARTIAL_PAUSE", "0.15"))
 
 x <- setDT(readRDS(file.path(OUT, "athletics_corpus.rds")))
+if (!nrow(x)) stop("athletics_corpus.rds loaded 0 rows.", call. = FALSE)
+say(sprintf("athletics_corpus.rds: %s rows, %s..%s", format(nrow(x), big.mark = ","),
+            min(x$date, na.rm = TRUE), max(x$date, na.rm = TRUE)))
 x <- x[!is.na(race_key) & !is.na(place) & place > 0]
 r <- x[, .(harvested = .N, max_place = max(place, na.rm = TRUE),
            competition_id = competition_id[1], src = source[1],

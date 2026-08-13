@@ -67,6 +67,16 @@ cat(sprintf("golds actually won by them          : %.1f%%\n",
             100 * sum(d[w_total < 2]$hit) / sum(d$hit)))
 
 thin <- g[band %in% c("<1", "1-2", "2-5")]
+# A vacuous state must never print PASS. min(numeric(0)) is Inf and an all-NaN
+# ratio column both slide straight past `worst < 0.90` -- the unverifiable rows
+# count as their own failing assertion instead.
+if (!nrow(d) || !nrow(thin) || any(thin$n == 0) || any(!is.finite(thin$ratio))) {
+  cat("\n--------------------------------------------------------------\n")
+  cat("FAIL: unverifiable -- the merged table is empty, a thin-evidence band\n")
+  cat("has zero rows, or a ratio is non-finite. A PASS here would be vacuous.\n")
+  cat("--------------------------------------------------------------\n")
+  quit(save = "no", status = 1)
+}
 worst <- min(thin$ratio, na.rm = TRUE)
 cat("\n--------------------------------------------------------------\n")
 cat(sprintf("worst thin-band ratio: %.3f  (1.0 = calibrated)\n", worst))

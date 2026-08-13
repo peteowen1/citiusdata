@@ -25,8 +25,20 @@ DATA <- here::here("citiusdata", "data")
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 source(here::here("citiusdata", "scripts", "games_reference.R"))
 
-panel <- as.data.table(readRDS(file.path(DATA, "host_sport_panel.rds")))
-tq    <- as.data.table(readRDS(file.path(DATA, "team_qualification_panel.rds")))
+panel_path <- file.path(DATA, "host_sport_panel.rds")
+panel <- as.data.table(readRDS(panel_path))
+panel_producer <- here::here("citiusdata", "scripts", "analyse_host_regression.R")
+if (file.exists(panel_producer) && file.mtime(panel_producer) > file.mtime(panel_path)) {
+  warning("host_sport_panel.rds is older than analyse_host_regression.R -- ",
+          "it may be stale; re-run analyse_host_regression.R.", call. = FALSE)
+}
+tq_path <- file.path(DATA, "team_qualification_panel.rds")
+tq    <- as.data.table(readRDS(tq_path))
+tq_producer <- here::here("citiusdata", "scripts", "analyse_team_qualification.R")
+if (file.exists(tq_producer) && file.mtime(tq_producer) > file.mtime(tq_path)) {
+  warning("team_qualification_panel.rds is older than analyse_team_qualification.R -- ",
+          "it may be stale; re-run analyse_team_qualification.R.", call. = FALSE)
+}
 med   <- as.data.table(readRDS(file.path(DATA, "multisport_medal_tables.rds")))
 med[, canon := canonical_nation(nation)]
 
@@ -142,6 +154,15 @@ cat(sprintf("    of which performance ...... %.3f (%.0f%%)\n",
 ind <- panel[team_sport == FALSE]
 ind_gain <- sum(ind$golds_gained) / n_ed
 ie <- ind[!is.na(entry_lift_pp)]
+# REVIEW 2026-08-14: uncited constant — re-derive before reuse.
+# ENTRY_COEF is a hardcoded regression coefficient with no cited run or date
+# behind it -- nobody can point to when or on what corpus this 0.48 was fit.
+# The sibling analyse_band_gradient.R re-derives its p-value LIVE for exactly
+# this reason (a previously hardcoded one went stale), and the live equivalent
+# of THIS number is analyse_host_regression.R's entry_lift_pp coefficient
+# (model B). A number baked into source drifts silently out of sync with the
+# corpus it was fit on; any reuse should re-derive from that regression rather
+# than import this literal.
 ENTRY_COEF <- 0.48   # pp of a sport's golds per pp of its field entered
 cat(sprintf("\nINDIVIDUAL SPORTS (%d rows; entry lift measurable on %d)\n",
             nrow(ind), nrow(ie)))

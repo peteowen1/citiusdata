@@ -86,17 +86,27 @@ if (nrow(todo_c)) {
   todo_c[, dur := as.integer(end - start) + 1L]
   todo_c[is.na(dur) | dur < 1L, dur := 12L]   # unknown duration: sweep fully
   todo_c[, dur := pmin(dur + 1L, 12L)]        # +1 buffer, capped
+  n_failed_c <- 0L
   for (i in seq_len(n)) {
     cid <- todo_c$competition_id[i]
+    # A fetch ERROR must not be cached: writing an empty table for it records
+    # "this competition has no results" as a fact and it is never retried.
+    # Only a successful fetch -- including a genuinely empty one -- is cached.
     r <- tryCatch(athletics_competition_results(cid, days = seq_len(todo_c$dur[i])),
                   error = function(e) NULL)
-    if (!is.null(r) && nrow(r)) {
-      r[, `:=`(comp_name = todo_c$name[i], comp_start = todo_c$start[i],
-               comp_tier = todo_c$tier[i])]
-    } else r <- data.table()
-    saveRDS(r, file.path(COMP_CACHE, paste0(cid, ".rds")))
+    if (is.null(r)) {
+      n_failed_c <- n_failed_c + 1L
+    } else {
+      if (nrow(r)) {
+        r[, `:=`(comp_name = todo_c$name[i], comp_start = todo_c$start[i],
+                 comp_tier = todo_c$tier[i])]
+      }
+      saveRDS(r, file.path(COMP_CACHE, paste0(cid, ".rds")))
+    }
     if (i %% 50 == 0) cli::cli_alert("  stage 1: {i}/{n}")
   }
+  if (n_failed_c) cli::cli_alert_warning(
+    "Stage 1: {n_failed_c} fetch{?es} failed and {?was/were} left uncached for retry.")
 } else {
   cli::cli_alert_success("Stage 1 complete.")
 }
@@ -121,13 +131,20 @@ if (nrow(champs)) {
 
   if (length(todo_a)) {
     n <- min(length(todo_a), MAX_ATHLETES)
+    n_failed <- 0L
     for (i in seq_len(n)) {
       id <- todo_a[i]
-      r <- tryCatch(athletics_athlete_results(id), error = function(e) NULL)
-      saveRDS(if (is.null(r)) data.table() else r,
-              file.path(ATH_CACHE, paste0(id, ".rds")))
+      ok <- TRUE
+      r <- tryCatch(athletics_athlete_results(id), error = function(e) { ok <<- FALSE; NULL })
+      # An error leaves no cache file (retried next run); only a genuine empty
+      # result is cached, so a real miss is not confused with an unretried one.
+      if (!ok) { n_failed <- n_failed + 1L } else {
+        saveRDS(if (is.null(r)) data.table() else r,
+                file.path(ATH_CACHE, paste0(id, ".rds")))
+      }
       if (i %% 50 == 0) cli::cli_alert("  stage 2: {i}/{n}")
     }
+    if (n_failed > 0L) cli::cli_alert_warning("{n_failed} fetch{?es} failed and were left uncached for retry.")
   }
 
   cached <- list.files(ATH_CACHE, full.names = TRUE)

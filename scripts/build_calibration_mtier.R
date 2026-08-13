@@ -53,7 +53,8 @@ if (!is.null(old)) print(old)
 
 # Match the rest of the deployed chain exactly, so the ONLY difference from
 # csigma is which label the tier offsets were fitted on.
-w <- tryCatch(as.data.table(fit_wind_effect(clean)), error = function(e) NULL)
+w <- tryCatch(as.data.table(fit_wind_effect(clean)), error = function(e) {
+  say("wind fit failed: ", conditionMessage(e)); NULL })
 if (!is.null(w) && nrow(w)) { cal$wind <- w; say("wind fitted on ", nrow(w), " events") }
 cal$sigma_context <- fit_sigma_context(clean)
 

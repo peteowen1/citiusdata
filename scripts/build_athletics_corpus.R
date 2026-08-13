@@ -129,6 +129,19 @@ say("\nathletes: %s | events: %s | results per athlete: median %s, 90th pct %s",
     format(uniqueN(all$athlete_id), big.mark = ","), uniqueN(all$event_id),
     median(d$N), round(quantile(d$N, 0.9)))
 
-saveRDS(all, file.path(D, "athletics_corpus.rds"))
-arrow::write_parquet(all, file.path(D, "athletics_corpus.parquet"))
+# Write atomically: every arm and backtest reads this path directly, so a
+# crash or interrupt mid-save must never leave a partial file where a full
+# corpus used to be. Write to a sibling temp file, then rename over the
+# target -- the temp write either finishes cleanly or the old file survives.
+rds_path <- file.path(D, "athletics_corpus.rds")
+tmp <- paste0(rds_path, ".tmp")
+saveRDS(all, tmp)
+if (file.exists(rds_path)) file.remove(rds_path)
+file.rename(tmp, rds_path)
+
+pq_path <- file.path(D, "athletics_corpus.parquet")
+tmp <- paste0(pq_path, ".tmp")
+arrow::write_parquet(all, tmp)
+if (file.exists(pq_path)) file.remove(pq_path)
+file.rename(tmp, pq_path)
 say("\nwrote athletics_corpus.{rds,parquet}")

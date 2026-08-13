@@ -41,7 +41,8 @@ if (nrow(ct)) {
   print(head(ct[order(coasting_trait)]))
 }
 
-w <- tryCatch(as.data.table(fit_wind_effect(clean)), error = function(e) NULL)
+w <- tryCatch(as.data.table(fit_wind_effect(clean)), error = function(e) {
+  say("wind fit failed: ", conditionMessage(e)); NULL })
 if (!is.null(w) && nrow(w)) { cal$wind <- w; say("wind fitted on ", nrow(w), " events") }
 cal$sigma_context <- fit_sigma_context(clean)
 

@@ -168,6 +168,11 @@ if (!identical(Sys.getenv("CITIUS_ASSEMBLE", "0"), "1")) {
   rm(parts); invisible(gc())
   if (nrow(all)) {
     saveRDS(all, file.path(OUT, "swimming_history_full.rds"))
+    if (requireNamespace("arrow", quietly = TRUE)) {
+      arrow::write_parquet(all, file.path(OUT, "swimming_history_full.parquet"))
+    } else {
+      message("arrow not installed -- skipped swimming_history_full.parquet")
+    }
     cat(sprintf("\n%s swims | %s meets | %s athletes\n",
                 format(nrow(all), big.mark = ","), uniqueN(all$competition_id),
                 format(uniqueN(all$athlete_id), big.mark = ",")))

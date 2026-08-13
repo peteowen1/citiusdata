@@ -188,7 +188,13 @@ if (resid > 1e-8) {
 # 3. Compare with individual sports on the same footing
 # ---------------------------------------------------------------------------
 cat("\n================ AGAINST INDIVIDUAL SPORTS ================\n")
-panel <- as.data.table(readRDS(file.path(DATA, "host_sport_panel.rds")))
+panel_path <- file.path(DATA, "host_sport_panel.rds")
+panel <- as.data.table(readRDS(panel_path))
+producer <- here::here("citiusdata", "scripts", "analyse_host_regression.R")
+if (file.exists(producer) && file.mtime(producer) > file.mtime(panel_path)) {
+  warning("host_sport_panel.rds is older than analyse_host_regression.R -- ",
+          "it may be stale; re-run analyse_host_regression.R.", call. = FALSE)
+}
 iv <- panel[team_sport == FALSE]
 cat(sprintf("individual sports        : %+.2f pp (n = %d)\n",
             mean(iv$effect_pp), nrow(iv)))
@@ -204,4 +210,9 @@ if (nrow(both) >= 10) {
 }
 
 saveRDS(d, file.path(DATA, "team_qualification_panel.rds"))
+if (requireNamespace("arrow", quietly = TRUE)) {
+  arrow::write_parquet(d, file.path(DATA, "team_qualification_panel.parquet"))
+} else {
+  message("arrow not installed -- skipped team_qualification_panel.parquet")
+}
 cat("\nSaved team_qualification_panel.rds\n")
