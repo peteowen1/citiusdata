@@ -165,19 +165,40 @@ if (!length(ev)) {
 # would make this score the model against races it had already seen, while
 # looking better rather than worse.
 cli::cli_h2("Ranking check (all completed races)")
-STORE <- file.path(OUT, "athletics_store")
-cal_rds <- file.path(OUT, "calibration.rds")
-if (!dir.exists(STORE) || !file.exists(cal_rds)) {
-  cli::cli_alert_warning("Store or calibration missing; skipping the ranking check.")
+# USES THE DEPLOYED CONFIG, not its own literals (fixed 2026-08-13).
+#
+# This block previously read `calibration.rds` -- a 3MB file last written
+# 2026-07-28 -- and hardcoded `half_life = 365`, while the deployed model was a
+# 20MB calibration on a different corpus with per-FAMILY half-lives
+# (road = 1095, walk = 730). So the ranking check scored a model that was never
+# shipped, and reported the number as if it described the card. The 75.5%
+# recorded for Birmingham was measured that way.
+#
+# `_deployed.R` exists precisely to stop this: its header records a 2026-07-31
+# audit that found five scripts each re-expressing the config as literals. This
+# script was written 2026-08-12, two weeks later, and did it again. Calling
+# `deployed_ability()` rather than `estimate_ability()` directly is what makes it
+# stay fixed -- the per-family half-lives come with it instead of being another
+# literal to forget.
+# NOTE this also changes WHICH STORE the history comes from: `athletics_store`
+# (championship results) -> `athletics_corpus_store` (the corpus), because
+# DEPLOYED$history_store names the corpus and the deployed calibration is fitted
+# on it. Both stores exist with 87 partitions each. Scoring the deployed model
+# against a history it was not fitted on is the same mismatch, one level over.
+source(here::here("citiusdata", "scripts", "_deployed.R"))
+STORE <- file.path(OUT, DEPLOYED$history_store)
+if (!dir.exists(STORE)) {
+  cli::cli_alert_warning("Store missing; skipping the ranking check.")
 } else {
+  cal <- deployed_calibration(OUT)
+  cli::cli_alert_info("Ranking check on the DEPLOYED model: {DEPLOYED$stamp}")
   past <- read_results_store(STORE, events = unique(results$event_id),
                              from = CUTOFF - 4380, to = CUTOFF)[
                                !is.na(event_id) & !is.na(perf)]
   past <- past[is.na(competition_id) | competition_id != COMP]
   stopifnot("history must not contain the competition being scored" =
               !any(past$competition_id == COMP, na.rm = TRUE))
-  ab <- estimate_ability(past, as_of = CUTOFF, half_life = 365,
-                         calibration = readRDS(cal_rds))
+  ab <- deployed_ability(past, as_of = CUTOFF, calibration = cal)
   scored <- merge(results[!is.na(place) & place > 0L],
                   ab[, .(athlete_id, event_id, ability)],
                   by = c("athlete_id", "event_id"))
