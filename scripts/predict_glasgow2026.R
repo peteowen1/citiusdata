@@ -1,5 +1,16 @@
 # Glasgow 2026 Commonwealth Games — athletics predictions.
 #
+# SUPERSEDED by predict_glasgow_entries.R, which uses real start lists and the
+# deployed configuration. Kept because METHODOLOGY.md and MODEL-LOG.md cite it as
+# the only place the `momentum` adjustment was ever applied.
+#
+# DO NOT QUOTE ITS OUTPUT AS THE MODEL. It predates _deployed.R (2026-07-30) and
+# names every input as a literal: athletics_history.rds (the 308k harvest, not
+# the 6.6M corpus), calibration.rds (2026-07-28), half_life.rds. That is exactly
+# the configuration the 2026-07-31 audit found shipping numbers nobody had
+# validated. Left as-is rather than rewired — rewiring dead code hides that it is
+# dead, and the runtime warning below is what a reader actually sees.
+#
 # Run BEFORE results exist. The point is a locked, timestamped forecast that can
 # be scored out-of-sample as results land, so the output file is written with
 # the generation time embedded and must never be regenerated after results are
@@ -20,6 +31,11 @@ FIELD_SIZE <- 8L
 N_SIMS     <- 50000L
 OUT <- here::here("citiusdata", "data")
 dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+
+cli::cli_alert_warning(c(
+  "SUPERSEDED script: this is NOT the deployed configuration. ",
+  "It reads athletics_history.rds and calibration.rds, both pre-2026-07-31. ",
+  "Use predict_glasgow_entries.R for anything published."))
 
 history     <- readRDS(file.path(OUT, "athletics_history.rds"))
 calibration <- readRDS(file.path(OUT, "calibration.rds"))

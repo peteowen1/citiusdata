@@ -23,6 +23,18 @@ library(data.table)
 OUT <- here::here("citiusdata", "data")
 N_SIMS <- 20000L
 
+# SUPERSEDED by backtest_athletics.R, which runs on the corpus store and takes
+# its calibration from CITIUS_BT_CALIBRATION. Kept because backtest_swimming.R
+# is a direct port of it and reads as its documentation.
+#
+# Its three inputs are all pre-2026-07-31 literals: the 308k harvest rather than
+# the 6.6M corpus, a calibration written 2026-07-28, and a single global
+# half-life. Numbers from this script describe a model that has not been shipped
+# since July. Not rewired, because rewiring dead code disguises that it is dead.
+cli::cli_alert_warning(c(
+  "SUPERSEDED script: NOT the deployed configuration. ",
+  "Use backtest_athletics.R for any number that will be quoted."))
+
 history     <- readRDS(file.path(OUT, "athletics_history.rds"))
 calibration <- readRDS(file.path(OUT, "calibration.rds"))
 half_life   <- readRDS(file.path(OUT, "half_life.rds"))
