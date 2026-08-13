@@ -45,11 +45,12 @@ DEPLOYED <- list(
   #      corpus is the standing default and the previous file predates the
   #      fit_wind_effect() fix.
   #   2. COASTING TRAIT, newly read by estimate_ability(). Heats carry 2.9x the
-  #      precision of finals (2.109 vs 0.722) while the population heat offset
-  #      corrects only -0.59%; an elite athlete jogging a qualifier runs ~5%
-  #      easier, so their heats outweighed their finals. This is the defect that
-  #      published Audrey Werro 9th in the 800m W in a season she ran three of
-  #      the ten fastest times in history.
+  #      precision of finals while the population heat offset corrects only
+  #      -0.59%, so an elite athlete's jogged qualifiers outweighed their
+  #      finals. This is the Werro defect; the mechanism lives with the code in
+  #      citius/R/ability.R (.adjust_history_to_target, coasting block) and the
+  #      full story in ../../docs/incidents/werro-underrated-2026-08-13.md --
+  #      ONE canonical copy each, do not re-expand it here.
   #
   # MEASURED, leakage-controlled -- the trait is per-athlete, so it was refitted
   # with the 98 scored competitions EXCLUDED and rescored, which cost ~20% of the
@@ -208,7 +209,15 @@ deployed_field <- function(entrants, aging = NULL, ages = NULL) {
     entrants <- condition_prior(entrants, field = entrants$athlete_id,
                                 weight = DEPLOYED$prior_weight)
   }
-  if (!is.null(aging) && !is.null(ages) && nrow(ages)) {
+  # The docstring promises "named vector or data.table" and the code only ever
+  # handled the table: `nrow(<named vector>)` is NULL and `&& NULL` is an
+  # error, so the documented vector form crashed with an unrelated-looking
+  # message. Normalise first, then one code path.
+  if (is.numeric(ages) && !is.null(names(ages))) {
+    ages <- data.table::data.table(athlete_id = names(ages),
+                                   age_now = as.numeric(ages))
+  }
+  if (!is.null(aging) && !is.null(ages) && nrow(data.table::as.data.table(ages))) {
     entrants[data.table::as.data.table(ages), on = "athlete_id", age_now := i.age_now]
     ok <- entrants[!is.na(age_now) & !is.na(age_ref)]
     if (nrow(ok)) {
