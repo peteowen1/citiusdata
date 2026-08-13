@@ -21,7 +21,7 @@
 DEPLOYED <- list(
   # Bump on every promotion. Written into prediction outputs so any artefact can
   # be traced to the configuration that produced it.
-  stamp = "2026-07-31 csigma",
+  stamp = "2026-08-13 csigma_coast",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -36,7 +36,37 @@ DEPLOYED <- list(
   # csigma is the largest placings win recorded: gold Brier 0.05571 -> 0.05428
   # (t = -13.63, p = 3.4e-42), medal 0.12511 -> 0.12354, marks unmoved. Marks
   # staying flat is the point -- sigma is a spread parameter, not a location one.
-  calibration = "calibration_corpus_csigma.rds",
+  #
+  # PROMOTED 2026-08-13. THIS IS TWO CHANGES, NOT ONE -- read both before
+  # attributing anything to either:
+  #
+  #   1. CORPUS REBASELINE. The previous file was fitted 2026-07-31; this one on
+  #      the current 6,656,700-row corpus. Not separately A/B'd, because the
+  #      corpus is the standing default and the previous file predates the
+  #      fit_wind_effect() fix.
+  #   2. COASTING TRAIT, newly read by estimate_ability(). Heats carry 2.9x the
+  #      precision of finals (2.109 vs 0.722) while the population heat offset
+  #      corrects only -0.59%; an elite athlete jogging a qualifier runs ~5%
+  #      easier, so their heats outweighed their finals. This is the defect that
+  #      published Audrey Werro 9th in the 800m W in a season she ran three of
+  #      the ten fastest times in history.
+  #
+  # MEASURED, leakage-controlled -- the trait is per-athlete, so it was refitted
+  # with the 98 scored competitions EXCLUDED and rescored, which cost ~20% of the
+  # raw gain. Against a same-corpus control (ctrA), 1,330 races:
+  #   elite  gold Brier -1.99% (p = 2.3e-07), medal -1.46% (p = 2.0e-07)
+  #   majors gold Brier -4.13%, logloss -4.75% (p = 0.048)
+  #   favourite wins 47.8% -> 49.3%
+  #
+  # KNOWN COST, accepted: raw marks regress on the non-judging populations --
+  # T2 +0.51% MAE (p = 2.1e-06), all-finals +0.21% (p = 0.0009) -- while CENTRED
+  # marks improve (-0.40%). That gap is a level shift: lifting jogged heats
+  # raises ability levels, so absolute marks run fast. Correctable, and queued.
+  #
+  # The DEPLOYED file carries the trait fitted on the FULL corpus. The excluded
+  # refit was a measurement device; there is no leakage when forecasting races
+  # that have not happened.
+  calibration = "calibration_corpus_csigma_coast.rds",
 
   # AGING -- the blended curve, adopted 2026-07-29.
   aging = "aging.rds",
