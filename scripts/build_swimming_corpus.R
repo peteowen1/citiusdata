@@ -187,16 +187,20 @@ say("rows carrying a race_key (whole fields, usable for race effects): %s of %s"
 # Write atomically: every arm and backtest reads this path directly, so a
 # crash or interrupt mid-save must never leave a partial file where a full
 # corpus used to be. Write to a sibling temp file, then rename over the
-# target -- the temp write either finishes cleanly or the old file survives.
-rds_path <- file.path(D, "swimming_corpus.rds")
-tmp <- paste0(rds_path, ".tmp")
-saveRDS(all, tmp)
-if (file.exists(rds_path)) file.remove(rds_path)
-file.rename(tmp, rds_path)
-
-pq_path <- file.path(D, "swimming_corpus.parquet")
-tmp <- paste0(pq_path, ".tmp")
-arrow::write_parquet(all, tmp)
-if (file.exists(pq_path)) file.remove(pq_path)
-file.rename(tmp, pq_path)
+# target in ONE step -- file.rename() overwrites an existing destination file
+# on this platform (verified), so there is no delete-first window in which
+# neither corpus exists. And CHECK the rename: it returns FALSE on failure
+# rather than erroring, and an unchecked FALSE means printing "wrote" while
+# the corpus is actually the old file or missing.
+atomic_write <- function(write_fn, target) {
+  tmp <- paste0(target, ".tmp")
+  write_fn(tmp)
+  if (!file.rename(tmp, target)) {
+    stop("rename of ", tmp, " over ", target,
+         " failed; the new corpus is intact at the .tmp path, nothing was deleted")
+  }
+}
+atomic_write(function(p) saveRDS(all, p), file.path(D, "swimming_corpus.rds"))
+atomic_write(function(p) arrow::write_parquet(all, p),
+             file.path(D, "swimming_corpus.parquet"))
 say("\nwrote swimming_corpus.{rds,parquet}")

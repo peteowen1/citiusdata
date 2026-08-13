@@ -66,14 +66,22 @@ cat(sprintf("gold probability held by w_total < 2: %.1f%%\n",
 cat(sprintf("golds actually won by them          : %.1f%%\n",
             100 * sum(d[w_total < 2]$hit) / sum(d$hit)))
 
-thin <- g[band %in% c("<1", "1-2", "2-5")]
+THIN_BANDS <- c("<1", "1-2", "2-5")
+thin <- g[band %in% THIN_BANDS]
 # A vacuous state must never print PASS. min(numeric(0)) is Inf and an all-NaN
 # ratio column both slide straight past `worst < 0.90` -- the unverifiable rows
 # count as their own failing assertion instead.
-if (!nrow(d) || !nrow(thin) || any(thin$n == 0) || any(!is.finite(thin$ratio))) {
+#
+# Presence is checked by LABEL, not `n == 0`: a grouped aggregation only emits
+# rows for bands that exist in the data, so an unrepresented band is ABSENT
+# from `thin`, never present with n = 0 -- an `any(n == 0)` guard here can
+# literally never fire (review 2026-08-14).
+if (!nrow(d) || !all(THIN_BANDS %in% thin$band) || any(!is.finite(thin$ratio))) {
   cat("\n--------------------------------------------------------------\n")
   cat("FAIL: unverifiable -- the merged table is empty, a thin-evidence band\n")
-  cat("has zero rows, or a ratio is non-finite. A PASS here would be vacuous.\n")
+  cat(sprintf("is missing entirely (have: %s), or a ratio is non-finite.\n",
+              paste(intersect(THIN_BANDS, thin$band), collapse = ", ")))
+  cat("A PASS here would be vacuous.\n")
   cat("--------------------------------------------------------------\n")
   quit(save = "no", status = 1)
 }
@@ -82,7 +90,11 @@ cat("\n--------------------------------------------------------------\n")
 cat(sprintf("worst thin-band ratio: %.3f  (1.0 = calibrated)\n", worst))
 if (worst < 0.90) {
   cat("FAIL: thin-evidence athletes are being paid for uncertainty.\n")
-} else {
-  cat("PASS: no material evidence-dependent miscalibration.\n")
+  cat("--------------------------------------------------------------\n")
+  # The substantive verdict must reach automation the same way the vacuous one
+  # does -- printing FAIL and exiting 0 is a green run to anything that gates
+  # on status.
+  quit(save = "no", status = 1)
 }
+cat("PASS: no material evidence-dependent miscalibration.\n")
 cat("--------------------------------------------------------------\n")

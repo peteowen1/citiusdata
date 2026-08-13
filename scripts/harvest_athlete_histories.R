@@ -167,10 +167,18 @@ if (!identical(Sys.getenv("CITIUS_ASSEMBLE", "0"), "1")) {
   rm(parts); invisible(gc())
   if (nrow(hist)) {
     saveRDS(hist, file.path(OUT, "athletics_history.rds"))
+    # Parquet twin: temp-then-rename like the corpus builders, and LOUD on any
+    # failure -- the .rds write above already succeeded, so a quiet skip here
+    # leaves two vintages of the same table on disk with nothing recording it.
+    pq <- file.path(OUT, "athletics_history.parquet")
     if (requireNamespace("arrow", quietly = TRUE)) {
-      arrow::write_parquet(hist, file.path(OUT, "athletics_history.parquet"))
+      tryCatch({
+        arrow::write_parquet(hist, paste0(pq, ".tmp"))
+        if (!file.rename(paste0(pq, ".tmp"), pq)) stop("rename over target failed")
+      }, error = function(e) cli::cli_alert_danger(
+        "parquet twin write FAILED ({conditionMessage(e)}); {basename(pq)} is STALE relative to the .rds"))
     } else {
-      message("arrow not installed -- skipped athletics_history.parquet")
+      cli::cli_alert_danger("arrow not installed -- {basename(pq)} NOT refreshed; it is stale relative to the .rds")
     }
     cat(sprintf("\n%s performance%s from %s athlete%s\n",
                 format(nrow(hist), big.mark = ","), if (nrow(hist) == 1) "" else "s",

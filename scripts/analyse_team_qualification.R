@@ -210,9 +210,16 @@ if (nrow(both) >= 10) {
 }
 
 saveRDS(d, file.path(DATA, "team_qualification_panel.rds"))
+# Parquet twin: temp-then-rename, LOUD on failure -- see the note in
+# harvest_athlete_histories.R; a quiet skip leaves two vintages on disk.
+pq <- file.path(DATA, "team_qualification_panel.parquet")
 if (requireNamespace("arrow", quietly = TRUE)) {
-  arrow::write_parquet(d, file.path(DATA, "team_qualification_panel.parquet"))
+  tryCatch({
+    arrow::write_parquet(d, paste0(pq, ".tmp"))
+    if (!file.rename(paste0(pq, ".tmp"), pq)) stop("rename over target failed")
+  }, error = function(e) cli::cli_alert_danger(
+    "parquet twin write FAILED ({conditionMessage(e)}); {basename(pq)} is STALE relative to the .rds"))
 } else {
-  message("arrow not installed -- skipped team_qualification_panel.parquet")
+  cli::cli_alert_danger("arrow not installed -- {basename(pq)} NOT refreshed; it is stale relative to the .rds")
 }
 cat("\nSaved team_qualification_panel.rds\n")
