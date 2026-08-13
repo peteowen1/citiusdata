@@ -16,9 +16,9 @@
 # Wikipedia's medal tables before being written down: O'Connor 6569 / O'Dowda
 # 6278 / West 6104; Montag 42:13.40 / McMillen 42:39.87 / Henderson 43:27.46;
 # Pallister 15:41.03 / Fairweather 15:58.97 / Walker 16:01.37. All three agree.
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages({library(data.table); library(jsonlite)})
-D <- "C:/dev/citiusverse/citiusdata/data"
+D <- here::here("citiusdata", "data")
 
 pages <- list(
   list("athletic-result/ATH/M/W/10000MW-----------/FNL-/000100--",

@@ -21,9 +21,9 @@
 # unattributed remainder is reported rather than spread around.
 
 library(data.table)
-DATA <- "C:/dev/citiusverse/citiusdata/data"
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
-source("C:/dev/citiusverse/citiusdata/scripts/games_reference.R")
+DATA <- here::here("citiusdata", "data")
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
+source(here::here("citiusdata", "scripts", "games_reference.R"))
 
 panel <- as.data.table(readRDS(file.path(DATA, "host_sport_panel.rds")))
 tq    <- as.data.table(readRDS(file.path(DATA, "team_qualification_panel.rds")))

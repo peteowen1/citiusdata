@@ -22,13 +22,13 @@
 #   against a sigma of ~2.6% of a mark, an explained spread of 0.25% is worth
 #   0.5% of the marks metric and 1% is worth 7.6%.
 
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 library(data.table); library(arrow)
 ok <- requireNamespace("xgboost", quietly = TRUE)
 if (!ok) { cat("xgboost not installed -- cannot run this test\n"); quit(save = "no") }
 library(xgboost)
 
-D <- "C:/dev/citiusverse/citiusdata/data"
+D <- here::here("citiusdata", "data")
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), ..., "\n", sep = "")
 
 cols <- c("athlete_id", "event_id", "date", "perf", "wind", "indoor",

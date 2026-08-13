@@ -37,7 +37,7 @@
 #     available shape allows.
 #   - Straight finals and combined events are one round of one race.
 
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages(devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE))
 suppressMessages(library(data.table)); library(jsonlite)
 D   <- file.path(VERSE, "citiusdata", "data")

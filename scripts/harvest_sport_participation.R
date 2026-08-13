@@ -18,9 +18,9 @@
 library(rvest)
 library(data.table)
 
-OUT   <- "C:/dev/citiusverse/citiusdata/data"
+OUT   <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "wiki_cache")
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 
 read_cached <- function(slug) {
   cf <- file.path(CACHE, paste0(gsub("[^A-Za-z0-9_.-]", "_", slug), ".html"))

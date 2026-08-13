@@ -10,7 +10,7 @@
 # _deployed.R, which exists because five shipping scripts once each named their
 # own and drifted apart silently.
 
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages(devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE))
 suppressMessages(library(data.table)); library(jsonlite)
 source(file.path(VERSE, "citiusdata", "scripts", "_deployed.R"))

@@ -24,12 +24,12 @@
 
 library(data.table)
 
-DATA <- "C:/dev/citiusverse/citiusdata/data"
-source("C:/dev/citiusverse/citiusdata/scripts/games_reference.R")
+DATA <- here::here("citiusdata", "data")
+source(here::here("citiusdata", "scripts", "games_reference.R"))
 # canonical_nation(), nation_iso3(), sport_adjudication() and sport_family()
 # come from the package, not from a copy in this directory -- a second copy
 # masks the package's and the two drift apart silently.
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 
 med   <- as.data.table(readRDS(file.path(DATA, "multisport_medal_tables.rds")))
 SPORT_FILE <- if (file.exists(file.path(DATA, "sport_medal_tables_with_podiums.rds"))) {

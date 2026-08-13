@@ -18,7 +18,7 @@
 # Usage:
 #   Rscript scripts/harvest_swimengland_rankings.R
 #   CITIUS_WORKERS=9 CITIUS_MAX_PAGES=10 CITIUS_YEARS=2010:2026 Rscript ...
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages({library(citius); library(data.table); library(parallel)})
 OUT <- file.path(VERSE, "citiusdata", "data")
 CACHE <- file.path(OUT, "se_rankings_cache")

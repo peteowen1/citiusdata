@@ -7,7 +7,7 @@
 # silently deleted 3,305 rows; never do that again.
 #
 # Usage:  Rscript scripts/assemble_swimengland.R
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages({library(citius); library(data.table)})
 OUT <- file.path(VERSE, "citiusdata", "data")
 CACHE <- file.path(OUT, "se_rankings_cache")

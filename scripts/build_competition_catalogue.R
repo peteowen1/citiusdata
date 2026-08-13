@@ -23,9 +23,9 @@
 #             supposed to mean and does not.
 #
 # Usage:  Rscript scripts/build_competition_catalogue.R
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius"))
+suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
-OUT <- "C:/dev/citiusverse/citiusdata/data"
+OUT <- here::here("citiusdata", "data")
 
 ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 ch[, athlete_id := as.character(athlete_id)]

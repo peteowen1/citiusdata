@@ -13,9 +13,9 @@
 #
 # It is also 40 minutes cheaper and does not run the 480k-race decomposition,
 # which OOM-killed on this machine when run alongside anything else.
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 library(data.table); library(arrow)
-D <- "C:/dev/citiusverse/citiusdata/data"
+D <- here::here("citiusdata", "data")
 SRC <- Sys.getenv("CITIUS_SEASON_SRC", "calibration_corpus_athfoul.rds")
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), ..., "\n", sep = "")
 

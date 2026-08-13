@@ -9,7 +9,7 @@
 # 28 July, by which point most swimming had finished.
 #
 # Usage:  Rscript scripts/predict_glasgow_pretournament.R
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages({library(citius); library(data.table)})
 D <- file.path(VERSE, "citiusdata", "data")
 # Model inputs come from DEPLOYED, never from literals here. See _deployed.R.

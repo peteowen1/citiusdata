@@ -18,10 +18,10 @@
 # ONE-VARIABLE A/B. `$athlete` is a leaf of the calibration -- nothing else reads
 # it -- so only that table is rebuilt and swapped into the csigma calibration.
 # Every other slot is byte-identical to the baseline by construction.
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius"))
+suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
 
-OUT <- "C:/dev/citiusverse/citiusdata/data"
+OUT <- here::here("citiusdata", "data")
 BASE <- "calibration_corpus_csigma.rds"
 
 x <- setDT(readRDS(file.path(OUT, "athletics_corpus.rds")))[!is.na(date)]

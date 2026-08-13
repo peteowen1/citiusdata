@@ -16,9 +16,9 @@
 #   so if the GBM still leans on it, the baseline is still too weak and the
 #   whole result should be discarded again.
 
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 library(data.table); library(arrow); library(xgboost)
-D <- "C:/dev/citiusverse/citiusdata/data"
+D <- here::here("citiusdata", "data")
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), ..., "\n", sep="")
 
 x <- as.data.table(read_parquet(file.path(D, "athletics_corpus.parquet"),

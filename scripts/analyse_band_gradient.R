@@ -26,8 +26,8 @@
 #      lowest gain rate, which cuts against a pure size explanation.
 
 library(data.table)
-DATA <- "C:/dev/citiusverse/citiusdata/data"
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
+DATA <- here::here("citiusdata", "data")
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 
 panel <- as.data.table(readRDS(file.path(DATA, "host_sport_panel.rds")))
 panel[, golds_gained    := (host_share - base_share) / 100 * sport_golds]

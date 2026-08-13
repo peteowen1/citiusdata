@@ -12,7 +12,7 @@
 # artefact therefore carries `generated_at` and the site renders an "as at"
 # stamp off it. Do not remove that column to tidy the schema.
 
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages(devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE))
 suppressMessages(library(data.table)); library(arrow); library(jsonlite)
 source(file.path(VERSE, "citiusdata", "scripts", "_deployed.R"))

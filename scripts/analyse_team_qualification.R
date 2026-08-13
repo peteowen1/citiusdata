@@ -19,9 +19,9 @@
 # so the first term can be held fixed to isolate the second.
 
 library(data.table)
-DATA <- "C:/dev/citiusverse/citiusdata/data"
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
-source("C:/dev/citiusverse/citiusdata/scripts/games_reference.R")
+DATA <- here::here("citiusdata", "data")
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
+source(here::here("citiusdata", "scripts", "games_reference.R"))
 
 med   <- as.data.table(readRDS(file.path(DATA, "multisport_medal_tables.rds")))
 sport <- as.data.table(readRDS(file.path(DATA, "sport_medal_tables_with_podiums.rds")))

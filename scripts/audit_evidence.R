@@ -25,9 +25,9 @@
 # pooled over all athletes hides it: the two errors cancel.
 #
 # Usage:  CITIUS_AUDIT_BT=backtest_crob.rds Rscript scripts/audit_evidence.R
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius"))
+suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
-OUT <- "C:/dev/citiusverse/citiusdata/data"
+OUT <- here::here("citiusdata", "data")
 
 BT <- Sys.getenv("CITIUS_AUDIT_BT", "backtest_csigma.rds")
 bt <- readRDS(file.path(OUT, BT))

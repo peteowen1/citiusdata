@@ -19,7 +19,7 @@
 # surname and given initial agree and the search returned exactly one candidate.
 #
 # Usage:  Rscript scripts/harvest_swimming_gap.R [max_athletes]
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages({
   devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE)
   library(data.table)

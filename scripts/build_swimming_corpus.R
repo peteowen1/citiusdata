@@ -12,7 +12,7 @@
 # holding partial careers, and empirical Bayes shrinks each of the fragments.
 #
 # Usage:  Rscript scripts/build_swimming_corpus.R
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages({library(citius); library(data.table)})
 D <- file.path(VERSE, "citiusdata", "data")
 say <- function(...) cat(sprintf(...), "\n", sep = "")

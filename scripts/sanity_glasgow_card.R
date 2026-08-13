@@ -12,9 +12,9 @@
 #      top 10 -- that combination IS the paid-for-uncertainty signature.
 #   3. No predicted mark may be implausible for its event.
 #   4. Every event must have a field and probabilities that sum to about 1.
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(data.table))
-D <- "C:/dev/citiusverse/citiusdata/data"
+D <- here::here("citiusdata", "data")
 pre <- setDT(readRDS(file.path(D, "glasgow2026_pretournament.rds")))
 reg <- as.data.table(citius_events())[, .(event_id, orientation, family)]
 pre <- merge(pre, reg, by = "event_id", all.x = TRUE)

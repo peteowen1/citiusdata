@@ -12,10 +12,10 @@ library(rvest)
 library(httr)
 library(data.table)
 
-OUT   <- "C:/dev/citiusverse/citiusdata/data"
+OUT   <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "wiki_cache_editions")
 dir.create(CACHE, showWarnings = FALSE, recursive = TRUE)
-source("C:/dev/citiusverse/citiusdata/scripts/games_reference.R")
+source(here::here("citiusdata", "scripts", "games_reference.R"))
 
 ua <- "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CitiusVerseScraper/5.0"
 

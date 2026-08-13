@@ -20,9 +20,9 @@
 #
 # Usage:  Rscript scripts/audit_history.R
 #         CITIUS_AUDIT_EVENTS="AT-100Metres-M,AT-PoleVault-M" Rscript ...
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius"))
+suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
-OUT <- "C:/dev/citiusverse/citiusdata/data"
+OUT <- here::here("citiusdata", "data")
 
 EV <- Sys.getenv("CITIUS_AUDIT_EVENTS", "")
 EVENTS <- if (nzchar(EV)) trimws(strsplit(EV, ",")[[1]]) else NULL

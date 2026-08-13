@@ -14,9 +14,9 @@
 # Usage:
 #   CITIUS_QC_A=backtest_cache_csigma CITIUS_QC_B=backtest_cache_casym \
 #     Rscript scripts/quick_compare.R
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius"))
+suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
-OUT <- "C:/dev/citiusverse/citiusdata/data"
+OUT <- here::here("citiusdata", "data")
 
 A <- Sys.getenv("CITIUS_QC_A", "backtest_cache_csigma")
 B <- Sys.getenv("CITIUS_QC_B", "backtest_cache_casym")

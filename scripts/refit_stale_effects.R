@@ -13,10 +13,10 @@
 # currently beats its baseline by 1.53%, so anything under ~0.3% of a mark is
 # not visible.
 
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 library(data.table); library(arrow)
 
-D <- "C:/dev/citiusverse/citiusdata/data"
+D <- here::here("citiusdata", "data")
 t0 <- Sys.time()
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), ..., "\n", sep = "")
 

@@ -11,8 +11,8 @@
 # cover, so nothing is double-counted.
 
 library(data.table)
-OUT <- "C:/dev/citiusverse/citiusdata/data"
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
+OUT <- here::here("citiusdata", "data")
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 
 base <- as.data.table(readRDS(file.path(OUT, "sport_medal_tables.rds")))
 pods <- as.data.table(readRDS(file.path(OUT, "team_sport_podiums.rds")))

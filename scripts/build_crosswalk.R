@@ -12,7 +12,7 @@
 # Resolve paths from the verse root rather than the working directory, so the
 # script runs identically from citiusdata/, from the verse root, or from a
 # scheduler with no meaningful cwd.
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages({
   devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE)
   library(data.table)
