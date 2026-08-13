@@ -19,9 +19,9 @@
 # so the first term can be held fixed to isolate the second.
 
 library(data.table)
-DATA <- "C:/dev/citiusverse/citiusdata/data"
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
-source("C:/dev/citiusverse/citiusdata/scripts/games_reference.R")
+DATA <- here::here("citiusdata", "data")
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
+source(here::here("citiusdata", "scripts", "games_reference.R"))
 
 med   <- as.data.table(readRDS(file.path(DATA, "multisport_medal_tables.rds")))
 sport <- as.data.table(readRDS(file.path(DATA, "sport_medal_tables_with_podiums.rds")))
@@ -188,7 +188,13 @@ if (resid > 1e-8) {
 # 3. Compare with individual sports on the same footing
 # ---------------------------------------------------------------------------
 cat("\n================ AGAINST INDIVIDUAL SPORTS ================\n")
-panel <- as.data.table(readRDS(file.path(DATA, "host_sport_panel.rds")))
+panel_path <- file.path(DATA, "host_sport_panel.rds")
+panel <- as.data.table(readRDS(panel_path))
+producer <- here::here("citiusdata", "scripts", "analyse_host_regression.R")
+if (file.exists(producer) && file.mtime(producer) > file.mtime(panel_path)) {
+  warning("host_sport_panel.rds is older than analyse_host_regression.R -- ",
+          "it may be stale; re-run analyse_host_regression.R.", call. = FALSE)
+}
 iv <- panel[team_sport == FALSE]
 cat(sprintf("individual sports        : %+.2f pp (n = %d)\n",
             mean(iv$effect_pp), nrow(iv)))
@@ -204,4 +210,16 @@ if (nrow(both) >= 10) {
 }
 
 saveRDS(d, file.path(DATA, "team_qualification_panel.rds"))
+# Parquet twin: temp-then-rename, LOUD on failure -- see the note in
+# harvest_athlete_histories.R; a quiet skip leaves two vintages on disk.
+pq <- file.path(DATA, "team_qualification_panel.parquet")
+if (requireNamespace("arrow", quietly = TRUE)) {
+  tryCatch({
+    arrow::write_parquet(d, paste0(pq, ".tmp"))
+    if (!file.rename(paste0(pq, ".tmp"), pq)) stop("rename over target failed")
+  }, error = function(e) cli::cli_alert_danger(
+    "parquet twin write FAILED ({conditionMessage(e)}); {basename(pq)} is STALE relative to the .rds"))
+} else {
+  cli::cli_alert_danger("arrow not installed -- {basename(pq)} NOT refreshed; it is stale relative to the .rds")
+}
 cat("\nSaved team_qualification_panel.rds\n")

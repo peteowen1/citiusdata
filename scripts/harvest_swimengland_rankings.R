@@ -18,7 +18,7 @@
 # Usage:
 #   Rscript scripts/harvest_swimengland_rankings.R
 #   CITIUS_WORKERS=9 CITIUS_MAX_PAGES=10 CITIUS_YEARS=2010:2026 Rscript ...
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages({library(citius); library(data.table); library(parallel)})
 OUT <- file.path(VERSE, "citiusdata", "data")
 CACHE <- file.path(OUT, "se_rankings_cache")
@@ -30,7 +30,11 @@ MAX_PAGES <- as.integer(Sys.getenv("CITIUS_MAX_PAGES", "10"))
 # Accepts "2010:2026" or "2014,2016,2020". Parsed explicitly rather than with
 # eval(parse()) -- this is a scheduled script and an env var is not a place to
 # accept arbitrary code, however local the caller.
-yr_env <- Sys.getenv("CITIUS_YEARS", "2010:2026")
+#
+# The upper bound tracks the current year rather than a hardcoded one, so the
+# default sweep window does not silently stop covering new seasons once the
+# calendar passes whatever year was hardcoded when this was written.
+yr_env <- Sys.getenv("CITIUS_YEARS", sprintf("2010:%d", as.integer(format(Sys.Date(), "%Y"))))
 YEARS <- if (grepl("^\\s*\\d{4}\\s*:\\s*\\d{4}\\s*$", yr_env)) {
   b <- as.integer(strsplit(gsub("\\s", "", yr_env), ":")[[1]])
   seq.int(b[1], b[2])

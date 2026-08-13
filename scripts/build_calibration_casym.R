@@ -15,10 +15,10 @@
 # every athlete the same haircut, so an athlete whose sigma is 6.6x too large
 # because of one corrupt mark stays 6.6x too large. That is a separate, later
 # arm (per-athlete robust dispersion). Kept separate on purpose: one variable.
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius"))
+suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
 
-OUT <- "C:/dev/citiusverse/citiusdata/data"
+OUT <- here::here("citiusdata", "data")
 BASE <- Sys.getenv("CITIUS_ASYM_BASE", "calibration_corpus_csigma.rds")
 
 x <- setDT(readRDS(file.path(OUT, "athletics_corpus.rds")))[!is.na(perf)]

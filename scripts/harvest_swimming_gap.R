@@ -19,7 +19,7 @@
 # surname and given initial agree and the search returned exactly one candidate.
 #
 # Usage:  Rscript scripts/harvest_swimming_gap.R [max_athletes]
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages({
   devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE)
   library(data.table)
@@ -209,9 +209,14 @@ if (!nrow(todo)) { say("\nnothing new to fetch"); quit(save = "no") }
 
 say("\nfetching %d careers into the cache ...", nrow(todo))
 t0 <- Sys.time()
+n_failed <- 0L
 n_swims <- vapply(seq_len(nrow(todo)), function(i) {
+  ok <- TRUE
   r <- tryCatch(aquatics_athlete_results(todo$wa_id[i], sex = todo$sex[i]),
-                error = function(e) NULL)
+                error = function(e) { ok <<- FALSE; NULL })
+  # An error writes no cache file, so the athlete is retried next run rather
+  # than being permanently recorded as "fetched, nothing found".
+  if (!ok) { n_failed <<- n_failed + 1L; return(0L) }
   saveRDS(if (is.null(r)) data.table() else r,
           file.path(CACHE, paste0(todo$wa_id[i], ".rds")))
   if (i %% 25L == 0L) say("  %d/%d (%.0fs)", i, nrow(todo),
@@ -221,6 +226,10 @@ n_swims <- vapply(seq_len(nrow(todo)), function(i) {
 say("fetched %s swims for %d athletes in %.0fs",
     format(sum(n_swims), big.mark = ","), sum(n_swims > 0L),
     as.numeric(difftime(Sys.time(), t0, units = "secs")))
+if (n_failed > 0L) {
+  say("%d fetch%s failed and were left uncached for retry", n_failed,
+      if (n_failed == 1L) "" else "es")
+}
 
 say("\nwrote %d cache file%s to swim_athlete_cache/", nrow(todo),
     if (nrow(todo) == 1L) "" else "s")

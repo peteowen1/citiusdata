@@ -27,7 +27,7 @@ PDF_URL <- paste0("https://european-athletics.directus.app/assets/",
 # used: with no .here or .Rproj marker in the tree it anchors on the working
 # directory, which resolves to citiusdata/ and doubles the path when this is run
 # through Rscript rather than from the verse root.
-VERSE   <- "C:/dev/citiusverse"
+VERSE   <- here::here()
 OUT     <- file.path(VERSE, "citiusdata", "data")
 PDF     <- file.path(OUT, "birmingham2026_entries.pdf")
 JSON    <- file.path(OUT, "birmingham2026_entries.json")

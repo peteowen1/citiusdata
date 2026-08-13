@@ -168,6 +168,18 @@ if (!identical(Sys.getenv("CITIUS_ASSEMBLE", "0"), "1")) {
   rm(parts); invisible(gc())
   if (nrow(all)) {
     saveRDS(all, file.path(OUT, "swimming_history_full.rds"))
+    # Parquet twin: temp-then-rename, LOUD on failure -- see the note in
+    # harvest_athlete_histories.R; a quiet skip leaves two vintages on disk.
+    pq <- file.path(OUT, "swimming_history_full.parquet")
+    if (requireNamespace("arrow", quietly = TRUE)) {
+      tryCatch({
+        arrow::write_parquet(all, paste0(pq, ".tmp"))
+        if (!file.rename(paste0(pq, ".tmp"), pq)) stop("rename over target failed")
+      }, error = function(e) cli::cli_alert_danger(
+        "parquet twin write FAILED ({conditionMessage(e)}); {basename(pq)} is STALE relative to the .rds"))
+    } else {
+      cli::cli_alert_danger("arrow not installed -- {basename(pq)} NOT refreshed; it is stale relative to the .rds")
+    }
     cat(sprintf("\n%s swims | %s meets | %s athletes\n",
                 format(nrow(all), big.mark = ","), uniqueN(all$competition_id),
                 format(uniqueN(all$athlete_id), big.mark = ",")))

@@ -26,7 +26,7 @@
 #   4. Every entry records which rule resolved it, so the card can be audited
 #      and the fallbacks counted rather than assumed rare.
 
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages(devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE))
 suppressMessages(library(data.table)); library(jsonlite)
 D   <- file.path(VERSE, "citiusdata", "data")

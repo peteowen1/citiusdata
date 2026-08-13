@@ -19,6 +19,11 @@ library(data.table)
 N_COMPS <- as.integer(Sys.getenv("CITIUS_AUDIT_COMPS", "12"))
 OUT <- here::here("citiusdata", "data")
 comps <- setDT(readRDS(file.path(OUT, "ath_competitions.rds")))
+# Same load-sanity guard as the harvest scripts: an empty competitions file
+# would otherwise skip the fetch loop and leave the audit vacuously green.
+if (!nrow(comps)) stop("ath_competitions.rds is empty -- nothing to audit")
+cat(sprintf("ath_competitions: %s rows, %s to %s\n", format(nrow(comps), big.mark = ","),
+            min(comps$start, na.rm = TRUE), max(comps$start, na.rm = TRUE)))
 
 # Sample across tiers and eras rather than taking the most recent: field
 # availability varies by meet type, and a championship-only sample would miss
@@ -34,12 +39,14 @@ note <- function(level, k) keys[[level]] <<- c(keys[[level]], k)
 sample_vals <- list()
 
 base_u <- athletics_base_url()
+n_fetch <- 0L; n_fetch_failed <- 0L
 for (i in seq_len(nrow(samp))) {
   cid <- samp$competition_id[i]
   ndays <- min(max(samp$dur[i], 1L) + 1L, 12L)
   for (d in seq_len(ndays)) {
+    n_fetch <- n_fetch + 1L
     r <- tryCatch(citius_get_json(sprintf("%s/competitions/%d/results?day=%d", base_u, cid, d)),
-                  error = function(e) NULL)
+                  error = function(e) { n_fetch_failed <<- n_fetch_failed + 1L; NULL })
     for (ev in r$events %||% list()) {
       note("event", names(ev))
       for (rc in ev$races %||% list()) {
@@ -59,6 +66,7 @@ for (i in seq_len(nrow(samp))) {
   }
   cat(sprintf("  %d/%d\n", i, nrow(samp))); flush.console()
 }
+cli::cli_alert_info("day-page fetches: {n_fetch} attempted, {n_fetch_failed} failed.")
 
 # What athletics_competition_results() actually produces, for the same competitions.
 parsed <- rbindlist(lapply(samp$competition_id, function(cid) {
@@ -88,7 +96,25 @@ for (lvl in names(keys)) {
 
 dropped <- unique(unlist(lapply(keys, function(k) setdiff(unique(k), names(captured)))))
 cli::cli_h3("Fields present in the feed but NOT captured")
-if (length(dropped)) {
+# "Nothing dropped" is only a real pass if at least one fetch actually
+# succeeded -- otherwise `keys` is empty because nothing was ever read, not
+# because nothing was missing, and that must not read as a clean audit. The
+# n_fetch == 0 branch closes the OTHER vacuous path: an empty competitions
+# file or CITIUS_AUDIT_COMPS=0 skips the loop entirely, and without the guard
+# that also fell through to "Nothing dropped" (review 2026-08-14).
+# UNVERIFIABLE exits nonzero: cli_alert_danger is only coloured text, and a
+# cron/CI gate that reads exit status saw a green run while 100% of fetches
+# failed.
+if (n_fetch == 0L) {
+  cli::cli_alert_danger("UNVERIFIABLE: no fetches were attempted -- is the competitions sample empty?")
+  quit(save = "no", status = 1)
+} else if (n_fetch_failed >= n_fetch) {
+  cli::cli_alert_danger("UNVERIFIABLE: feed unreachable -- all {n_fetch} day-page fetch{?es} failed.")
+  quit(save = "no", status = 1)
+} else if (n_fetch_failed > n_fetch / 2) {
+  cli::cli_alert_danger("UNVERIFIABLE: feed unreachable -- {n_fetch_failed}/{n_fetch} day-page fetches failed.")
+  quit(save = "no", status = 1)
+} else if (length(dropped)) {
   for (f in dropped) cat(sprintf("  %-20s e.g. %s\n", f, substr(sample_vals[[f]] %||% "(nested)", 1, 40)))
   cat("\n  Decide NOW whether to capture these -- adding one later costs a full re-harvest.\n")
 } else cli::cli_alert_success("Nothing dropped.")

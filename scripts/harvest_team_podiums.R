@@ -24,10 +24,13 @@
 library(rvest)
 library(data.table)
 
-OUT   <- "C:/dev/citiusverse/citiusdata/data"
+OUT   <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "wiki_cache")
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
-source("C:/dev/citiusverse/citiusdata/scripts/games_reference.R")
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
+source(here::here("citiusdata", "scripts", "games_reference.R"))
+# Pure parsing rules live in lib/ so the citius test suite tests the REAL
+# functions -- test-podium-helpers.R used to test a hand-copied twin.
+source(here::here("citiusdata", "scripts", "lib", "podium_parsing.R"))
 
 read_cached <- function(slug) {
   cf <- file.path(CACHE, paste0(gsub("[^A-Za-z0-9_.-]", "_", slug), ".html"))
@@ -42,20 +45,12 @@ med[, canon := canonical_nation(nation)]
 KNOWN <- sort(unique(med$canon))
 KNOWN <- KNOWN[nzchar(KNOWN)]
 # Longest first, so "South Africa" wins over any shorter prefix.
-KNOWN_BY_LEN <- KNOWN[order(-nchar(KNOWN))]
+KNOWN_BY_LEN <- pp_nation_prefixes(KNOWN)
 
-#' The nation a cell starts with, or NA.
-#'
-#' Podium cells run the nation straight into the squad with no separator
-#' ("South AfricaJames MurphyZain Davids..."), so this is a longest-prefix
-#' match against nations known to have won a medal somewhere, never a guess.
-leading_nation <- function(txt) {
-  s <- trimws(gsub("\u00a0", " ", as.character(txt)))
-  s <- gsub("\\[[^]]*\\]", "", s)
-  if (!nzchar(s)) return(NA_character_)
-  hit <- KNOWN_BY_LEN[startsWith(s, KNOWN_BY_LEN)]
-  if (length(hit)) hit[1] else NA_character_
-}
+# The nation a cell starts with, or NA -- see lib/podium_parsing.R. This
+# script does NOT pass a canonicaliser (participation does); podium cells are
+# squad listings, not abbreviations.
+leading_nation <- function(txt) pp_leading_nation(txt, KNOWN_BY_LEN)
 
 #' Nations from the infobox "Medalists" block.
 #'
@@ -121,7 +116,7 @@ podium_from_standings <- function(page) {
     # genuine medallists in that edition.
     known <- which(!is.na(pos))
     if (length(known) >= 2 && is.unsorted(pos[known])) next
-    pos[is.na(pos)] <- seq_len(nrow(d))[is.na(pos)]
+    pos <- pp_fill_missing_places(pos)
     got <- vapply(1:3, function(k) {
       v <- nat[which(pos == k)]
       if (length(v) && !is.na(v[1])) v[1] else NA_character_
@@ -143,8 +138,7 @@ podium_from_medal_cells <- function(page) {
     b <- cn[grepl("^bronze", cn)][1]
     if (any(is.na(c(g, s, b)))) next
     # A numeric gold column means this is the NOC table, handled elsewhere.
-    vals <- trimws(gsub("\\[.*?\\]", "", as.character(d[[g]])))
-    if (mean(grepl("^[0-9]+$", vals[nzchar(vals)])) >= 0.8) next
+    if (pp_is_noc_count_column(d[[g]])) next
     ev <- cn[grepl("^event", cn)][1]
     for (i in seq_len(nrow(d))) {
       trio <- c(leading_nation(d[[g]][i]), leading_nation(d[[s]][i]),

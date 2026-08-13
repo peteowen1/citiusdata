@@ -73,7 +73,13 @@ if (is.null(.cal_prov)) {
     "scored meets cannot be checked. Rebuild it with rebaseline_chain.R."))
 } else {
   cli::cli_alert_info(
-    "Calibration fitted on {.val {.cal_prov$n_meets}} meets, {.val {as.character(.cal_prov$date_min)}} to {.val {as.character(.cal_prov$date_max)}}.")
+    # Parenthesised because cli reads `{.cal_prov...}` as a class specifier
+    # (`{.val}`, `{.code}`, ...) rather than an expression, and aborts with
+    # "Invalid cli literal". This branch runs only when provenance is PRESENT,
+    # which no calibration reaching this script did until 2026-08-13 -- so the
+    # overlap guard added 2026-08-03 had never once executed, and every run
+    # silently took the no-provenance warning branch above.
+    "Calibration fitted on {.val {(.cal_prov$n_meets)}} meets, {.val {as.character(.cal_prov$date_min)}} to {.val {as.character(.cal_prov$date_max)}}.")
 }
 # The aging curve. Found missing from this script on 2026-07-29: project_ability()
 # is applied in predict_glasgow2026.R but was never called here, so the backtest
@@ -154,6 +160,35 @@ PRIOR_WEIGHT <- as.numeric(Sys.getenv("CITIUS_PRIOR_WEIGHT", "0.5"))
 # probability rewards being unpredictable. This asks whether that reordering
 # carries information or destroys it.
 SIGMA_MODE <- Sys.getenv("CITIUS_BT_SIGMA_MODE", "athlete")
+
+# Which parts of the robust-sigma bundle are active. The default is the VALIDATED
+# PAIR -- estimator + weight -- and matches estimate_ability()'s own default
+# exactly, so leaving this unset reproduces the deployed arm bit for bit.
+#
+# `target` is the third part and has never been measured. It shrinks sigma toward
+# the calibration's MEASURED `sigma_within` instead of the registry's `cv_prior`,
+# which the registry itself documents as "a fallback placeholder, not an
+# estimate" -- 0.008 for the 100m against a measured 0.0172. It could not be
+# measured before because there was no way to pass it in from here: `crob` was
+# adopted on estimator + weight while a recycling bug held `target` inert.
+#
+# It matters because sigma sets the shrinkage strength: kappa = sigma^2 /
+# sigma_between^2, so halving sigma quarters the prior's weight. Measured on the
+# men's 100m, thin athletes' shrinkage goes 3.93% -> 9.78% with it on, elites
+# move < 0.016%, and the top four are unchanged.
+#
+#   CITIUS_BT_SIGMA_PARTS=estimator,weight,target
+SIGMA_PARTS <- trimws(strsplit(
+  Sys.getenv("CITIUS_BT_SIGMA_PARTS", "estimator,weight"), ",")[[1]])
+SIGMA_PARTS <- SIGMA_PARTS[nzchar(SIGMA_PARTS)]
+if (!length(SIGMA_PARTS) ||
+    !all(SIGMA_PARTS %in% c("estimator", "weight", "target"))) {
+  cli::cli_abort(c(
+    "CITIUS_BT_SIGMA_PARTS must be a comma-separated subset of estimator, weight, target.",
+    x = "Got {.val {Sys.getenv('CITIUS_BT_SIGMA_PARTS')}}.",
+    i = "A typo would otherwise fall through to estimate_ability()'s match.arg and silently run the default arm under the new cache name."
+  ))
+}
 
 # Round and tier adjustment, on unless explicitly switched off. There was no way
 # to run without it, so the layer had never been measured against its own
@@ -454,6 +489,7 @@ for (i in seq_len(n)) {
                                      calibration = calibration,
                                      adjust_context = ADJUST_CONTEXT,
                                      sigma_mode = SIGMA_MODE,
+                                     sigma_parts = SIGMA_PARTS,
                                      only = unique(as.character(block$athlete_id)),
                                      peak_gamma = PEAK_GAMMA,
                                      robust_location = ROBUST_LOCATION,
@@ -469,7 +505,8 @@ for (i in seq_len(n)) {
         hl_map[[g$family[1]]] else half_life
       estimate_ability(g[, !"family"], as_of = cut_date, half_life = hl,
                        calibration = calibration, adjust_context = ADJUST_CONTEXT,
-                       sigma_mode = SIGMA_MODE, peak_gamma = PEAK_GAMMA,
+                       sigma_mode = SIGMA_MODE, sigma_parts = SIGMA_PARTS,
+                       peak_gamma = PEAK_GAMMA,
                        robust_location = ROBUST_LOCATION,
                        decouple_peak = DECOUPLE_PEAK)
     }), fill = TRUE))
@@ -661,6 +698,11 @@ saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc,
                }, error = function(e) NA_character_),
                half_life = half_life, prior_weight = PRIOR_WEIGHT,
                sigma_mode = SIGMA_MODE, adjust_context = ADJUST_CONTEXT,
+               # Without this, an arm differing ONLY by the sigma bundle records
+               # metadata identical to its reference, and quick_compare cannot
+               # tell them apart -- the exact failure that let six arms share a
+               # history vintage undetected on 2026-07-31.
+               sigma_parts = paste(SIGMA_PARTS, collapse = ","),
                # Recorded because an arm scored on T1 only is not comparable to
                # one scored on every tier, and nothing else in the meta would say so.
                tier_filter = if (nzchar(TIER_FILTER)) TIER_FILTER else NA_character_,

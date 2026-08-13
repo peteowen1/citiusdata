@@ -13,7 +13,11 @@ CACHE <- file.path(OUT, "ath_comp_cache_gap")
 dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
 
 cc <- setDT(readRDS(file.path(OUT, "ath_competitions.rds")))
+if (!nrow(cc)) cli::cli_abort("ath_competitions.rds loaded 0 rows.")
+cli::cli_alert_info("ath_competitions.rds: {nrow(cc)} row{?s}, {min(cc$start, na.rm = TRUE)}..{max(cc$start, na.rm = TRUE)}")
 ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+if (!nrow(ch)) cli::cli_abort("championship_results.rds loaded 0 rows.")
+cli::cli_alert_info("championship_results.rds: {format(nrow(ch), big.mark = ',')} row{?s}, {min(ch$date, na.rm = TRUE)}..{max(ch$date, na.rm = TRUE)}")
 cc[, harvested := competition_id %in% unique(ch$competition_id)]
 if (!"has_results" %in% names(cc)) cc[, has_results := TRUE]
 cc[is.na(has_results), has_results := TRUE]

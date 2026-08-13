@@ -30,6 +30,8 @@ dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
 # only contain meets someone thought to search for. Probe the feed directly for
 # the major names as well, and union the two.
 cc <- setDT(readRDS(file.path(OUT, "ath_competitions.rds")))
+if (!nrow(cc)) cli::cli_abort("ath_competitions.rds loaded 0 rows.")
+cli::cli_alert_info("ath_competitions.rds: {nrow(cc)} row{?s}, {min(cc$start, na.rm = TRUE)}..{max(cc$start, na.rm = TRUE)}")
 probe_terms <- c("World Championships in Athletics", "IAAF World Championships",
                  "Olympic Games", "Commonwealth Games", "World Indoor Championships")
 probed <- rbindlist(lapply(probe_terms, function(t)

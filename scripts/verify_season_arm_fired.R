@@ -11,7 +11,7 @@
 # A real null shows many predictions moving by small amounts. A dead adjustment
 # shows ZERO predictions moving.
 suppressMessages(library(data.table))
-D <- "C:/dev/citiusverse/citiusdata/data"
+D <- here::here("citiusdata", "data")
 
 off <- readRDS(file.path(D, "backtest_season_off.rds"))
 on  <- readRDS(file.path(D, "backtest_season_on.rds"))

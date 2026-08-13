@@ -16,8 +16,8 @@ library(jsonlite)
 library(data.table)
 library(arrow)
 
-OUT  <- "C:/dev/citiusverse/citiusdata/data"
-INST <- "C:/dev/citiusverse/citius/inst/extdata"
+OUT  <- here::here("citiusdata", "data")
+INST <- here::here("citius", "inst", "extdata")
 dir.create(OUT,  showWarnings = FALSE, recursive = TRUE)
 dir.create(INST, showWarnings = FALSE, recursive = TRUE)
 
@@ -78,12 +78,18 @@ aggregate_codes <- c(
 )
 economic_dt <- economic_dt[!iso3 %in% aggregate_codes]
 
-# Carry the last observed year forward to 2026 so current editions resolve.
+# Carry the last observed year forward to the current year so current
+# editions resolve. A hardcoded ceiling expires the moment the calendar
+# passes it -- 2026L quietly stopped covering LA 2028 the day this was
+# written to stop at 2026, so derive it from the clock instead.
 last_year <- economic_dt[, max(year)]
-for (y in (last_year + 1L):2026L) {
-  fwd <- copy(economic_dt[year == last_year])
-  fwd[, `:=`(year = y, carried_forward = TRUE)]
-  economic_dt <- rbind(economic_dt, fwd, fill = TRUE)
+current_year <- as.integer(format(Sys.Date(), "%Y"))
+if (current_year > last_year) {
+  for (y in (last_year + 1L):current_year) {
+    fwd <- copy(economic_dt[year == last_year])
+    fwd[, `:=`(year = y, carried_forward = TRUE)]
+    economic_dt <- rbind(economic_dt, fwd, fill = TRUE)
+  }
 }
 economic_dt[is.na(carried_forward), carried_forward := FALSE]
 

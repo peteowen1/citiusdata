@@ -9,11 +9,11 @@
 # The CRS is the same source used for swimming and it has them. Athletics is
 # normally taken from the federation feed (see watch_glasgow2026.R) precisely so
 # this scrape is not needed; it is needed because the feed did not deliver.
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages({library(data.table); library(jsonlite)})
-D <- "C:/dev/citiusverse/citiusdata/data"
+D <- here::here("citiusdata", "data")
 
-source("C:/dev/citiusverse/citiusdata/scripts/_deployed.R")
+source(here::here("citiusdata", "scripts", "_deployed.R"))
 crs <- .repair_sex_from_title(parse_crs_export(file.path(D, "glasgow2026_athletics_crs.json")))
 if (!is.null(attr(crs, "sex_repaired")))
   cat("repaired", attr(crs, "sex_repaired"), "rows whose route disagreed with the page title

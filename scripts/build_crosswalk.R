@@ -12,7 +12,7 @@
 # Resolve paths from the verse root rather than the working directory, so the
 # script runs identically from citiusdata/, from the verse root, or from a
 # scheduler with no meaningful cwd.
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages({
   devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE)
   library(data.table)
@@ -127,9 +127,16 @@ if (file.exists(f)) {
 
 d <- file.path(D, "swimcloud_cache")
 if (dir.exists(d) && length(list.files(d))) {
-  sc <- rbindlist(lapply(list.files(d, full.names = TRUE),
-                         function(p) tryCatch(readRDS(p), error = function(e) NULL)),
-                  fill = TRUE)
+  cache_files <- list.files(d, full.names = TRUE)
+  raw <- lapply(cache_files, function(p) tryCatch(readRDS(p), error = function(e) NULL))
+  bad <- cache_files[vapply(raw, is.null, logical(1))]
+  if (length(bad)) {
+    say("  swimcloud cache: %d corrupt file%s dropped silently otherwise: %s%s",
+        length(bad), if (length(bad) == 1L) "" else "s",
+        paste(basename(head(bad, 10)), collapse = ", "),
+        if (length(bad) > 10) sprintf(" and %d more", length(bad) - 10) else "")
+  }
+  sc <- rbindlist(raw, fill = TRUE)
   if (nrow(sc)) {
     sw_src$swimcloud <- unique(sc[!is.na(athlete_name) & !is.na(athlete_id),
       .(source = "swimcloud", athlete_id, athlete_name,

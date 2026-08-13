@@ -16,10 +16,11 @@
 library(rvest)
 library(data.table)
 
-OUT   <- "C:/dev/citiusverse/citiusdata/data"
+OUT   <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "wiki_cache")
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
-source("C:/dev/citiusverse/citiusdata/scripts/games_reference.R")
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
+source(here::here("citiusdata", "scripts", "games_reference.R"))
+source(here::here("citiusdata", "scripts", "lib", "podium_parsing.R"))
 
 read_cached <- function(slug) {
   cf <- file.path(CACHE, paste0(gsub("[^A-Za-z0-9_.-]", "_", slug), ".html"))
@@ -32,21 +33,14 @@ read_cached <- function(slug) {
 med <- as.data.table(readRDS(file.path(OUT, "multisport_medal_tables.rds")))
 med[, canon := canonical_nation(nation)]
 KNOWN <- sort(unique(med$canon)); KNOWN <- KNOWN[nzchar(KNOWN)]
-KNOWN_BY_LEN <- KNOWN[order(-nchar(KNOWN))]
+KNOWN_BY_LEN <- pp_nation_prefixes(KNOWN)
 
+# Shared logic in lib/podium_parsing.R. canonical_nation is passed so whole-
+# cell abbreviations resolve first: standings use forms that are not prefixes
+# of the canonical name -- the 1992 Unified Team appears as "CIS" -- so
+# prefix matching alone silently loses them.
 leading_nation <- function(txt) {
-  s <- trimws(gsub("\u00a0", " ", as.character(txt)))
-  s <- gsub("\\[[^]]*\\]", "", s)
-  s <- gsub("\\s*\\((H|h)\\)\\s*$", "", s)     # host marker
-  s <- gsub("\\s*\\*+$", "", s)
-  if (!nzchar(s)) return(NA_character_)
-  # Try canonicalising the whole cell first. Standings use abbreviations that
-  # are not prefixes of the canonical name -- the 1992 Unified Team appears as
-  # "CIS" -- so prefix matching alone silently loses them.
-  full <- canonical_nation(s)
-  if (!is.na(full) && full %in% KNOWN) return(full)
-  hit <- KNOWN_BY_LEN[startsWith(s, KNOWN_BY_LEN)]
-  if (length(hit)) hit[1] else NA_character_
+  pp_leading_nation(txt, KNOWN_BY_LEN, canonicalise = canonical_nation)
 }
 
 #' Nations named in the tournament's group-standings tables.

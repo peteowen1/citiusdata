@@ -16,7 +16,7 @@
 #      and the cutoff must precede the first day of competition.
 #   6. The three defects the ticket-06 prototype found must be absent.
 
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages(devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE))
 suppressMessages(library(data.table)); library(jsonlite)
 source(file.path(VERSE, "citiusdata", "scripts", "_deployed.R"))

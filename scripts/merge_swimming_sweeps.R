@@ -9,9 +9,9 @@
 # first one could not. The two are complementary rather than overlapping: the
 # first holds five events the second's sweep never listed, so BOTH are kept and
 # the union is what counts.
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages({library(data.table); library(jsonlite)})
-D <- "C:/dev/citiusverse/citiusdata/data"
+D <- here::here("citiusdata", "data")
 
 f1 <- file.path(D, "glasgow2026_swimming.json")
 f2 <- file.path(D, "glasgow2026_swimming_sweep2.json")

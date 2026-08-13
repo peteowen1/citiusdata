@@ -12,7 +12,7 @@
 # holding partial careers, and empirical Bayes shrinks each of the fragments.
 #
 # Usage:  Rscript scripts/build_swimming_corpus.R
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages({library(citius); library(data.table)})
 D <- file.path(VERSE, "citiusdata", "data")
 say <- function(...) cat(sprintf(...), "\n", sep = "")
@@ -54,8 +54,16 @@ if (file.exists(f)) {
 
 d <- file.path(D, "swimcloud_cache")
 if (dir.exists(d) && length(list.files(d))) {
-  sc <- rbindlist(lapply(list.files(d, full.names = TRUE),
-                         function(p) tryCatch(readRDS(p), error = function(e) NULL)), fill = TRUE)
+  cache_files <- list.files(d, full.names = TRUE)
+  raw <- lapply(cache_files, function(p) tryCatch(readRDS(p), error = function(e) NULL))
+  bad <- cache_files[vapply(raw, is.null, logical(1))]
+  if (length(bad)) {
+    say("swimcloud cache: %d corrupt file%s dropped silently otherwise: %s%s",
+        length(bad), if (length(bad) == 1L) "" else "s",
+        paste(basename(head(bad, 10)), collapse = ", "),
+        if (length(bad) > 10) sprintf(" and %d more", length(bad) - 10) else "")
+  }
+  sc <- rbindlist(raw, fill = TRUE)
   if (nrow(sc)) {
     sc[, source := "swimcloud"]
     parts$sc <- sc
@@ -176,6 +184,23 @@ say("rows carrying a race_key (whole fields, usable for race effects): %s of %s"
     format(sum(!is.na(all$race_key)), big.mark = ","),
     format(nrow(all), big.mark = ","))
 
-saveRDS(all, file.path(D, "swimming_corpus.rds"))
-arrow::write_parquet(all, file.path(D, "swimming_corpus.parquet"))
+# Write atomically: every arm and backtest reads this path directly, so a
+# crash or interrupt mid-save must never leave a partial file where a full
+# corpus used to be. Write to a sibling temp file, then rename over the
+# target in ONE step -- file.rename() overwrites an existing destination file
+# on this platform (verified), so there is no delete-first window in which
+# neither corpus exists. And CHECK the rename: it returns FALSE on failure
+# rather than erroring, and an unchecked FALSE means printing "wrote" while
+# the corpus is actually the old file or missing.
+atomic_write <- function(write_fn, target) {
+  tmp <- paste0(target, ".tmp")
+  write_fn(tmp)
+  if (!file.rename(tmp, target)) {
+    stop("rename of ", tmp, " over ", target,
+         " failed; the new corpus is intact at the .tmp path, nothing was deleted")
+  }
+}
+atomic_write(function(p) saveRDS(all, p), file.path(D, "swimming_corpus.rds"))
+atomic_write(function(p) arrow::write_parquet(all, p),
+             file.path(D, "swimming_corpus.parquet"))
 say("\nwrote swimming_corpus.{rds,parquet}")

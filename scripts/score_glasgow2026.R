@@ -20,8 +20,8 @@ suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
 
 OUT <- here::here("citiusdata", "data")
+source(here::here("citiusdata", "scripts", "_deployed.R"))
 GLASGOW <- 7187518L
-HALF_LIFE <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "365"))
 
 results <- tryCatch(setDT(athletics_harvest_competitions(GLASGOW)), error = function(e) NULL)
 if (is.null(results) || !nrow(results)) {
@@ -179,10 +179,26 @@ CUT <- min(results$date, na.rm = TRUE)
 # here, because partition pruning never opens the other event files.
 # flag_implausible() is already applied at store-build time -- it is a
 # GLOBAL operation and cannot be redone on a slice.
-STORE <- file.path(OUT, "athletics_store")
+#
+# USES THE DEPLOYED CONFIG, not its own literals (fixed 2026-08-13).
+#
+# This block read `calibration.rds` -- 3MB, last written 2026-07-28 -- and a
+# hardcoded `half_life = 365`, against a deployed model that is a 20MB
+# calibration fitted on a different corpus with per-FAMILY half-lives
+# (road = 1095, walk = 730). It also read `athletics_store` (championship
+# results) rather than the corpus store the calibration was fitted on. So the
+# ranking check scored a model that was never shipped.
+#
+# `score_meet.R` was written 2026-08-12 by copying this block, and inherited all
+# three faults verbatim. That is the mechanism worth naming: the defect did not
+# recur independently, it was propagated. Both are now on `deployed_ability()`,
+# which carries the per-family half-lives instead of leaving them as a literal
+# for the next copy to lose.
+STORE <- file.path(OUT, DEPLOYED$history_store)
 USE_STORE <- dir.exists(STORE)
 champs <- if (USE_STORE) NULL else readRDS(file.path(OUT, "championship_results.rds"))
-cal <- readRDS(file.path(OUT, "calibration.rds"))
+cal <- deployed_calibration(OUT)
+cli::cli_alert_info("Ranking check on the DEPLOYED model: {DEPLOYED$stamp}")
 clean <- if (USE_STORE) NULL else flag_implausible(champs)[!is.na(event_id) & !is.na(perf)]
 # Excluded by ID as well as by date. The date cut here is correct (CUT is the
 # Games' own first day), but citiusdata#1 showed how easily a date cut goes
@@ -198,7 +214,7 @@ past <- if (USE_STORE) {
 past <- past[is.na(competition_id) | competition_id != GLASGOW]
 stopifnot("history must not contain the competition being scored" =
             !any(past$competition_id == GLASGOW, na.rm = TRUE))
-ab <- estimate_ability(past, as_of = CUT, half_life = HALF_LIFE, calibration = cal)
+ab <- deployed_ability(past, as_of = CUT, calibration = cal)
 
 scored <- results[!is.na(place) & place > 0L]
 scored[, athlete_id := as.character(athlete_id)]

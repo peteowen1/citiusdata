@@ -19,7 +19,7 @@
 # reads directly as a proportional advantage.
 #
 # Usage:  Rscript scripts/measure_course_offset.R
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages({library(citius); library(data.table)})
 D <- file.path(VERSE, "citiusdata", "data")
 say <- function(...) cat(sprintf(...), "\n", sep = "")

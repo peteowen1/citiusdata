@@ -22,9 +22,9 @@
 #     room to gain than one taking 4%.
 
 library(data.table)
-DATA <- "C:/dev/citiusverse/citiusdata/data"
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
-source("C:/dev/citiusverse/citiusdata/scripts/games_reference.R")
+DATA <- here::here("citiusdata", "data")
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
+source(here::here("citiusdata", "scripts", "games_reference.R"))
 
 # Use the table WITH team-sport podiums folded in. Team sports have no NOC
 # medal table on Wikipedia, so without this only two of them reach the
@@ -349,4 +349,16 @@ for (g in unique(d$games)) {
 }
 
 saveRDS(d, file.path(DATA, "host_sport_panel.rds"))
+# Parquet twin: temp-then-rename, LOUD on failure -- see the note in
+# harvest_athlete_histories.R; a quiet skip leaves two vintages on disk.
+pq <- file.path(DATA, "host_sport_panel.parquet")
+if (requireNamespace("arrow", quietly = TRUE)) {
+  tryCatch({
+    arrow::write_parquet(d, paste0(pq, ".tmp"))
+    if (!file.rename(paste0(pq, ".tmp"), pq)) stop("rename over target failed")
+  }, error = function(e) cli::cli_alert_danger(
+    "parquet twin write FAILED ({conditionMessage(e)}); {basename(pq)} is STALE relative to the .rds"))
+} else {
+  cli::cli_alert_danger("arrow not installed -- {basename(pq)} NOT refreshed; it is stale relative to the .rds")
+}
 cat("\nSaved host_sport_panel.rds\n")

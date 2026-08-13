@@ -19,6 +19,15 @@ CANDIDATES <- as.numeric(strsplit(Sys.getenv("CITIUS_HL_GRID", "180,365,730,1460
 N_MEETS <- as.integer(Sys.getenv("CITIUS_HL_MEETS", "30"))
 N_SIMS <- 4000L
 
+# The 365 this script selected is now DEPLOYED$half_life, and DEPLOYED also
+# carries per-family overrides (road = 1095, walk = 730) that this sweep never
+# tested. The sweep itself is still sound -- every candidate shares one
+# calibration, so a stale one biases all arms alike and the ARGMAX survives --
+# but the absolute skill numbers do not describe the deployed model, and a rerun
+# should use deployed_calibration(OUT) before any of them is requoted.
+cli::cli_alert_warning(
+  "Sweep runs on calibration.rds (2026-07-28), not the deployed calibration.")
+
 champs      <- readRDS(file.path(OUT, "championship_results.rds"))
 calibration <- readRDS(file.path(OUT, "calibration.rds"))
 

@@ -19,7 +19,7 @@
 # nothing errors and the output still looks like a rate.
 #
 # Usage:  Rscript scripts/build_athletics_corpus.R
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages({library(citius); library(data.table)})
 D <- file.path(VERSE, "citiusdata", "data")
 say <- function(...) cat(sprintf(...), "\n", sep = "")
@@ -129,6 +129,23 @@ say("\nathletes: %s | events: %s | results per athlete: median %s, 90th pct %s",
     format(uniqueN(all$athlete_id), big.mark = ","), uniqueN(all$event_id),
     median(d$N), round(quantile(d$N, 0.9)))
 
-saveRDS(all, file.path(D, "athletics_corpus.rds"))
-arrow::write_parquet(all, file.path(D, "athletics_corpus.parquet"))
+# Write atomically: every arm and backtest reads this path directly, so a
+# crash or interrupt mid-save must never leave a partial file where a full
+# corpus used to be. Write to a sibling temp file, then rename over the
+# target in ONE step -- file.rename() overwrites an existing destination file
+# on this platform (verified), so there is no delete-first window in which
+# neither corpus exists. And CHECK the rename: it returns FALSE on failure
+# (lock, permissions) rather than erroring, and an unchecked FALSE here means
+# printing "wrote" while the corpus is actually the old file or missing.
+atomic_write <- function(write_fn, target) {
+  tmp <- paste0(target, ".tmp")
+  write_fn(tmp)
+  if (!file.rename(tmp, target)) {
+    stop("rename of ", tmp, " over ", target,
+         " failed; the new corpus is intact at the .tmp path, nothing was deleted")
+  }
+}
+atomic_write(function(p) saveRDS(all, p), file.path(D, "athletics_corpus.rds"))
+atomic_write(function(p) arrow::write_parquet(all, p),
+             file.path(D, "athletics_corpus.parquet"))
 say("\nwrote athletics_corpus.{rds,parquet}")

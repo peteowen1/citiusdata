@@ -14,11 +14,29 @@
 #   3. fit and attach sigma_context    -> calibration_corpus_csigma.rds
 #
 # Usage:  Rscript scripts/rebaseline_chain.R
+#   CITIUS_CAL_SUFFIX   written into every output name, so an experimental chain
+#                       cannot overwrite the deployed one. ALWAYS set it for an
+#                       arm; the empty default reproduces the canonical names.
+#   CITIUS_CAL_CENTRE   "always" (default) or "auto" -- the convergence fix.
+#   CITIUS_CAL_MAX_ITER sweeps; "auto" needed 1,038 on the men's 100m, so 400 is
+#                       not enough for it.
+#
+# NOTE 2026-08-13: the three canonical outputs on disk are BYTE-IDENTICAL to each
+# other (md5 03a82a06...), so they were not produced by this script -- it saves an
+# accumulating object, and step 1's output should carry neither wind nor
+# sigma_context. Any experiment swapping calibration_corpus.rds for
+# calibration_corpus_w.rds to test wind on/off is currently a no-op.
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
 OUT <- here::here("citiusdata", "data")
+SUF <- Sys.getenv("CITIUS_CAL_SUFFIX", "")
+CENTRE <- Sys.getenv("CITIUS_CAL_CENTRE", "always")
+MAXIT <- as.integer(Sys.getenv("CITIUS_CAL_MAX_ITER", "400"))
+if (!CENTRE %in% c("always", "auto")) stop("CITIUS_CAL_CENTRE must be always|auto")
+outfile <- function(stem) file.path(OUT, paste0(stem, SUF, ".rds"))
 t0 <- Sys.time()
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), ..., "\n", sep = "")
+say("centre=", CENTRE, " max_iter=", MAXIT, " suffix='", SUF, "'")
 
 x <- setDT(readRDS(file.path(OUT, "athletics_corpus.rds")))[!is.na(date)]
 say("corpus: ", format(nrow(x), big.mark = ","), " rows, ",
@@ -30,7 +48,7 @@ x <- x[, intersect(keep, names(x)), with = FALSE]
 clean <- flag_implausible(x); rm(x); invisible(gc())
 
 say("calibrating ...")
-cal <- calibrate(clean, min_races = 30L)
+cal <- calibrate(clean, min_races = 30L, centre = CENTRE, max_iter = MAXIT)
 
 # Stamp what this was fitted on. Without it there is no way to tell, later,
 # whether a calibration overlaps the meets a backtest scores against it -- and
@@ -49,7 +67,7 @@ cal$provenance <- list(
   date_max = max(clean$date, na.rm = TRUE),
   competition_ids = sort(unique(as.character(clean$competition_id)))
 )
-saveRDS(cal, file.path(OUT, "calibration_corpus.rds"))
+saveRDS(cal, outfile("calibration_corpus"))
 say("calibrated in ", round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 1), " min")
 
 a <- as.data.table(cal$athlete)
@@ -69,14 +87,14 @@ if (!is.null(w) && nrow(w)) {
   prev <- file.path(OUT, "wind_effect_corpus.rds")
   if (file.exists(prev)) { cal$wind <- as.data.table(readRDS(prev)); say("wind re-fit failed; reused previous") }
 }
-saveRDS(cal, file.path(OUT, "calibration_corpus_w.rds"))
+saveRDS(cal, outfile("calibration_corpus_w"))
 
 say("fitting sigma_context ...")
 sc <- fit_sigma_context(clean)
 cal$sigma_context <- sc
 print(sc[order(ratio), .(family, n_champ, ratio = round(ratio, 3))])
-saveRDS(cal, file.path(OUT, "calibration_corpus_csigma.rds"))
-say("wrote calibration_corpus_csigma.rds")
+saveRDS(cal, outfile("calibration_corpus_csigma"))
+say("wrote ", basename(outfile("calibration_corpus_csigma")), " | converged=", cal$converged, " sweeps=", cal$sweeps)
 
 say("total ", round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 1), " min")
 cat("\nNEXT: the backtest caches are now stale. Run with a FRESH cache dir:\n")

@@ -16,9 +16,9 @@
 # per nation in each. Which wins?
 
 library(data.table)
-DATA <- "C:/dev/citiusverse/citiusdata/data"
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
-source("C:/dev/citiusverse/citiusdata/scripts/games_reference.R")
+DATA <- here::here("citiusdata", "data")
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
+source(here::here("citiusdata", "scripts", "games_reference.R"))
 
 sp   <- as.data.table(readRDS(file.path(DATA, "sport_medal_tables.rds")))
 part <- as.data.table(readRDS(file.path(DATA, "sport_participation.rds")))

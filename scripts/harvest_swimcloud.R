@@ -18,7 +18,7 @@
 # automated.
 #
 # Usage:  Rscript scripts/harvest_swimcloud.R "Inez Miller" "Someone Else"
-VERSE <- "C:/dev/citiusverse"
+VERSE <- here::here()
 suppressMessages({library(citius); library(data.table); library(rvest); library(xml2)})
 OUT <- file.path(VERSE, "citiusdata", "data")
 CACHE <- file.path(OUT, "swimcloud_cache")

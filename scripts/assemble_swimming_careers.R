@@ -34,6 +34,8 @@ cat(sprintf("date range: %s to %s\n", min(all$date, na.rm = TRUE), max(all$date,
 
 cat("\n=== the number this harvest exists to move ===\n")
 old <- setDT(readRDS(file.path(OUT, "swimming_history_full.rds")))
+if (!nrow(old)) cli::cli_abort("swimming_history_full.rds loaded 0 rows.")
+cli::cli_alert_info("swimming_history_full.rds: {format(nrow(old), big.mark = ',')} row{?s}, {min(old$date, na.rm = TRUE)}..{max(old$date, na.rm = TRUE)}")
 oe <- old[!is.na(event_id), .N, by = .(athlete_id, event_id)]
 ne <- all[!is.na(event_id), .N, by = .(athlete_id, event_id)]
 cat(sprintf("  results per athlete-event, competition route: median %.0f, mean %.1f\n",

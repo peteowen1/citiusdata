@@ -12,14 +12,14 @@ library(httr)
 library(data.table)
 library(arrow)
 
-OUT  <- "C:/dev/citiusverse/citiusdata/data"
-INST <- "C:/dev/citiusverse/citius/inst/extdata"
+OUT  <- here::here("citiusdata", "data")
+INST <- here::here("citius", "inst", "extdata")
 dir.create(OUT,  showWarnings = FALSE, recursive = TRUE)
 dir.create(INST, showWarnings = FALSE, recursive = TRUE)
 
 user_agent_str <- "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CitiusVerseScraper/5.0"
 
-source("C:/dev/citiusverse/citiusdata/scripts/games_reference.R")
+source(here::here("citiusdata", "scripts", "games_reference.R"))
 
 # Participating-nation counts scraped from each edition's infobox. These are
 # authoritative; `nations_count_map` in games_reference.R is the fallback for

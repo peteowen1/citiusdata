@@ -11,10 +11,10 @@
 # sweep, and R's gc() does not see the growth -- only the OS does.
 #
 # Usage:  Rscript scripts/recalibrate_corpus.R
-suppressMessages(devtools::load_all("C:/dev/citiusverse/citius"))
+suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
 
-OUT <- "C:/dev/citiusverse/citiusdata/data"
+OUT <- here::here("citiusdata", "data")
 IN   <- Sys.getenv("CITIUS_CAL_INPUT", "athletics_corpus.rds")
 PREV <- Sys.getenv("CITIUS_CAL_BASELINE", "calibration.rds")
 SUF  <- Sys.getenv("CITIUS_CAL_SUFFIX", "_corpus")

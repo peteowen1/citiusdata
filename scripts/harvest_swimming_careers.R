@@ -24,6 +24,8 @@ CACHE <- file.path(OUT, "swim_athlete_cache")
 dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
 
 sw <- setDT(readRDS(file.path(OUT, "swimming_history_full.rds")))
+if (!nrow(sw)) cli::cli_abort("swimming_history_full.rds loaded 0 rows.")
+cli::cli_alert_info("swimming_history_full.rds: {format(nrow(sw), big.mark = ',')} row{?s}, {min(sw$date, na.rm = TRUE)}..{max(sw$date, na.rm = TRUE)}")
 sw <- sw[!is.na(athlete_id)]
 
 # Sex is not in the athlete response and match_event() needs it: "Women's 200m
@@ -57,10 +59,16 @@ WORKERS <- as.integer(Sys.getenv("CITIUS_WORKERS", "6"))
 cli::cli_alert_info("Fetching {n} swimmer{?s} on {WORKERS} worker{?s}.")
 
 fetch_one <- function(j, cache) {
-  r <- tryCatch(aquatics_athlete_results(j$id, sex = j$sex), error = function(e) NULL)
+  ok <- TRUE
+  r <- tryCatch(aquatics_athlete_results(j$id, sex = j$sex),
+                error = function(e) { ok <<- FALSE; NULL })
+  # An error leaves no file, so the swimmer is retried next run. A genuine
+  # empty result IS cached (below), which is the miss the empty file exists to
+  # record -- conflating the two poisons the cache with never-fetched athletes.
+  if (!ok) return(list(n = 0L, failed = TRUE))
   saveRDS(if (is.null(r)) data.table::data.table() else r,
           file.path(cache, paste0(j$id, ".rds")))
-  if (is.null(r)) 0L else nrow(r)
+  list(n = if (is.null(r)) 0L else nrow(r), failed = FALSE)
 }
 # Every value the worker needs travels inside the job: referencing `todo` from a
 # worker fails silently and reports success having written nothing.
@@ -68,9 +76,13 @@ jobs <- lapply(seq_len(n), function(i) list(
   id = todo$athlete_id[i],
   sex = if (!is.na(todo$sex[i])) todo$sex[i] else NULL))
 
+n_failed <- 0L
 t0 <- Sys.time()
 if (WORKERS <= 1L) {
-  for (j in jobs) fetch_one(j, CACHE)
+  for (j in jobs) {
+    res <- fetch_one(j, CACHE)
+    if (isTRUE(res$failed)) n_failed <- n_failed + 1L
+  }
 } else {
   cl <- parallel::makeCluster(WORKERS)
   on.exit(parallel::stopCluster(cl), add = TRUE)
@@ -83,7 +95,8 @@ if (WORKERS <= 1L) {
   for (k in seq_along(chunks)) {
     idx <- chunks[[k]]
     got <- parallel::parLapply(cl, jobs[idx], function(j) fetch_one(j, CACHE))
-    if (!any(unlist(got) > 0)) {
+    n_failed <- n_failed + sum(vapply(got, function(g) isTRUE(g$failed), logical(1)))
+    if (!any(vapply(got, function(g) !isTRUE(g$failed) && g$n > 0, logical(1)))) {
       cli::cli_alert_danger("Chunk {k} returned nothing for any swimmer - stopping.")
       break
     }
@@ -91,9 +104,12 @@ if (WORKERS <= 1L) {
     done_n <- max(idx)
     cat(sprintf("  %d/%d  (%.0f/min, ~%.0f min left, %s swims this chunk)\n",
                 done_n, n, done_n / el, (n - done_n) / (done_n / el),
-                format(sum(unlist(got)), big.mark = ",")))
+                format(sum(vapply(got, function(g) g$n, numeric(1))), big.mark = ",")))
     flush.console()
   }
 }
 cli::cli_alert_info("{remaining_after} swimmer{?s} still to fetch - run again.")
+if (n_failed > 0L) {
+  cli::cli_alert_warning("{n_failed} fetch{?es} failed and were left uncached for retry.")
+}
 cli::cli_alert_info("Cache holds {length(list.files(CACHE))} file{?s}. Assemble with assemble_swimming_careers.R.")
