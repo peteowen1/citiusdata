@@ -81,6 +81,22 @@ if (nzchar(SCORE_FROM)) {
   )
 }
 
+# CALIBRATION LEAK, stated rather than left implicit. The per-competition ability
+# refit below is strictly out of sample, but `calibrate()` above was fitted on
+# the WHOLE history -- including every competition scored here. Anything the
+# calibration carries per athlete or per race (sensitivity, sigma_within,
+# condition_sd, tail_df) was therefore fitted partly on the races being
+# predicted. backtest_athletics.R:54-83 makes the same overlap visible for
+# athletics and measured it as small; nothing equivalent has been measured for
+# swimming, so the number here is an upper bound on this backtest's honesty, not
+# a validated allowance.
+#
+# Fix properly by calibrating on history before the earliest scored competition.
+# Until then this prints instead of hiding.
+n_in_cal <- sum(score_cids %in% unique(clean$competition_id))
+cli::cli_alert_warning(
+  "{n_in_cal} of {length(score_cids)} scored competition{?s} are inside the calibration corpus; the calibration is not out of sample.")
+
 for (cid in score_cids) {
   block <- finals[competition_id == cid]
   cut_date <- min(block$comp_start, na.rm = TRUE)

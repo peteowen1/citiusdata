@@ -106,7 +106,18 @@ if (!nrow(finals)) {
                                     hit = place == 1L, hit_medal = place <= 3L)]
     # Only score races whose actual winner we predicted at all; otherwise this
     # measures entry-list coverage rather than the model.
-    keep <- o[, .(ok = any(hit)), by = race_id][ok == TRUE]$race_id
+    #
+    # THE TEST MUST BE AGAINST THE PREDICTIONS. `o` is built from the results, so
+    # `any(hit)` is true for every completed final -- the old form here never
+    # excluded a single race, whatever the coverage was. And the failure is not
+    # neutral: a race whose winner we never predicted contributes only rows with
+    # hit = 0, all carrying small probabilities, which LOWERS the Brier. Missing
+    # coverage flattered the model instead of being held out of it.
+    #
+    # score_pretournament.R:62-69 carries the correct per-event form; this is the
+    # copy that lost it, and score_meet.R then copied it from here.
+    keep <- unique(o[hit == TRUE, .(race_id, athlete_id)][
+      p[, .(race_id, athlete_id)], on = .(race_id, athlete_id), nomatch = NULL]$race_id)
     skipped <- setdiff(ev, keep)
     if (length(skipped)) {
       cli::cli_alert_warning("{length(skipped)} final{?s} skipped - winner absent from our field: {.val {skipped}}")

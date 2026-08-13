@@ -153,13 +153,21 @@ for (ev in sort(unique(res$event_id))) {
   r <- simulate_rounds(ent, structure = structure,
                        n_sims = N_SIMS, calibration = cal, seed = 20260728L)
 
-  # The full finishing distribution for the final itself, conditional on the
-  # field reaching it. A medal probability cannot express fourth place, and
-  # fourth is the position people actually ask about.
+  # The full finishing distribution, for the near-miss a medal probability
+  # cannot express. Fourth is the position people actually ask about.
+  #
+  # THESE ARE NOT MARGINAL PROBABILITIES and must not be read beside p_gold as
+  # if they were. This simulates one race among everyone still holding
+  # p_final > 0.01 -- typically more athletes than the final has places -- and
+  # asks nothing about qualifying. So an athlete with a 5% chance of reaching
+  # the final is placed here as though they had already reached it, and `pos_1`
+  # exceeds their `p_gold` by exactly that factor. Named `infinal_*` so the
+  # conditioning travels with the column instead of living in a comment.
   pos <- position_probs(
     simulate_event(ent[athlete_id %in% r[p_final > 0.01]$athlete_id],
                    n_sims = N_SIMS, calibration = cal, seed = 20260728L),
     max_position = n_final, wide = TRUE)
+  data.table::setnames(pos, sub("^pos_", "infinal_", names(pos)))
   r <- merge(r, pos, by = "athlete_id", all.x = TRUE)
   r[, `:=`(event_id = ev, contested_round = x$round[1], n_heats = n_heats,
            field_size = length(field), n_unraced = length(unraced))]
@@ -192,7 +200,7 @@ for (ev in unique(pred$event_id)) {
   cat(sprintf("\n%s  (%d contested %s in %d heat%s)\n", ev, x$field_size[1],
               x$contested_round[1], x$n_heats[1], if (x$n_heats[1] == 1) "" else "s"))
   cols <- c("athlete_name", "p_final", "p_gold", "p_medal",
-            intersect(c("pos_1", "pos_2", "pos_3", "pos_4"), names(x)))
+            intersect(c("infinal_1", "infinal_2", "infinal_3", "infinal_4"), names(x)))
   y <- x[, ..cols]
   data.table::setnames(y, c("athlete_name", "p_final", "p_gold", "p_medal"),
                        c("athlete", "reach_final", "gold", "medal"))
@@ -202,5 +210,7 @@ for (ev in unique(pred$event_id)) {
   print(head(y, 6))
 }
 cat("\nEvery athlete here contested a round at these Games, so no probability\n")
-cat("sits on a withdrawal. p_final carries the qualification uncertainty, and\n")
-cat("pos_4 is the near-miss a medal probability cannot express.\n")
+cat("sits on a withdrawal. p_final carries the qualification uncertainty; the\n")
+cat("infinal_* columns do NOT -- they are finishing positions conditional on\n")
+cat("reaching the final, so infinal_1 is above p_gold by the odds of getting\n")
+cat("there. infinal_4 is the near-miss a medal probability cannot express.\n")

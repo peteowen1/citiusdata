@@ -355,6 +355,66 @@ STORE_COLS <- if (USE_STORE)
 cli::cli_alert_info(
   "Narrowed to {ncol(clean)} column{?s} ({format(object.size(clean), units = 'MB')})."
 )
+
+# --- the cache belongs to ONE arm -------------------------------------------
+#
+# The per-meet cache is keyed on competition_id alone, and `todo` skips any meet
+# that already has a file. So a second arm run without CITIUS_BT_CACHE set does
+# not re-simulate anything: it reads the FIRST arm's predictions back and
+# reports them as its own. Nothing errors, the artefact is well-formed, and the
+# A/B comes back a dead heat -- the same shape as the CITIUS_BT_OUT collision in
+# docs/reference/silent-bugs.md, one file down the chain.
+#
+# Convention alone does not survive that (SIGMA_PARTS' own comment already
+# assumes "the new cache name" is remembered). Stamp what the cache was built
+# with, and refuse to add a different arm's meets to it.
+md5_of <- function(f) tryCatch(tools::md5sum(file.path(OUT, f))[[1]],
+                               error = function(e) NA_character_)
+store_fp <- function() if (!USE_STORE) NA_character_ else tryCatch({
+  f <- sort(list.files(STORE, recursive = TRUE, full.names = TRUE))
+  tf <- tempfile(); on.exit(unlink(tf), add = TRUE)
+  writeLines(paste0(basename(f), ":", file.size(f)), tf)
+  unname(tools::md5sum(tf))
+}, error = function(e) NA_character_)
+
+arm_fingerprint <- list(
+  history = HISTORY, outcomes = OUTCOMES, calibration = CALIBRATION,
+  calibration_md5 = md5_of(CALIBRATION), history_md5 = md5_of(HISTORY),
+  history_source = if (USE_STORE) "store" else "rds", store_md5 = store_fp(),
+  aging_file = AGING_FILE, aging_md5 = md5_of(AGING_FILE),
+  momentum = MOM_FILE, half_life = half_life,
+  hl_family = if (is.null(hl_map)) "" else
+    paste(names(hl_map), hl_map, sep = "=", collapse = ","),
+  prior_weight = PRIOR_WEIGHT, sigma_mode = SIGMA_MODE,
+  sigma_parts = paste(SIGMA_PARTS, collapse = ","),
+  adjust_context = ADJUST_CONTEXT, use_meet_tier = USE_MEET_TIER,
+  tier_filter = TIER_FILTER, elite_history = ELITE_HISTORY,
+  history_days = HISTORY_DAYS, n_sims = N_SIMS, cohort = COHORT,
+  athletes = ATHLETES, peak_gamma = PEAK_GAMMA,
+  robust_location = ROBUST_LOCATION, decouple_peak = DECOUPLE_PEAK)
+
+# A cache that predates this check is stamped by the first run after it, which
+# is the best that can be done retrospectively -- an existing directory carries
+# no record of what filled it. Delete a cache rather than trust its first stamp
+# if the arm that built it is not known.
+fp_file <- file.path(BT_CACHE, "_arm.rds")
+if (file.exists(fp_file)) {
+  prev <- readRDS(fp_file)
+  nms <- union(names(prev), names(arm_fingerprint))
+  changed <- nms[!vapply(nms, function(k)
+    identical(prev[[k]], arm_fingerprint[[k]]), logical(1))]
+  if (length(changed)) {
+    cli::cli_abort(c(
+      "x" = "{.path {BT_CACHE}} was built by a DIFFERENT arm; its cached meets
+             would be read back as this arm's predictions.",
+      "*" = "{paste0(changed, ': ', vapply(changed, function(k) paste0(
+               format(prev[[k]]), ' -> ', format(arm_fingerprint[[k]])), character(1)))}",
+      "i" = "Set {.envvar CITIUS_BT_CACHE} to a name of this arm's own (and
+             {.envvar CITIUS_BT_OUT} with it), or delete the cache to rebuild."))
+  }
+} else {
+  saveRDS(arm_fingerprint, fp_file)
+}
 finals <- outcome_rows[!is.na(place) &
                   grepl("final", round, ignore.case = TRUE) &
                   !grepl("semi", round, ignore.case = TRUE)]
@@ -500,6 +560,16 @@ for (i in seq_len(n)) {
     # so no athlete-event is estimated twice.
     reg_f <- as.data.table(citius_events()[, c("event_id", "family")])
     pf <- merge(past, reg_f, by = "event_id", all.x = TRUE)
+    # `split()` drops NA groups silently, so an event with no registry family
+    # would lose its whole history here and its entrants would simply not be
+    # rated -- the meet then scores fewer races with nothing saying why. Give
+    # them the global half-life, which is exactly the single-half-life branch
+    # above, and say how many.
+    if (anyNA(pf$family)) {
+      cli::cli_alert_warning(
+        "{sum(is.na(pf$family))} history row{?s} with no registry family; estimated at half_life = {half_life}.")
+      pf[is.na(family), family := ""]
+    }
     tick("ability", data.table::rbindlist(lapply(split(pf, pf$family), function(g) {
       hl <- if (!is.na(g$family[1]) && g$family[1] %in% names(hl_map))
         hl_map[[g$family[1]]] else half_life
@@ -620,7 +690,19 @@ cli::cli_alert_info(
 )
 
 # --- assemble and score ------------------------------------------------------
-blobs <- unlist(lapply(list.files(BT_CACHE, full.names = TRUE), readRDS), recursive = FALSE)
+# Assemble THIS RUN'S POOL, not the whole directory. The cache outlives the pool
+# that filled it: narrowing CITIUS_BT_TIER or lowering CITIUS_BT_TARGET leaves
+# the earlier meets on disk, and reading the directory scored them anyway -- so a
+# T1-only arm reported T1+T2+T3 races under a `tier_filter = T1_elite` stamp,
+# which score_arm.R then trusts to decide comparability. `_arm.rds` is skipped by
+# construction here rather than filtered out downstream.
+cache_files <- file.path(BT_CACHE, paste0(pool$competition_id, ".rds"))
+cache_files <- cache_files[file.exists(cache_files)]
+n_extra <- length(setdiff(list.files(BT_CACHE, pattern = "\\.rds$"),
+                          c(basename(cache_files), "_arm.rds")))
+if (n_extra) cli::cli_alert_info(
+  "{n_extra} cached meet{?s} outside this run's pool ignored.")
+blobs <- unlist(lapply(cache_files, readRDS), recursive = FALSE)
 blobs <- Filter(function(b) is.list(b) && !is.null(b$pred), blobs)
 if (!length(blobs)) { cli::cli_alert_warning("Nothing scored yet."); quit(save = "no") }
 
@@ -673,13 +755,12 @@ saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc,
                # curves on 2026-07-29, and an A/B that recorded only the name
                # attributed an aging change to a calibration change. A stamp that
                # cannot distinguish two versions of the same path is not a stamp.
-               calibration_md5 = tryCatch(tools::md5sum(file.path(OUT, CALIBRATION))[[1]],
-                 error = function(e) NA_character_),
+               # Same helper the cache fingerprint uses, so the two can never
+               # disagree about what this run read.
+               calibration_md5 = arm_fingerprint$calibration_md5,
                aging_file = AGING_FILE,
-               aging_md5 = tryCatch(tools::md5sum(file.path(OUT, AGING_FILE))[[1]],
-                                    error = function(e) NA_character_),
-               history_md5 = tryCatch(tools::md5sum(file.path(OUT, HISTORY))[[1]],
-                                      error = function(e) NA_character_),
+               aging_md5 = arm_fingerprint$aging_md5,
+               history_md5 = arm_fingerprint$history_md5,
                # WHERE THE HISTORY ACTUALLY CAME FROM. When the parquet store
                # exists it is read instead of the .rds, so history_md5 was
                # stamping a file the run never opened -- and the store can be
@@ -689,13 +770,8 @@ saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc,
                # source is worse than no hash: it makes a mismatch look like a
                # match. Fingerprinted by name+size rather than content because
                # hashing a multi-GB partitioned dataset per arm is not worth it.
-               history_source = if (USE_STORE) "store" else "rds",
-               store_md5 = if (!USE_STORE) NA_character_ else tryCatch({
-                 f <- sort(list.files(STORE, recursive = TRUE, full.names = TRUE))
-                 tf <- tempfile(); on.exit(unlink(tf), add = TRUE)
-                 writeLines(paste0(basename(f), ":", file.size(f)), tf)
-                 unname(tools::md5sum(tf))
-               }, error = function(e) NA_character_),
+               history_source = arm_fingerprint$history_source,
+               store_md5 = arm_fingerprint$store_md5,
                half_life = half_life, prior_weight = PRIOR_WEIGHT,
                sigma_mode = SIGMA_MODE, adjust_context = ADJUST_CONTEXT,
                # Without this, an arm differing ONLY by the sigma bundle records
