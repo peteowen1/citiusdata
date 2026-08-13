@@ -1,3 +1,18 @@
+# SUPERSEDED 2026-08-13 -- DO NOT RUN THIS TO MEASURE COASTING.
+#
+# This arm changes TWO things at once: it refits the base calibration on
+# `meet_tier` AND attaches the coasting trait. Whatever its -0.67% gold Brier
+# (2026-08-01) measured, it was not the trait -- and ticket 15 later found the
+# package read `calibration$coasting_trait` nowhere at all, so the trait could
+# not have been applied by anything.
+#
+# The real, deployed measurement came from build_calibration_coast_only.R (a
+# single-variable arm) and build_calibration_coast_noleak.R (its leakage
+# control). See DECISIONS.md, 2026-08-13 afternoon.
+#
+# Kept, not deleted, because it is the artefact of record for a documented
+# confound and coast_only.R's header points here. Its nine run_*_screening.R
+# consumers were deleted in the same commit.
 # Calibration for the `coasting` arm: tier offsets fitted on meet_tier plus athlete-specific heat coasting traits.
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
