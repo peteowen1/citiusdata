@@ -73,7 +73,13 @@ if (is.null(.cal_prov)) {
     "scored meets cannot be checked. Rebuild it with rebaseline_chain.R."))
 } else {
   cli::cli_alert_info(
-    "Calibration fitted on {.val {.cal_prov$n_meets}} meets, {.val {as.character(.cal_prov$date_min)}} to {.val {as.character(.cal_prov$date_max)}}.")
+    # Parenthesised because cli reads `{.cal_prov...}` as a class specifier
+    # (`{.val}`, `{.code}`, ...) rather than an expression, and aborts with
+    # "Invalid cli literal". This branch runs only when provenance is PRESENT,
+    # which no calibration reaching this script did until 2026-08-13 -- so the
+    # overlap guard added 2026-08-03 had never once executed, and every run
+    # silently took the no-provenance warning branch above.
+    "Calibration fitted on {.val {(.cal_prov$n_meets)}} meets, {.val {as.character(.cal_prov$date_min)}} to {.val {as.character(.cal_prov$date_max)}}.")
 }
 # The aging curve. Found missing from this script on 2026-07-29: project_ability()
 # is applied in predict_glasgow2026.R but was never called here, so the backtest
