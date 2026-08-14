@@ -24,10 +24,18 @@
 suppressMessages(library(data.table)); suppressMessages(library(arrow))
 OUT <- "C:/dev/citiusverse/citiusdata/data"
 SC  <- Sys.getenv("FORM_OUT", here::here("citiusdata", "data"))
-K0 <- as.numeric(Sys.getenv("SEQ_K0","0.55")); KAPPA <- as.numeric(Sys.getenv("SEQ_KAPPA","3"))
-KFLOOR <- as.numeric(Sys.getenv("SEQ_KFLOOR","0.18")); CSHRINK <- as.numeric(Sys.getenv("SEQ_C","4"))
-CENS <- as.numeric(Sys.getenv("SEQ_CENS","1")); AGEF <- Sys.getenv("SEQ_AGE","") != ""
-STALE <- Sys.getenv("SEQ_STALE","") != ""; XEV <- Sys.getenv("SEQ_XEV","") != ""
+# Defaults are the 2026-08-14 swept optimum (see docs/plans/FORM-MODEL.md):
+# k0 0.95 and floor 0.32 both moved; kappa 3 was already optimal. The old
+# eye-chosen 0.55 / 3 / 0.18 scored 68.028 on the 2025 tuning window; these
+# score 68.564, and 67.353 -> 68.018 on the sealed 2026 window.
+K0 <- as.numeric(Sys.getenv("SEQ_K0","0.95")); KAPPA <- as.numeric(Sys.getenv("SEQ_KAPPA","3"))
+KFLOOR <- as.numeric(Sys.getenv("SEQ_KFLOOR","0.32")); CSHRINK <- as.numeric(Sys.getenv("SEQ_C","4"))
+# The ladder winners are ON by default, so a bare run IS the chosen model rather
+# than the model minus its adjustments. Set SEQ_AGE=0 / SEQ_STALE=0 / SEQ_CENS=1
+# to turn them off. (Leaving them opt-in is how 350,401 fitted race effects sat
+# inert on every shipped number — dormant by flag, which no wiring guard sees.)
+CENS <- as.numeric(Sys.getenv("SEQ_CENS","0.3")); AGEF <- Sys.getenv("SEQ_AGE","1") != "0"
+STALE <- Sys.getenv("SEQ_STALE","1") != "0"; XEV <- Sys.getenv("SEQ_XEV","") != ""
 KT1 <- as.numeric(Sys.getenv("SEQ_KT1","1")); WINDCS <- Sys.getenv("SEQ_WINDCS","") != ""
 TAG <- Sys.getenv("SEQ_TAG","baseline")
 # SEQ_WINP  1 = compute win probabilities and Brier. Default OFF: the draws cost
