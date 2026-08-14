@@ -100,8 +100,66 @@ all[, c("mark_r", "richness") := NULL]
 # Fields are PARTIAL: a race is recovered only for the athletes the sweep
 # happened to include. That makes each race effect noisier, not biased, and
 # decompose_races() already de-biases the shared-shock variance for field size.
-all <- add_race_key(all)
+# NEVER OVERWRITE AN AUTHORITATIVE KEY (fixed 2026-08-14).
+#
+# `add_race_key()` derives competition|event|round|date, which cannot separate
+# the SECTIONS of a round -- and at a championship every heat of a round shares
+# all four fields. So calling it on the whole table discarded the competition
+# route's real key (which carries the race number) and merged every heat of a
+# round into one pseudo-race.
+#
+# Measured on AT-800Metres-W before this fix: 27.6% of corpus races had more
+# than one first place, holding 64.9% of all placed rows, the worst a single
+# "final" with 361 athletes and 45 winners. On T1_elite meets it was 45.9% --
+# these are championship heats, not obscure club sections. The competition
+# harvest keyed the same event at 0.1%.
+#
+# This is the defect backtest_athletics.R records as fixed ("16.9% of scored
+# races on more than one winner; keyed by race_key it is 0.4%"). That fix landed
+# on championship_results and never reached the corpus, which is the DEPLOYED
+# history -- so calibration$race, sigma_within, condition_sd and the per-athlete
+# sensitivity have all been fitted on merged fields.
+auth <- !is.na(all$race_key)
+say("\nauthoritative race keys on input: %s of %s rows (%.1f%%)",
+    format(sum(auth), big.mark = ","), format(nrow(all), big.mark = ","), 100*mean(auth))
+all[, .auth_key := fifelse(auth, race_key, NA_character_)]
+derived <- add_race_key(all[, !".auth_key"])$race_key
+all[, .derived := derived]
+# A row with no key of its own can only adopt one when the group it belongs to
+# holds exactly ONE authoritative race. Where the group holds several, the
+# section it belongs to is unknowable and a guess would re-create the merge.
+grp <- all[!is.na(.auth_key), .(n_sections = uniqueN(.auth_key), sole = .auth_key[1]),
+           by = .derived]
+all[grp, on = ".derived", `:=`(.n_sections = i.n_sections, .sole = i.sole)]
+all[, race_key := fcase(
+  !is.na(.auth_key),                         .auth_key,          # keep the real one
+  !is.na(.n_sections) & .n_sections == 1L,   .sole,              # unambiguous adopt
+  is.na(.n_sections),                        .derived,           # no authority anywhere
+  default = NA_character_)]                                      # sectioned: cannot place
+n_unplaceable <- all[is.na(race_key) & !is.na(.n_sections), .N]
+say("  adopted into a single known race: %s rows",
+    format(all[is.na(.auth_key) & !is.na(.n_sections) & .n_sections == 1L, .N], big.mark = ","))
+say("  left unkeyed because the round was sectioned and the section is unknowable: %s rows",
+    format(n_unplaceable, big.mark = ","))
+all[, c(".auth_key", ".derived", ".n_sections", ".sole") := NULL]
 all[is.na(competition_id) | is.na(event_id) | is.na(date), race_key := NA_character_]
+
+# THE CHECK THAT CAUGHT THIS. One race has one winner; the sport's genuine tie
+# rate is well under 1%. A high rate here means keys are merging fields again,
+# and every variance estimate downstream is computed on those fields.
+if ("place" %in% names(all)) {
+  pl <- all[!is.na(place) & place > 0 & !is.na(race_key),
+            .(n1 = sum(place == 1L)), by = race_key]
+  pct_multi <- 100 * mean(pl$n1 > 1)
+  say("  races with more than one first place: %.2f%% (was 27.6%% on AT-800Metres-W before the fix)",
+      pct_multi)
+  if (pct_multi > 5) {
+    cli::cli_abort(c(
+      "x" = "{round(pct_multi, 1)}% of races have more than one winner; keys are merging fields.",
+      "i" = "The sport's tie rate is under 1%. Do not publish a corpus in this state --
+             decompose_races() would fit a shared shock across several real races."))
+  }
+}
 fld <- all[!is.na(race_key), .(k = uniqueN(athlete_id)), by = race_key]
 say("\nraces recovered: %s (was %s in the competition harvest alone)",
     format(nrow(fld), big.mark = ","), format(uniqueN(comp$race_key), big.mark = ","))
