@@ -543,10 +543,36 @@ RATING_TOP_N <- 150L
 setorder(ratings, event_id, -ability)
 ratings <- ratings[, head(.SD, RATING_TOP_N), by = event_id]
 
-names_lk <- unique(clean_all[!is.na(athlete_name),
+# NAMES COME FROM A SOURCE THAT HAS THEM.
+#
+# This read `clean_all` directly, which was right while the page was built on
+# championship_results.rds. The ratings source moved to athletics_corpus.rds
+# (the block above), and the corpus carries NO `athlete_name` -- 27 columns, all
+# keyed on athlete_id. So every run since that switch died here with
+#   Object 'athlete_name' not found amongst [source, athlete_id, event_id, ...]
+# and exit=1, which is why the published table froze on 2026-08-12 and never
+# picked up the 2026-08-13 coasting deploy. The Werro fix broke the page it was
+# meant to fix, and the only trace was a FAIL line in blog/refresh.log.
+names_src <- if ("athlete_name" %in% names(clean_all)) clean_all else {
+  cli::cli_alert_info(
+    "{.file {CITIUS_RATINGS_SOURCE}} carries no {.field athlete_name}; taking names from championship_results.rds.")
+  data.table::setDT(readRDS(file.path(OUT, "championship_results.rds")))
+}
+names_lk <- unique(names_src[!is.na(athlete_name),
                              .(athlete_id = as.character(athlete_id), athlete_name)]
                    )[, .(athlete_name = athlete_name[1]), by = athlete_id]
 ratings <- merge(ratings, names_lk, by = "athlete_id", all.x = TRUE)
+# A ratings table with blank names is worse than no table: it reads as missing
+# data about the athlete rather than a broken join. Measured 2026-08-14 at 100%
+# of the corpus's 354,247 athletes, so anything below 99% means the two sources'
+# athlete_id namespaces have diverged and the page must not publish.
+.name_cov <- mean(!is.na(ratings$athlete_name))
+if (.name_cov < 0.99) {
+  cli::cli_abort(c(
+    "x" = "Only {round(100 * .name_cov, 1)}% of published rating rows resolved to a name.",
+    "i" = "{.file {CITIUS_RATINGS_SOURCE}} and the name source must share an
+           athlete_id namespace."))
+}
 ratings <- merge(ratings, citius_events()[, .(event_id, sport, discipline, sex, orientation)],
                  by = "event_id", all.x = TRUE)
 
