@@ -112,7 +112,16 @@ if (!length(ev)) {
                                   hit = place == 1L, hit_medal = place <= 3L)]
   # Only score races whose actual winner was in our field; otherwise this
   # measures entry-list coverage rather than the model.
-  keep <- o[, .(ok = any(hit)), by = race_id][ok == TRUE]$race_id
+  #
+  # Tested against the PREDICTIONS. `o` comes from the results, so `any(hit)` is
+  # true for every completed final and the old form here excluded nothing --
+  # inherited verbatim from score_glasgow2026.R along with the rest of this
+  # block. An uncovered winner leaves only hit = 0 rows in the race, which lowers
+  # the Brier, so the gap flattered the model rather than being held out of it.
+  # It also made `median rank of the actual winner` NA for the whole meet, since
+  # the winner has no rank in a list they are not in.
+  keep <- unique(o[hit == TRUE, .(race_id, athlete_id)][
+    p[, .(race_id, athlete_id)], on = .(race_id, athlete_id), nomatch = NULL]$race_id)
   skipped <- setdiff(ev, keep)
   if (length(skipped)) {
     cli::cli_alert_warning("{length(skipped)} final{?s} skipped - winner absent from our field: {.val {skipped}}")

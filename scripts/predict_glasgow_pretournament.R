@@ -10,7 +10,11 @@
 #
 # Usage:  Rscript scripts/predict_glasgow_pretournament.R
 VERSE <- here::here()
-suppressMessages({library(citius); library(data.table)})
+# load_all(), not library(citius): every other script in this directory runs the
+# SOURCE package, so this one could quietly forecast from whatever build happened
+# to be installed -- a difference that shows up as numbers, never as an error.
+suppressMessages(devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE))
+suppressMessages(library(data.table))
 D <- file.path(VERSE, "citiusdata", "data")
 # Model inputs come from DEPLOYED, never from literals here. See _deployed.R.
 source(file.path(VERSE, "citiusdata", "scripts", "_deployed.R"))
@@ -125,10 +129,29 @@ if (file.exists(f_ent) && file.exists(f_hist)) {
       format(sum(ua$person_id %in% have_a), big.mark = ","),
       100 * mean(ua$person_id %in% have_a))
 
-  ab_at <- deployed_ability(at[!is.na(perf) & !is.na(person_id),
-                               .(athlete_id = person_id, event_id, date, perf,
-                                 round, competition_id)],
-                            as_of = CUT, calibration = cal_at)
+  # KEEP EVERY COLUMN THE MODEL READS, not the six the join needs.
+  #
+  # estimate_ability() guards each adjustment with `"<col>" %in% names(dt)` and
+  # does nothing when the column is absent -- silently, by design, so that a
+  # thin history still estimates. Selecting six columns here therefore switched
+  # off wind (`wind`), the tier half of the context adjustment (`tier`), the
+  # fitted race effect (`race_key`), the aging reference age (`age`), indoor and
+  # the seasonal phase (`indoor`, `venue_country`) -- while the artefact was
+  # still stamped `config = DEPLOYED$stamp`. championship_results.rds carries all
+  # six. backtest_athletics.R:325-335 documents this exact trap for its own
+  # narrowing; this is the shipping path making the mistake it warns about.
+  #
+  # Anything measured on an artefact written before 2026-08-14 describes the
+  # reduced model, not DEPLOYED.
+  MODEL_COLS <- c("athlete_id", "event_id", "date", "perf", "age", "round",
+                  "tier", "competition_id", "comp_start", "place", "race_key",
+                  "wind", "indoor", "venue_country")
+  hist_at <- at[!is.na(perf) & !is.na(person_id)]
+  hist_at[, athlete_id := as.character(person_id)]
+  hist_at <- hist_at[, intersect(MODEL_COLS, names(hist_at)), with = FALSE]
+  say("  athletics history: %s row%s, %d model column%s", format(nrow(hist_at), big.mark = ","),
+      if (nrow(hist_at) == 1) "" else "s", ncol(hist_at), if (ncol(hist_at) == 1) "" else "s")
+  ab_at <- deployed_ability(hist_at, as_of = CUT, calibration = cal_at)
   # Same two guards as swimming. Athletics history comes through a different
   # crosswalk but the failure modes are identical -- a merged identity gives an
   # impossible spread, and an athlete whose evidence has decayed to nothing is

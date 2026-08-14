@@ -98,5 +98,14 @@ print(gold$reliability)
 cli::cli_h2("Medal")
 str(medal$overall)
 
+# NOT `backtest.rds`. That is backtest_athletics.R's default CITIUS_BT_OUT, so a
+# script this file's own header calls superseded was overwriting the live arm
+# artefact -- with numbers from the 308k harvest, a July calibration and a global
+# half-life, under the filename every downstream reader treats as current.
 saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc),
-        file.path(OUT, "backtest.rds"))
+        file.path(OUT, "backtest_superseded_championships.rds"))
+# Named at runtime, not only in the comment above: anyone used to checking
+# backtest.rds after a championships run gets no other cue that the familiar
+# filename now belongs to a different script's output.
+cli::cli_alert_success(
+  "Wrote {.file backtest_superseded_championships.rds}. {.file backtest.rds} belongs to backtest_athletics.R.")

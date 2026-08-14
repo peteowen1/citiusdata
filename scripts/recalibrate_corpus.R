@@ -19,9 +19,11 @@ IN   <- Sys.getenv("CITIUS_CAL_INPUT", "athletics_corpus.rds")
 PREV <- Sys.getenv("CITIUS_CAL_BASELINE", "calibration.rds")
 SUF  <- Sys.getenv("CITIUS_CAL_SUFFIX", "_corpus")
 
+# R heap only. This used to shell out to PowerShell for the process working set
+# and then never print it -- a subprocess per checkpoint for a discarded number.
+# The OS-level figure is the one that matters for the growth described above, so
+# if it is wanted again, print it rather than compute it.
 rss <- function(tag) {
-  mb <- tryCatch(round(as.numeric(system2("powershell", c("-NoProfile", "-Command",
-    "(Get-Process -Id $PID).WorkingSet64"), stdout = TRUE)) / 1e6), error = function(e) NA)
   cat(sprintf("[%s] %s  R heap %.0f MB\n", format(Sys.time(), "%H:%M:%S"), tag,
               sum(gc()[, 2])))
   invisible(NULL)
@@ -34,9 +36,18 @@ cat(sprintf("%s: %s results | %s meets | %s races\n", IN,
 
 # Everything the estimators read, and nothing else. `nomark_observable` is
 # load-bearing: without it the career rows dilute every foul rate toward zero.
+#
+# `wind` is load-bearing in the same way and was missing until 2026-08-14.
+# calibrate() fits the wind layer only `if ("wind" %in% names(results))`
+# (citius/R/calibrate.R:460) and returns NULL for it otherwise, without a word --
+# so every calibration this script wrote carried NO WIND AT ALL, while
+# rebaseline_chain.R's own keep list included it and its output did. The two
+# builders write the same filename. A narrowing list is a model decision, not a
+# memory optimisation; anything added to it has to be checked against what
+# calibrate() reads.
 keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "sex",
           "round", "tier", "race_key", "competition_id", "discipline",
-          "orientation", "is_technical", "nomark_observable", "source")
+          "orientation", "is_technical", "nomark_observable", "source", "wind")
 x <- x[, intersect(keep, names(x)), with = FALSE]
 cat(sprintf("narrowed to %d columns (%s)\n", ncol(x),
             format(object.size(x), units = "GB")))

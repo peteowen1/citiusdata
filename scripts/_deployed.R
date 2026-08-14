@@ -186,6 +186,21 @@ deployed_ability <- function(past, as_of, calibration) {
   }
   reg_f <- data.table::as.data.table(citius_events()[, c("event_id", "family")])
   pf <- merge(data.table::as.data.table(past), reg_f, by = "event_id", all.x = TRUE)
+  # `split()` DROPS rows whose grouping value is NA, silently. An event_id absent
+  # from the registry (or present with no family) therefore loses its entire
+  # history here: no ability row is produced, the entrants join finds nothing,
+  # and the event is skipped downstream for "fewer than 3 rated entrants" -- a
+  # message that describes a registry gap as a thin field. Nothing errors.
+  # Kept rather than aborted: the corpus store carries an `__unmatched__`
+  # partition, so an unfamilied event is a real state. They take the global
+  # half-life, which is what the no-map branch above does for every event.
+  n_nofam <- sum(is.na(pf$family))
+  if (n_nofam) {
+    ev_nofam <- unique(pf$event_id[is.na(pf$family)])
+    cli::cli_alert_warning(
+      "{n_nofam} history row{?s} across {length(ev_nofam)} event{?s} have no registry family ({.val {utils::head(ev_nofam, 5)}}); estimated at the global half-life.")
+    pf[is.na(family), family := ""]
+  }
   data.table::rbindlist(lapply(split(pf, pf$family), function(g) {
     fam <- g$family[1]
     hl <- if (!is.na(fam) && fam %in% names(hl_map)) hl_map[[fam]] else DEPLOYED$half_life
