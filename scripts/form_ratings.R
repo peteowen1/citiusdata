@@ -30,6 +30,11 @@ CENS <- as.numeric(Sys.getenv("SEQ_CENS","1")); AGEF <- Sys.getenv("SEQ_AGE","")
 STALE <- Sys.getenv("SEQ_STALE","") != ""; XEV <- Sys.getenv("SEQ_XEV","") != ""
 KT1 <- as.numeric(Sys.getenv("SEQ_KT1","1")); WINDCS <- Sys.getenv("SEQ_WINDCS","") != ""
 TAG <- Sys.getenv("SEQ_TAG","baseline")
+# SEQ_WINP  1 = compute win probabilities and Brier. Default OFF: the draws cost
+#           ~60s of a ~360s run (measured) and nothing reads the accumulators.
+# SEQ_HIST  1 = write the per-race r_pre history (see below).
+WINP <- Sys.getenv("SEQ_WINP","") != ""
+HIST <- Sys.getenv("SEQ_HIST","") != ""
 FROM <- as.Date("2020-01-01")
 
 cat0 <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
@@ -77,17 +82,47 @@ V <- new.env(parent=emptyenv())   # EW variance of own surprises; prior = event 
 LD <- new.env(parent=emptyenv()); LE <- new.env(parent=emptyenv())
 BYA <- new.env(parent=emptyenv())
 key <- function(a, e) paste0(a, "|", e)
+# All i<j index pairs where the two placings differ. Replaces
+# CJ(i=,j=)[i<j][place[i]!=place[j]], whose cost is data.table dispatch overhead
+# rather than the pair arithmetic.
+.pairs <- function(n, place) {
+  if (n < 2L) return(list(i = integer(0), j = integer(0)))
+  ii <- rep.int(seq_len(n - 1L), (n - 1L):1L)
+  jj <- sequence((n - 1L):1L, 2:n)
+  keep <- place[ii] != place[jj]
+  list(i = ii[keep], j = jj[keep])
+}
 
+# Dedup ONCE rather than per race (measured: 27s over 165,133 races). It must
+# come after MU/VP above, which are deliberately computed on the undeduped table.
+# Keeping the first row per (race, athlete) matches the per-race unique(by=) it
+# replaces, because d is sorted and split preserves within-group row order.
+d <- unique(d, by = c("race_key", "athlete_id"))
 races <- split(d, by = "race_key", sorted = FALSE)
-ord <- order(vapply(races, function(z) as.numeric(z$date[1]), numeric(1)))
-races <- races[ord]
+# No reordering: d is sorted by (date, race_key) and split(sorted = FALSE) returns
+# groups in order of first appearance, so the list is already in date order. The
+# old vapply-over-165k-elements + list copy computed an identity permutation.
+# Processing order changes results in a sequential model, so the bit-identical
+# regression run is what proves this.
 acc <- list(y25 = c(conc=0,pairs=0,fav=0,nr=0,brier=0,brier_base=0,npred=0), y26 = c(conc=0,pairs=0,fav=0,nr=0,brier=0,brier_base=0,npred=0))
+# Per-race rating history (SEQ_HIST=1). r_pre is the rating an athlete CARRIED
+# INTO the race — the only version that answers an out-of-sample question. The
+# final state written below has already absorbed every race you would test it
+# against, so measuring against that is circular (learned 2026-08-14).
+# Preallocated vectors, not a growing list: the maj[[length+1]] pattern is fine
+# for 757 majors finals but would add per-object overhead across 165,133 races.
+NR <- if (HIST) nrow(d) else 0L
+H <- list(race_key = character(NR), date = numeric(NR), event_id = character(NR),
+          athlete_id = character(NR), r_pre = numeric(NR), n_eff = numeric(NR),
+          v_pre = numeric(NR), perf = numeric(NR), place = integer(NR),
+          rc = character(NR), seen = logical(NR))
+hi <- 0L
 MAJ <- c("olympics","world_champs","european_champs","commonwealth")
+MAJ_FROM <- as.Date("2021-01-01")   # hoisted: was re-parsed on every race
 maj <- list()
 t0 <- Sys.time()
 for (z in races) {
-  if (nrow(z) < 3L) next
-  z <- unique(z, by = "athlete_id")
+  # one check, on already-deduped rows; the original checked, deduped, rechecked
   if (nrow(z) < 3L) next
   a <- z$athlete_id; ev <- z$event_id[1]; kk <- key(a, ev); dt0 <- z$date[1]
   mu <- MUv[[ev]]
@@ -112,18 +147,36 @@ for (z in races) {
   }
   vp0 <- VPv[[ev]]; if (is.null(vp0) || !is.finite(vp0)) vp0 <- stats::var(z$perf)
   v_pre <- vapply(kk, function(K) { vv <- V[[K]]; if (is.null(vv)) vp0 else vv }, numeric(1))
-  yr <- format(dt0, "%Y")
-  slot <- if (yr == "2025") "y25" else if (yr == "2026") "y26" else NA
+  if (HIST) {
+    ix <- hi + seq_along(a); hi <- hi + length(a)
+    H$race_key[ix] <- z$race_key[1]; H$date[ix] <- as.numeric(dt0)
+    H$event_id[ix] <- ev;            H$athlete_id[ix] <- a
+    H$r_pre[ix] <- r_pre;            H$n_eff[ix] <- n_eff
+    H$v_pre[ix] <- v_pre;            H$perf[ix] <- z$perf
+    H$place[ix] <- z$place;          H$rc[ix] <- z$rc
+    H$seen[ix] <- seen
+  }
+  yr <- year(dt0)
+  slot <- if (yr == 2025L) "y25" else if (yr == 2026L) "y26" else NA
   if (!is.na(slot)) {
-    g <- CJ(i=seq_along(a), j=seq_along(a))[i < j][z$place[i] != z$place[j]]
-    if (nrow(g)) {
+    # All i<j pairs as plain integer vectors. CJ() cost ~0.4ms per call in fixed
+    # data.table dispatch overhead regardless of field size (measured: 79x at
+    # n=8), paid once per scored race.
+    g <- .pairs(length(a), z$place)
+    if (length(g$i)) {
       acc[[slot]]["conc"] <- acc[[slot]]["conc"] + sum((r_pre[g$i] > r_pre[g$j]) == (z$place[g$i] < z$place[g$j]))
-      acc[[slot]]["pairs"] <- acc[[slot]]["pairs"] + nrow(g)
+      acc[[slot]]["pairs"] <- acc[[slot]]["pairs"] + length(g$i)
       acc[[slot]]["fav"] <- acc[[slot]]["fav"] + (z$place[which.max(r_pre)] == min(z$place))
       acc[[slot]]["nr"] <- acc[[slot]]["nr"] + 1
       # WIN PROBABILITIES from rating + own-variance draws. The shared race
-      # shock cancels from ordering, so it is deliberately absent. Fixed seed
-      # per race so reruns are comparable.
+      # shock cancels from ordering, so it is deliberately absent.
+      # OFF by default (SEQ_WINP=1): measured at ~60s of a ~360s run, and the
+      # accumulators it feeds are never written or printed. Nothing else in the
+      # loop draws randomness, so skipping it cannot move a scored metric.
+      # NOTE the seed is badly collided (25,793 races -> 203 seeds on the 800m W;
+      # see check_form_seed_collisions.R) and the first-race variance is
+      # mis-initialised — fix both before trusting any Brier from this block.
+      if (WINP) {
       set.seed(sum(utf8ToInt(substr(z$race_key[1], 1, 20))))
       nf <- length(a)
       dr <- matrix(rnorm(1000L * nf), 1000L, nf) * rep(sqrt(v_pre), each = 1000L) +
@@ -134,15 +187,16 @@ for (z in races) {
       acc[[slot]]["brier"] <- acc[[slot]]["brier"] + sum((p_gold - hit)^2)
       acc[[slot]]["brier_base"] <- acc[[slot]]["brier_base"] + sum((1/nf - hit)^2)
       acc[[slot]]["npred"] <- acc[[slot]]["npred"] + nf
+      }
     }
   }
   if (!is.na(z$class[1]) && z$class[1] %chin% MAJ && z$rc[1] == "final" &&
-      dt0 >= as.Date("2021-01-01")) {
-    g2 <- CJ(i=seq_along(a), j=seq_along(a))[i < j][z$place[i] != z$place[j]]
-    if (nrow(g2)) maj[[length(maj)+1L]] <- data.table(
-      class = z$class[1], yr = format(dt0, "%Y"), event_id = ev,
+      dt0 >= MAJ_FROM) {
+    g2 <- .pairs(length(a), z$place)
+    if (length(g2$i)) maj[[length(maj)+1L]] <- data.table(
+      class = z$class[1], yr = as.character(yr), event_id = ev,
       conc = sum((r_pre[g2$i] > r_pre[g2$j]) == (z$place[g2$i] < z$place[g2$j])),
-      pairs = nrow(g2),
+      pairs = length(g2$i),
       fav = z$place[which.max(r_pre)] == min(z$place),
       medal3 = sum(a[order(-r_pre)][1:3] %chin% a[z$place <= 3]),
       winner_rank = which(order(-r_pre) == which.min(z$place)))
@@ -225,4 +279,12 @@ st <- data.table(k = ids, R = vapply(ids, function(i) R[[i]], numeric(1)),
                  n_eff = vapply(ids, function(i) NE[[i]], numeric(1)),
                  last = as.Date(vapply(ids, function(i) as.character(LD[[i]]), character(1))))
 st[, c("athlete_id","event_id") := tstrsplit(k, "|", fixed = TRUE)]
+if (HIST) {
+  hd <- as.data.table(lapply(H, function(v) v[seq_len(hi)]))
+  hd[, date := as.Date(date, origin = "1970-01-01")]
+  write_parquet(hd, file.path(SC, sprintf("seqv3_history_%s.parquet", TAG)))
+  cat(sprintf("[%s] history: %s athlete-races (races with <3 athletes are skipped\n",
+              TAG, format(nrow(hd), big.mark = ",")))
+  cat("        by the loop entirely, so this is scored racing, not every result)\n")
+}
 write_parquet(st[, !"k"], file.path(SC, sprintf("seqv2_state_%s.parquet", TAG)))
