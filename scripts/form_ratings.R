@@ -106,12 +106,43 @@ key <- function(a, e) paste0(a, "|", e)
 # Keeping the first row per (race, athlete) matches the per-race unique(by=) it
 # replaces, because d is sorted and split preserves within-group row order.
 d <- unique(d, by = c("race_key", "athlete_id"))
-races <- split(d, by = "race_key", sorted = FALSE)
-# No reordering: d is sorted by (date, race_key) and split(sorted = FALSE) returns
-# groups in order of first appearance, so the list is already in date order. The
-# old vapply-over-165k-elements + list copy computed an identity permutation.
-# Processing order changes results in a sequential model, so the bit-identical
-# regression run is what proves this.
+# Group BOUNDARIES instead of split(). split() built 165,133 data.tables and held
+# them all at once: measured 110MB from a 16.6MB source, a 6.6x blowup, which is
+# what let two concurrent arms exhaust memory on 2026-08-14. Boundaries plus
+# plain vectors allocate one small slice per race and nothing in between.
+#
+# CONTIGUITY. A boundary scan assumes every race's rows are adjacent; split()
+# never required that, and the corpus race_key carries no date
+# (`comp|event||round|section`), so a key spanning two dates lands in two blocks.
+# This is NOT hypothetical: `7174333|10229522||11|4` (100mH W round 1, 2023) has
+# five rows on 2023-08-03 and one athlete mis-dated 2023-08-01. A naive from:to
+# range over it would have swallowed 186 races / 1,387 rows into one "race" --
+# the same failure as the merged-heats corpus bug, silently.
+#
+# So force contiguity instead of assuming it: number the blocks under the
+# (date, race_key) order, give every row its key's FIRST block number, then
+# stable-sort on that. Each key becomes one block, keys stay in first-appearance
+# order, and within a key the row order is preserved -- which is exactly what
+# split(sorted = FALSE) produced, including dt0 taking the earliest date.
+d[, .blk0 := rleid(race_key)]
+d[, .first := .blk0[1L], by = race_key]
+setorder(d, .first)                      # data.table's sort is stable
+blk <- rleid(d$race_key)
+starts <- which(!duplicated(blk))
+ends   <- c(starts[-1L] - 1L, length(blk))
+if (uniqueN(d$race_key) != length(starts))
+  stop(sprintf(paste0("race_key still not contiguous after the stabilising sort: ",
+                      "%s keys in %s blocks -- the grouping logic is wrong."),
+               format(uniqueN(d$race_key), big.mark = ","),
+               format(length(starts), big.mark = ",")))
+# Columns as plain vectors, extracted once. Order of groups is (date, race_key),
+# identical to what split(sorted = FALSE) produced on the sorted table; a
+# sequential model changes its answer if the order changes, so the bit-identical
+# regression run is what proves it.
+Vath <- d$athlete_id; Vperf <- d$perf; Vplace <- d$place; Vrc <- d$rc
+Vage <- d$age; Vwind <- d$wind; Vbeta <- d$beta; Vhl <- d$hl
+Vev <- d$event_id; Vdate <- d$date; Vfam <- d$family
+Vtier <- d$meet_tier; Vcls <- d$class; Vrk <- d$race_key
 acc <- list(y25 = c(conc=0,pairs=0,fav=0,nr=0,brier=0,brier_base=0,npred=0), y26 = c(conc=0,pairs=0,fav=0,nr=0,brier=0,brier_base=0,npred=0))
 # Per-race rating history (SEQ_HIST=1). r_pre is the rating an athlete CARRIED
 # INTO the race — the only version that answers an out-of-sample question. The
@@ -129,9 +160,20 @@ MAJ <- c("olympics","world_champs","european_champs","commonwealth")
 MAJ_FROM <- as.Date("2021-01-01")   # hoisted: was re-parsed on every race
 maj <- list()
 t0 <- Sys.time()
-for (z in races) {
+for (r_ in seq_along(starts)) {
+  i1 <- starts[r_]; i2 <- ends[r_]
   # one check, on already-deduped rows; the original checked, deduped, rechecked
-  if (nrow(z) < 3L) next
+  if (i2 - i1 + 1L < 3L) next
+  ii <- i1:i2
+  # A plain list, not a data.table: `$` on a list is a pointer read, while every
+  # data.table access pays class dispatch. The eight per-athlete columns are
+  # sliced; the six read only at [1] keep a length-1 slice, which leaves every
+  # z$col[1] in the body below working unchanged.
+  z <- list(athlete_id = Vath[ii], perf = Vperf[ii], place = Vplace[ii],
+            rc = Vrc[ii], age = Vage[ii], wind = Vwind[ii], beta = Vbeta[ii],
+            hl = Vhl[ii],
+            event_id = Vev[i1], date = Vdate[i1], family = Vfam[i1],
+            meet_tier = Vtier[i1], class = Vcls[i1], race_key = Vrk[i1])
   a <- z$athlete_id; ev <- z$event_id[1]; kk <- key(a, ev); dt0 <- z$date[1]
   mu <- MUv[[ev]]
   r_pre <- numeric(length(a)); n_eff <- numeric(length(a)); seen <- logical(length(a))
