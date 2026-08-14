@@ -152,17 +152,33 @@ all[, .derived := derived]
 grp <- all[!is.na(.auth_key), .(n_sections = uniqueN(.auth_key), sole = .auth_key[1]),
            by = .derived]
 all[grp, on = ".derived", `:=`(.n_sections = i.n_sections, .sole = i.sole)]
+# "One authoritative race in this bucket" is NOT the same as "the round had one
+# section" -- it means one section we have authority FOR. Where a round was
+# sectioned and the competition route captured only one of them (partial
+# competition-route coverage is documented at ~1.6% in harvest_partial_races.R),
+# an unkeyed row from the missing section would be adopted into the visible one,
+# recreating the merge in miniature. Caught in review 2026-08-14.
+#
+# The cheap, exact test: a row may only join a race whose finishing position it
+# does not already occupy. Two athletes cannot both be third. A row with no place
+# cannot collide and is allowed -- it contributes to the field, not the ordering.
+.taken <- all[!is.na(.auth_key) & !is.na(place), unique(paste(.auth_key, place))]
+all[, .cand := fifelse(is.na(.auth_key) & !is.na(.n_sections) & .n_sections == 1L &
+                         !is.na(place), paste(.sole, place), NA_character_)]
+all[, .collide := !is.na(.cand) & .cand %chin% .taken]
 all[, race_key := fcase(
-  !is.na(.auth_key),                         .auth_key,          # keep the real one
-  !is.na(.n_sections) & .n_sections == 1L,   .sole,              # unambiguous adopt
-  is.na(.n_sections),                        .derived,           # no authority anywhere
-  default = NA_character_)]                                      # sectioned: cannot place
+  !is.na(.auth_key),                                    .auth_key,   # keep the real one
+  !is.na(.n_sections) & .n_sections == 1L & !.collide,  .sole,       # unambiguous adopt
+  is.na(.n_sections),                                   .derived,    # no authority anywhere
+  default = NA_character_)]                                          # cannot place it
+say("  refused adoption because the place was already taken in that race: %s rows",
+    format(all[.collide == TRUE, .N], big.mark = ","))
 n_unplaceable <- all[is.na(race_key) & !is.na(.n_sections), .N]
 say("  adopted into a single known race: %s rows",
     format(all[is.na(.auth_key) & !is.na(.n_sections) & .n_sections == 1L, .N], big.mark = ","))
 say("  left unkeyed because the round was sectioned and the section is unknowable: %s rows",
     format(n_unplaceable, big.mark = ","))
-all[, c(".auth_key", ".derived", ".n_sections", ".sole") := NULL]
+all[, c(".auth_key", ".derived", ".n_sections", ".sole", ".cand", ".collide") := NULL]
 all[is.na(competition_id) | is.na(event_id) | is.na(date), race_key := NA_character_]
 
 # THE CHECK THAT CAUGHT THIS. One race has one winner; the sport's genuine tie
@@ -171,6 +187,15 @@ all[is.na(competition_id) | is.na(event_id) | is.na(date), race_key := NA_charac
 if ("place" %in% names(all)) {
   pl <- all[!is.na(place) & place > 0 & !is.na(race_key),
             .(n1 = sum(place == 1L)), by = race_key]
+  # With `place` absent or all-NA, `pl` is empty, mean() is NaN and `if (NaN > 5)`
+  # errors with "missing value where TRUE/FALSE needed" -- a stop, but an
+  # unattributable one. A corpus with no placings is itself a defect, so say which.
+  if (!nrow(pl)) {
+    cli::cli_abort(c(
+      "x" = "No placed rows with a race key, so the multi-winner check cannot run.",
+      "i" = "Either {.field place} is unpopulated or every row lost its key --
+             both are worse than the defect this check exists to catch."))
+  }
   pct_multi <- 100 * mean(pl$n1 > 1)
   say("  races with more than one first place: %.2f%% (was 27.6%% on AT-800Metres-W before the fix)",
       pct_multi)
