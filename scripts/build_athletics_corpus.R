@@ -42,8 +42,15 @@ say("career sweep:        %s rows | %s athletes | %s..%s",
     format(nrow(car), big.mark = ","), format(uniqueN(car$athlete_id), big.mark = ","),
     min(car$date, na.rm = TRUE), max(car$date, na.rm = TRUE))
 
+# `race_key` is on this list because the competition route's key is the ONLY
+# thing that can separate one heat of a round from another -- it carries the
+# race number, which competition|event|round|date cannot reproduce. Dropping it
+# here is what let add_race_key() below merge every heat of a championship round
+# into one pseudo-race (27.6% of races with more than one winner; see
+# ../../docs/incidents/corpus-race-key-merged-heats-2026-08-14.md). The career
+# route has none, and gets NA.
 keep <- c("source", "athlete_id", "event_id", "discipline", "date",
-          "competition_id", "comp_name", "round", "tier",
+          "competition_id", "comp_name", "round", "tier", "race_key",
           "value_raw", "mark_string", "mark", "place", "is_technical",
           "wind", "indoor", "legal", "venue_country", "venue_city",
           "venue_stadium", "age", "sex", "orientation", "perf")
@@ -51,7 +58,8 @@ na_for <- list(source = NA_character_, athlete_id = NA_character_,
                event_id = NA_character_, discipline = NA_character_,
                date = as.Date(NA), competition_id = NA_character_,
                comp_name = NA_character_, round = NA_character_,
-               tier = NA_character_, value_raw = NA_real_,
+               tier = NA_character_, race_key = NA_character_,
+               value_raw = NA_real_,
                mark_string = NA_character_, mark = NA_real_, place = NA_integer_,
                is_technical = NA, wind = NA_real_, indoor = NA, legal = NA,
                venue_country = NA_character_, venue_city = NA_character_,
@@ -81,7 +89,10 @@ all[, mark_r := round(mark, 4)]
 # neither reliably. Sorting only by source would keep whichever sorted first and
 # discard the round label the context offsets depend on.
 all[, richness := (!is.na(round)) + (!is.na(place)) + (!is.na(tier)) +
-                  (!is.na(venue_city)) + (source == "competition")]
+                  (!is.na(venue_city)) + (source == "competition") +
+                  # a row carrying the real race key outranks one without it:
+                  # the key cannot be reconstructed from the columns it loses to
+                  (!is.na(race_key))]
 setorder(all, athlete_id, date, event_id, mark_r, -richness)
 all <- unique(all, by = c("athlete_id", "date", "event_id", "mark_r", "place"))
 say("deduped: %s -> %s rows (%s duplicate performance%s removed)",
@@ -122,6 +133,16 @@ all[, c("mark_r", "richness") := NULL]
 auth <- !is.na(all$race_key)
 say("\nauthoritative race keys on input: %s of %s rows (%.1f%%)",
     format(sum(auth), big.mark = ","), format(nrow(all), big.mark = ","), 100*mean(auth))
+# The first run of this fix printed "0 of 6,656,700 (NaN%)" because `race_key`
+# was missing from the `keep` list above -- the preservation logic was in place
+# and had nothing to preserve. Ten seconds to catch with this line, an hour
+# without it.
+if (!any(auth)) {
+  cli::cli_abort(c(
+    "x" = "No authoritative race keys survived the union.",
+    "i" = "The competition route carries {.field race_key}; if none reached here,
+           it is missing from the {.var keep} column list."))
+}
 all[, .auth_key := fifelse(auth, race_key, NA_character_)]
 derived <- add_race_key(all[, !".auth_key"])$race_key
 all[, .derived := derived]
