@@ -3,10 +3,13 @@
 # good are you RIGHT NOW"; the career model (estimate_ability) answers "how good
 # are you over a full record" and keeps the forecasts.
 #
-# Sequential walk-forward engine v2. All athletics events, T1+T2, 2020->now,
+# Sequential walk-forward engine v3. All athletics events, T1+T2, 2020->now,
 # ONE global chronological sweep so cross-event information is available at the
 # moment it is needed. Every adjustment is a flag; 2025 races are the TUNING
 # window, 2026 the CONFIRMATION window (score both, tune only ever on 2025).
+# v3 over v2: per-athlete variance learned at the same rate as the mean (with a
+# floor so a lucky streak cannot collapse it), and a walk-forward majors-finals
+# scorecard (concordance, favourite, medal hits) written per run.
 #
 # Flags (env): SEQ_CENS   censor weight for negative surprise in heats/semis/qual
 #                         (1 = off; 0.3 = a cruise counts 30% on the way down)
@@ -31,7 +34,7 @@ FROM <- as.Date("2020-01-01")
 
 cat0 <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
 cat0[, competition_id := as.character(competition_id)]
-cat0 <- cat0[meet_tier %in% c("T1_elite","T2_strong"), .(competition_id, meet_tier)]
+cat0 <- cat0[meet_tier %in% c("T1_elite","T2_strong"), .(competition_id, meet_tier, class)]
 reg <- as.data.table(citius::citius_events())[, .(event_id, family)]
 ag <- readRDS(file.path(OUT, "aging.rds"))
 curves <- as.data.table(ag$curves)
@@ -64,7 +67,13 @@ cat(sprintf("[%s] %s rows | %s races | %s athlete-events\n", TAG,
     format(uniqueN(paste(d$athlete_id, d$event_id)), big.mark=",")))
 
 MU <- d[, .(mu = mean(perf)), by = event_id]; MUv <- setNames(MU$mu, MU$event_id)
+# variance prior: within-race spread per event (median of race-level var), the
+# broadest honest starting uncertainty -- narrows only with an athlete's own evidence
+VP <- d[, .(v = var(perf)), by = .(event_id, race_key)][is.finite(v),
+        .(vp = stats::median(v)), by = event_id]
+VPv <- setNames(VP$vp, VP$event_id)
 R <- new.env(parent=emptyenv()); NE <- new.env(parent=emptyenv())
+V <- new.env(parent=emptyenv())   # EW variance of own surprises; prior = event pop
 LD <- new.env(parent=emptyenv()); LE <- new.env(parent=emptyenv())
 BYA <- new.env(parent=emptyenv())
 key <- function(a, e) paste0(a, "|", e)
@@ -72,7 +81,9 @@ key <- function(a, e) paste0(a, "|", e)
 races <- split(d, by = "race_key", sorted = FALSE)
 ord <- order(vapply(races, function(z) as.numeric(z$date[1]), numeric(1)))
 races <- races[ord]
-acc <- list(y25 = c(conc=0,pairs=0,fav=0,nr=0), y26 = c(conc=0,pairs=0,fav=0,nr=0))
+acc <- list(y25 = c(conc=0,pairs=0,fav=0,nr=0,brier=0,brier_base=0,npred=0), y26 = c(conc=0,pairs=0,fav=0,nr=0,brier=0,brier_base=0,npred=0))
+MAJ <- c("olympics","world_champs","european_champs","commonwealth")
+maj <- list()
 t0 <- Sys.time()
 for (z in races) {
   if (nrow(z) < 3L) next
@@ -99,6 +110,8 @@ for (z in races) {
     if (STALE) ne <- ne * 2^(-gap / z$hl[m])
     r_pre[m] <- v; n_eff[m] <- ne
   }
+  vp0 <- VPv[[ev]]; if (is.null(vp0) || !is.finite(vp0)) vp0 <- stats::var(z$perf)
+  v_pre <- vapply(kk, function(K) { vv <- V[[K]]; if (is.null(vv)) vp0 else vv }, numeric(1))
   yr <- format(dt0, "%Y")
   slot <- if (yr == "2025") "y25" else if (yr == "2026") "y26" else NA
   if (!is.na(slot)) {
@@ -108,7 +121,31 @@ for (z in races) {
       acc[[slot]]["pairs"] <- acc[[slot]]["pairs"] + nrow(g)
       acc[[slot]]["fav"] <- acc[[slot]]["fav"] + (z$place[which.max(r_pre)] == min(z$place))
       acc[[slot]]["nr"] <- acc[[slot]]["nr"] + 1
+      # WIN PROBABILITIES from rating + own-variance draws. The shared race
+      # shock cancels from ordering, so it is deliberately absent. Fixed seed
+      # per race so reruns are comparable.
+      set.seed(sum(utf8ToInt(substr(z$race_key[1], 1, 20))))
+      nf <- length(a)
+      dr <- matrix(rnorm(1000L * nf), 1000L, nf) * rep(sqrt(v_pre), each = 1000L) +
+            rep(r_pre, each = 1000L)
+      wins <- tabulate(max.col(dr), nf)
+      p_gold <- wins / 1000
+      hit <- as.integer(z$place == min(z$place))
+      acc[[slot]]["brier"] <- acc[[slot]]["brier"] + sum((p_gold - hit)^2)
+      acc[[slot]]["brier_base"] <- acc[[slot]]["brier_base"] + sum((1/nf - hit)^2)
+      acc[[slot]]["npred"] <- acc[[slot]]["npred"] + nf
     }
+  }
+  if (!is.na(z$class[1]) && z$class[1] %chin% MAJ && z$rc[1] == "final" &&
+      dt0 >= as.Date("2021-01-01")) {
+    g2 <- CJ(i=seq_along(a), j=seq_along(a))[i < j][z$place[i] != z$place[j]]
+    if (nrow(g2)) maj[[length(maj)+1L]] <- data.table(
+      class = z$class[1], yr = format(dt0, "%Y"), event_id = ev,
+      conc = sum((r_pre[g2$i] > r_pre[g2$j]) == (z$place[g2$i] < z$place[g2$j])),
+      pairs = nrow(g2),
+      fav = z$place[which.max(r_pre)] == min(z$place),
+      medal3 = sum(a[order(-r_pre)][1:3] %chin% a[z$place <= 3]),
+      winner_rank = which(order(-r_pre) == which.min(z$place)))
   }
   est <- n_eff >= 2
   S <- (if (sum(est) >= 3L) mean(z$perf[est] - r_pre[est]) else 0) * (sum(est)/length(a))
@@ -150,6 +187,9 @@ for (z in races) {
     } else {
       R[[kk[m]]] <- r_pre[m] + kv[m] * surprise[m]
     }
+    # variance learns at the same rate; floor stops a lucky streak collapsing
+    # it to zero (the career model's thin-record sigma defect, avoided here)
+    V[[kk[m]]] <- max(v_pre[m] + kv[m] * (surprise[m]^2 - v_pre[m]), 0.04 * vp0)
     NE[[kk[m]]] <- n_eff[m] + 1
     LD[[kk[m]]] <- dt0
   }
@@ -163,6 +203,21 @@ res <- data.table(tag = TAG,
   k0=K0, kappa=KAPPA, kfloor=KFLOOR)
 cat(sprintf("[%s] TUNE 2025: conc %.3f%% fav %.1f%% (%d races) | CONFIRM 2026: conc %.3f%% fav %.1f%% (%d races) | %.1f min\n",
     TAG, res$conc25, res$fav25, res$races25, res$conc26, res$fav26, res$races26, el))
+mj <- rbindlist(maj)
+if (nrow(mj)) {
+  write_parquet(mj, file.path(SC, sprintf("seqv3_majors_%s.parquet", TAG)))
+  cat("
+== MAJORS FINALS (2021+), walk-forward ==
+")
+  print(mj[, .(finals = .N, conc = round(100*sum(conc)/sum(pairs),2),
+               fav = round(100*mean(fav),1), medal_hits = round(100*sum(medal3)/(3*.N),1),
+               med_winner_rank = as.double(median(winner_rank))), by = .(class, yr)][order(yr, class)])
+  cat("
+pooled:
+")
+  print(mj[, .(finals = .N, conc = round(100*sum(conc)/sum(pairs),2),
+               fav = round(100*mean(fav),1), medal_hits = round(100*sum(medal3)/(3*.N),1))])
+}
 f <- file.path(SC, "seqv2_results.csv")
 fwrite(res, f, append = file.exists(f))
 ids <- ls(R)
