@@ -174,8 +174,12 @@ all[, race_key := fcase(
 say("  refused adoption because the place was already taken in that race: %s rows",
     format(all[.collide == TRUE, .N], big.mark = ","))
 n_unplaceable <- all[is.na(race_key) & !is.na(.n_sections), .N]
+# Count what was ADOPTED, not what was offered -- the refusals below are a
+# subset of the same condition, and reporting the gross figure would overstate
+# the join by exactly the rows the collision test just rejected.
 say("  adopted into a single known race: %s rows",
-    format(all[is.na(.auth_key) & !is.na(.n_sections) & .n_sections == 1L, .N], big.mark = ","))
+    format(all[is.na(.auth_key) & !is.na(.n_sections) & .n_sections == 1L & !.collide, .N],
+           big.mark = ","))
 say("  left unkeyed because the round was sectioned and the section is unknowable: %s rows",
     format(n_unplaceable, big.mark = ","))
 all[, c(".auth_key", ".derived", ".n_sections", ".sole", ".cand", ".collide") := NULL]
