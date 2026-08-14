@@ -93,9 +93,13 @@ if (nzchar(SCORE_FROM)) {
 #
 # Fix properly by calibrating on history before the earliest scored competition.
 # Until then this prints instead of hiding.
-n_in_cal <- sum(score_cids %in% unique(clean$competition_id))
-cli::cli_alert_warning(
-  "{n_in_cal} of {length(score_cids)} scored competition{?s} are inside the calibration corpus; the calibration is not out of sample.")
+# Stated as the constant it is, not as a ratio. `score_cids` is derived from
+# `finals`, which is derived from `clean`, so the overlap is 100% on every run by
+# construction -- a percentage here would read as a diagnostic that could come
+# back healthy, and it never can.
+cli::cli_alert_warning(c(
+  "All {length(score_cids)} scored competition{?s} are inside the calibration ",
+  "corpus by construction; this backtest's calibration is NOT out of sample."))
 
 for (cid in score_cids) {
   block <- finals[competition_id == cid]

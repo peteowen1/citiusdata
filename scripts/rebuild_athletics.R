@@ -112,5 +112,13 @@ br <- gold$by_race
 cat(sprintf("\nraces beating baseline: %d of %d (%.0f%%)\n",
             sum(br$skill > 0), nrow(br), 100 * mean(br$skill > 0)))
 
+# NOT `backtest.rds`. That name is backtest_athletics.R's default CITIUS_BT_OUT
+# and is what diagnose_backtest.R reads by default, so this script -- which caps
+# at 200 competitions and fits its own calibration -- was overwriting the current
+# arm's artefact with a differently-configured one. Same collision the
+# backtest_championships.R rename closed on 2026-08-14; this was the second
+# writer, found by the review of that fix.
 saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc),
-        file.path(OUT, "backtest.rds"))
+        file.path(OUT, "backtest_rebuild.rds"))
+cli::cli_alert_success(
+  "Wrote {.file backtest_rebuild.rds}. {.file backtest.rds} belongs to backtest_athletics.R.")

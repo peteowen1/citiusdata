@@ -368,8 +368,17 @@ cli::cli_alert_info(
 # Convention alone does not survive that (SIGMA_PARTS' own comment already
 # assumes "the new cache name" is remembered). Stamp what the cache was built
 # with, and refuse to add a different arm's meets to it.
-md5_of <- function(f) tryCatch(tools::md5sum(file.path(OUT, f))[[1]],
-                               error = function(e) NA_character_)
+# tools::md5sum() RETURNS NA for a missing file rather than erroring, so the
+# tryCatch below never fires for the commonest case and a fingerprint field can
+# go NA with nothing on the console. Two NA fields compare identical, which is
+# the one way this guard could pass two arms that differ -- so say it out loud.
+md5_of <- function(f) {
+  h <- tryCatch(tools::md5sum(file.path(OUT, f))[[1]],
+                error = function(e) NA_character_)
+  if (is.na(h)) cli::cli_alert_warning(
+    "No md5 for {.file {f}}; that field cannot distinguish two arms.")
+  h
+}
 store_fp <- function() if (!USE_STORE) NA_character_ else tryCatch({
   f <- sort(list.files(STORE, recursive = TRUE, full.names = TRUE))
   tf <- tempfile(); on.exit(unlink(tf), add = TRUE)
@@ -399,7 +408,14 @@ arm_fingerprint <- list(
 # if the arm that built it is not known.
 fp_file <- file.path(BT_CACHE, "_arm.rds")
 if (file.exists(fp_file)) {
-  prev <- readRDS(fp_file)
+  # A run killed mid-write leaves a truncated stamp, and a bare readRDS() on one
+  # dies with "error reading from connection" -- no path, no cause, and it reads
+  # as a crash in the backtest rather than a corrupt cache.
+  prev <- tryCatch(readRDS(fp_file), error = function(e) cli::cli_abort(c(
+    "x" = "{.path {fp_file}} could not be read: {conditionMessage(e)}",
+    "i" = "Most likely a run interrupted while writing it. Delete that file to
+           re-stamp the cache -- but only if this arm is the one that filled it."
+  )))
   nms <- union(names(prev), names(arm_fingerprint))
   changed <- nms[!vapply(nms, function(k)
     identical(prev[[k]], arm_fingerprint[[k]]), logical(1))]
@@ -413,7 +429,18 @@ if (file.exists(fp_file)) {
              {.envvar CITIUS_BT_OUT} with it), or delete the cache to rebuild."))
   }
 } else {
-  saveRDS(arm_fingerprint, fp_file)
+  # Write-then-rename, so an interrupt leaves either no stamp or a whole one.
+  # file.rename() RETURNS FALSE and warns rather than stopping, and at top level
+  # it also prints its own `[1] TRUE` into the log -- so this is both checked and
+  # silenced. An unstamped cache is not a small problem: the next arm would
+  # inherit these meets without a word, which is the bug this block exists for.
+  tmp <- paste0(fp_file, ".tmp")
+  saveRDS(arm_fingerprint, tmp)
+  if (!isTRUE(file.rename(tmp, fp_file))) {
+    cli::cli_abort(c(
+      "x" = "Could not write the arm stamp to {.path {fp_file}}.",
+      "i" = "The cache would be left unstamped and readable by any other arm."))
+  }
 }
 finals <- outcome_rows[!is.na(place) &
                   grepl("final", round, ignore.case = TRUE) &
@@ -497,6 +524,15 @@ tick <- function(slot, expr) {
 AGE_WARN <- new.env(parent = emptyenv())
 AGE_WARN$n <- 0L; AGE_WARN$last <- NA_character_
 
+# History rows whose event has no registry family, counted the same way and for
+# the same reason: the check below sits INSIDE the per-meet loop, so warning per
+# meet would either flood a 900-meet log or scroll off it. Accumulated here,
+# reported once at the end, and stamped into the artefact -- a run that fell back
+# to the global half-life for part of its history must be legible from the file,
+# not only from a console nobody kept.
+NOFAM <- new.env(parent = emptyenv())
+NOFAM$rows <- 0L; NOFAM$meets <- 0L; NOFAM$events <- character()
+
 n <- min(nrow(todo), MAX_PER_RUN)
 for (i in seq_len(n)) {
   cid <- todo$competition_id[i]
@@ -564,10 +600,11 @@ for (i in seq_len(n)) {
     # would lose its whole history here and its entrants would simply not be
     # rated -- the meet then scores fewer races with nothing saying why. Give
     # them the global half-life, which is exactly the single-half-life branch
-    # above, and say how many.
+    # above, and count them (see NOFAM above; reported once, and stamped).
     if (anyNA(pf$family)) {
-      cli::cli_alert_warning(
-        "{sum(is.na(pf$family))} history row{?s} with no registry family; estimated at half_life = {half_life}.")
+      NOFAM$rows <- NOFAM$rows + sum(is.na(pf$family))
+      NOFAM$meets <- NOFAM$meets + 1L
+      NOFAM$events <- union(NOFAM$events, unique(pf$event_id[is.na(pf$family)]))
       pf[is.na(family), family := ""]
     }
     tick("ability", data.table::rbindlist(lapply(split(pf, pf$family), function(g) {
@@ -720,6 +757,11 @@ medal <- score_predictions(pred[race_id %in% keep],
                            outc[race_id %in% keep, .(race_id, athlete_id, hit = hit_medal)],
                            "p_medal")
 
+if (NOFAM$rows > 0L) {
+  cli::cli_alert_warning(
+    "{format(NOFAM$rows, big.mark = ',')} history row{?s} across {length(NOFAM$events)} event{?s} had no registry family on {NOFAM$meets} meet{?s}; estimated at half_life = {half_life}.")
+  cli::cli_alert_info("Events: {.val {utils::head(NOFAM$events, 5)}}")
+}
 if (AGE_WARN$n > 0L) {
   cli::cli_alert_warning(
     "Age projection warned on {AGE_WARN$n} meet{?s}. Last: {AGE_WARN$last}")
@@ -786,6 +828,11 @@ saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc,
                # not comparable to one run on full history.
                elite_history = ELITE_HISTORY,
                history_days = HISTORY_DAYS, n_sims = N_SIMS,
+               # History that fell back to the global half-life because its
+               # event has no registry family. Zero on a healthy run; anything
+               # else means part of this arm was estimated differently from the
+               # rest, which no other field would record.
+               nofam_rows = NOFAM$rows, nofam_events = NOFAM$events,
                races_scored = length(keep), run_at = Sys.time())),
         file.path(OUT, Sys.getenv("CITIUS_BT_OUT", "backtest.rds")))
 

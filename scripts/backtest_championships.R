@@ -104,3 +104,8 @@ str(medal$overall)
 # half-life, under the filename every downstream reader treats as current.
 saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc),
         file.path(OUT, "backtest_superseded_championships.rds"))
+# Named at runtime, not only in the comment above: anyone used to checking
+# backtest.rds after a championships run gets no other cue that the familiar
+# filename now belongs to a different script's output.
+cli::cli_alert_success(
+  "Wrote {.file backtest_superseded_championships.rds}. {.file backtest.rds} belongs to backtest_athletics.R.")
