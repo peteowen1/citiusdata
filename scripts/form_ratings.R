@@ -66,6 +66,25 @@ KT1 <- .env_num("SEQ_KT1", 1); WINDCS <- Sys.getenv("SEQ_WINDCS","") != ""
 # 69.387 -> 69.669 sealed, favourite 52.7% -> 53.2%. SEQ_CEIL=0 is bit-identical
 # to the pre-blend engine (verified: it reproduced 69.127 / 69.387 exactly).
 CEIL <- .env_num("SEQ_CEIL", 0.30)
+# SEQ_SEED  1 = initialise a debut rating from results already held in the
+# careers store (4,978,201 rows against the corpus's 1,225,339 — the corpus is
+# roughly a quarter of what is on disk). 27.9% of 2026 cold-start athlete-events
+# have a prior SAME-EVENT result, 92.2% of those within two years.
+#
+# Cold starts are 28.7% of the scored metric at 52.94% while every other depth
+# band sits at 74–77%, so this is the only large lever left. See
+# check_cold_coverage.R / check_cold_recency.R.
+#
+# The seeded races are NOT added to the corpus — they only set what an athlete
+# carries INTO their first scored race. The scored set is unchanged, so the
+# metric stays comparable and any corpus-quality reason for their exclusion
+# (tier filter is the likely one) stays contained.
+# ADOPTED 2026-08-16: on by default. Sealed window 70.267 -> 71.214 (+0.947 pp)
+# and MAJORS FINALS 70.84 -> 73.89 (+3.05 pp), favourite 47.1% -> 51.9%, medal
+# hits 60.5% -> 64.9%. Set SEQ_SEED=0 to turn it off.
+SEEDON <- Sys.getenv("SEQ_SEED","1") != "0"
+SEEDHL <- .env_num("SEQ_SEEDHL", 365)   # half-life in days for the weighted mean
+SEEDNE <- .env_num("SEQ_SEEDNE", 5)     # cap on seeded n_eff, so it still learns fast
 TAG <- Sys.getenv("SEQ_TAG","baseline")
 # SEQ_WINP  1 = compute win probabilities and Brier. Default OFF: the draws cost
 #           ~60s of a ~360s run (measured) and nothing reads the accumulators.
@@ -143,6 +162,49 @@ BYA <- new.env(parent=emptyenv())
 BC <- new.env(parent=emptyenv()); BS <- new.env(parent=emptyenv())
 BSY <- new.env(parent=emptyenv())
 key <- function(a, e) paste0(a, "|", e)
+
+# --- SEQ_SEED: pre-populate state from held results -------------------------
+# Done ONCE before the loop rather than per race: an athlete-event's seed is a
+# function of its FIRST corpus date, which is known up front, so there is
+# nothing to look up mid-sweep. Setting R/NE/LD/BC here means the athlete is
+# simply `seen` when they first appear — no special case in the hot loop.
+n_seeded <- 0L
+if (SEEDON) {
+  cf <- list.files(file.path(OUT, "athletics_careers_store"), pattern = "[.]parquet$",
+                   recursive = TRUE, full.names = TRUE)
+  ca <- rbindlist(lapply(cf, function(f) tryCatch(setDT(read_parquet(f,
+          col_select = c("athlete_id","date","perf","discipline","sex"))),
+          error = function(e) NULL)), fill = TRUE)
+  ca <- ca[!is.na(perf) & is.finite(perf) & !is.na(date)]
+  ca[, athlete_id := as.character(athlete_id)]
+  ca[, event_id := paste0("AT-", gsub("[^A-Za-z0-9]", "", discipline), "-", sex)]
+  ca <- ca[event_id %chin% names(MUv)]
+  fd <- d[, .(first_date = min(date)), by = .(athlete_id, event_id)]
+  sd0 <- ca[fd, on = .(athlete_id, event_id), allow.cartesian = TRUE, nomatch = NULL]
+  # STRICTLY earlier than the first scored race, or the gain is leakage
+  sd0 <- sd0[date < first_date]
+  sd0[, w := 2^(-as.numeric(first_date - date) / SEEDHL)]
+  sg <- sd0[, .(r0 = sum(w * perf) / sum(w), ne0 = min(sum(w), SEEDNE),
+                best0 = max(perf), last0 = max(date)), by = .(athlete_id, event_id)]
+  sg <- sg[is.finite(r0) & is.finite(ne0)]
+  # ANCHOR: a seed is a mark in the same event, so it must land near that
+  # event's mean. A systematic offset would mean the two `perf` conventions
+  # differ (orientation, units) and the seeds are nonsense dressed as numbers.
+  sg[, dev := r0 - MUv[event_id]]
+  cat(sprintf("[%s] seed: %s athlete-events | median dev from event mean %+.4f (|dev|>1 in %.2f%%)
+",
+      TAG, format(nrow(sg), big.mark = ","), stats::median(sg$dev),
+      100 * mean(abs(sg$dev) > 1)))
+  stopifnot(abs(stats::median(sg$dev)) < 0.5)
+  kz <- key(sg$athlete_id, sg$event_id)
+  for (i in seq_len(nrow(sg))) {
+    K <- kz[i]
+    R[[K]] <- sg$r0[i]; NE[[K]] <- sg$ne0[i]
+    LD[[K]] <- sg$last0[i]; BC[[K]] <- sg$best0[i]
+  }
+  n_seeded <- nrow(sg)
+  rm(ca, sd0, sg); invisible(gc())
+}
 # All i<j index pairs where the two placings differ. Replaces
 # CJ(i=,j=)[i<j][place[i]!=place[j]], whose cost is data.table dispatch overhead
 # rather than the pair arithmetic.
@@ -451,7 +513,7 @@ res <- data.table(tag = TAG,
   # race set, which is what it is for.
   brier25 = if (WINP && acc$y25["npred"] > 0) acc$y25["brier"]/acc$y25["npred"] else NA_real_,
   brier26 = if (WINP && acc$y26["npred"] > 0) acc$y26["brier"]/acc$y26["npred"] else NA_real_,
-  maxplace = MAXPLACE, ceil = CEIL,
+  maxplace = MAXPLACE, ceil = CEIL, seeded = n_seeded,
   cens=CENS, age=AGEF, stale=STALE, xev=XEV, kt1=KT1, windcs=WINDCS,
   k0=K0, kappa=KAPPA, kfloor=KFLOOR)
 cat(sprintf("[%s] TUNE 2025: conc %.3f%% fav %.1f%% (%d races) | CONFIRM 2026: conc %.3f%% fav %.1f%% (%d races) | %.1f min\n",
