@@ -102,6 +102,18 @@ key <- function(a, e) paste0(a, "|", e)
 # All i<j index pairs where the two placings differ. Replaces
 # CJ(i=,j=)[i<j][place[i]!=place[j]], whose cost is data.table dispatch overhead
 # rather than the pair arithmetic.
+# Order-sensitive 31-bit hash of a race key, for a reproducible per-race seed.
+# Position-weighted so an anagram or a shared prefix does not collide, and it
+# reads the whole key rather than a truncation.
+.rk_seed <- function(k) {
+  cp <- utf8ToInt(k)
+  h <- 5381
+  # multiplier kept small on purpose: h is < 2^31 and R does this in doubles,
+  # so h * 16777619 overflows 2^53 and silently loses bits (measured: only 74.9%
+  # of keys got a distinct seed). h * 131 stays under 2^39 and is exact.
+  for (i in seq_along(cp)) h <- (h * 131 + cp[i]) %% 2147483647
+  as.integer(h)
+}
 .pairs <- function(n, place) {
   if (n < 2L) return(list(i = integer(0), j = integer(0)))
   ii <- rep.int(seq_len(n - 1L), (n - 1L):1L)
@@ -239,7 +251,17 @@ for (r_ in seq_along(starts)) {
       # see check_form_seed_collisions.R) and the first-race variance is
       # mis-initialised — fix both before trusting any Brier from this block.
       if (WINP) {
-      set.seed(sum(utf8ToInt(substr(z$race_key[1], 1, 20))))
+      # Order-sensitive hash of the WHOLE key. The old seed was
+      # sum(utf8ToInt(substr(race_key, 1, 20))), which failed twice over:
+      # 20 characters truncates at or before the round, so a meet's rounds and
+      # sections hashed alike, and summing character codes discards order AND
+      # compresses ~20 ASCII values into a ~300-wide band. Measured on
+      # AT-800Metres-W: 25,793 distinct races produced 203 distinct seeds, the
+      # largest collision group covering 554 races. set.seed() is global, so any
+      # two races sharing a seed and a field size drew an IDENTICAL matrix --
+      # their win probabilities were the same random numbers, not independent
+      # draws. See check_form_seed_collisions.R.
+      set.seed(.rk_seed(z$race_key[1]))
       nf <- length(a)
       dr <- matrix(rnorm(1000L * nf), 1000L, nf) * rep(sqrt(v_pre), each = 1000L) +
             rep(r_pre, each = 1000L)
@@ -325,6 +347,17 @@ res <- data.table(tag = TAG,
   conc25 = 100*acc$y25["conc"]/acc$y25["pairs"], fav25 = 100*acc$y25["fav"]/acc$y25["nr"],
   conc26 = 100*acc$y26["conc"]/acc$y26["pairs"], fav26 = 100*acc$y26["fav"]/acc$y26["nr"],
   races25 = acc$y25["nr"], races26 = acc$y26["nr"], mins = round(el,1),
+  # RAW Brier per prediction, written only when SEQ_WINP computed it (NA
+  # otherwise, never a silent 0). These accumulators used to be computed on
+  # every race and then discarded — the same dead-computation family as CSHRINK.
+  #
+  # Deliberately NOT reported as skill against `brier_base`: that baseline is a
+  # uniform 1/field prior, and "report skill against a uniform prior" is on this
+  # repo's Not-to-do list. Raw Brier is comparable BETWEEN ARMS on the same
+  # race set, which is what it is for.
+  brier25 = if (WINP && acc$y25["npred"] > 0) acc$y25["brier"]/acc$y25["npred"] else NA_real_,
+  brier26 = if (WINP && acc$y26["npred"] > 0) acc$y26["brier"]/acc$y26["npred"] else NA_real_,
+  maxplace = MAXPLACE,
   cens=CENS, age=AGEF, stale=STALE, xev=XEV, kt1=KT1, windcs=WINDCS,
   k0=K0, kappa=KAPPA, kfloor=KFLOOR)
 cat(sprintf("[%s] TUNE 2025: conc %.3f%% fav %.1f%% (%d races) | CONFIRM 2026: conc %.3f%% fav %.1f%% (%d races) | %.1f min\n",

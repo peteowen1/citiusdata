@@ -1,27 +1,27 @@
+# Does the new seed actually fix the collisions? Same measurement as before, on
+# the same event, so the two numbers are comparable.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
-OUT <- "C:/dev/citiusverse/citiusdata/data"
-# one event only — keep the footprint tiny while a sweep arm is running
-x <- setDT(read_parquet(file.path(OUT, "athletics_corpus_store/event_id=AT-800Metres-W/part-0.parquet"),
-                        col_select = c("race_key", "date", "round")))
-x <- x[!is.na(race_key)]
-k <- unique(x$race_key)
-cat(sprintf("event AT-800Metres-W: %s rows, %s distinct race_key\n",
-            format(nrow(x), big.mark=","), format(length(k), big.mark=",")))
-cat("\nfive example keys:\n"); print(utils::head(k, 5))
-cat(sprintf("\nkey length: median %.0f, min %d, max %d\n",
-            stats::median(nchar(k)), min(nchar(k)), max(nchar(k))))
-
-pre <- substr(k, 1, 20)
-seed <- vapply(pre, function(s) sum(utf8ToInt(s)), numeric(1))
-cat(sprintf("\ndistinct keys           : %d\n", length(k)))
-cat(sprintf("distinct 20-char prefixes: %d  (%.1f%% of keys)\n",
-            uniqueN(pre), 100*uniqueN(pre)/length(k)))
-cat(sprintf("distinct SEEDS           : %d  (%.1f%% of keys)\n",
-            uniqueN(seed), 100*uniqueN(seed)/length(k)))
-cat(sprintf("seed range               : %d to %d\n", min(seed), max(seed)))
-
-# worst collision group, and whether it merges rounds of one meet
-tb <- data.table(k = k, pre = pre, seed = seed)
-worst <- tb[, .N, by = seed][order(-N)][1]
-cat(sprintf("\nlargest single seed collides %d distinct races; examples:\n", worst$N))
-print(utils::head(tb[seed == worst$seed, k], 6))
+.rk_seed <- function(k) {
+  cp <- utf8ToInt(k); h <- 5381
+  for (i in seq_along(cp)) h <- (h * 131 + cp[i]) %% 2147483647
+  as.integer(h)
+}
+.old_seed <- function(k) sum(utf8ToInt(substr(k, 1, 20)))
+x <- setDT(read_parquet("C:/dev/citiusverse/citiusdata/data/athletics_corpus_store/event_id=AT-800Metres-W/part-0.parquet",
+                        col_select = "race_key"))
+k <- unique(x$race_key[!is.na(x$race_key)])
+old <- vapply(k, .old_seed, numeric(1))
+new <- vapply(k, .rk_seed, numeric(1))
+cat(sprintf("distinct race keys        : %s\n", format(length(k), big.mark=",")))
+cat(sprintf("distinct seeds, OLD hash  : %s  (%.1f%%)\n",
+            format(uniqueN(old), big.mark=","), 100*uniqueN(old)/length(k)))
+cat(sprintf("distinct seeds, NEW hash  : %s  (%.1f%%)\n",
+            format(uniqueN(new), big.mark=","), 100*uniqueN(new)/length(k)))
+cat(sprintf("largest collision group   : old %d, new %d races\n",
+            max(table(old)), max(table(new))))
+# and it must be deterministic across calls
+stopifnot(identical(vapply(k[1:100], .rk_seed, numeric(1)), new[1:100]))
+cat("seed is deterministic across calls: OK\n")
+# a seed must be a valid set.seed argument
+stopifnot(all(is.finite(new)), all(new == floor(new)))
+cat("all seeds finite integers: OK\n")
