@@ -49,6 +49,23 @@ KFLOOR <- .env_num("SEQ_KFLOOR", 0.32); CSHRINK <- .env_num("SEQ_C", 4)
 CENS <- .env_num("SEQ_CENS", 0.3); AGEF <- Sys.getenv("SEQ_AGE","1") != "0"
 STALE <- Sys.getenv("SEQ_STALE","1") != "0"; XEV <- Sys.getenv("SEQ_XEV","") != ""
 KT1 <- .env_num("SEQ_KT1", 1); WINDCS <- Sys.getenv("SEQ_WINDCS","") != ""
+# SEQ_CEIL  weight on an athlete's BEST MARK SO FAR, blended into the value used
+# to ORDER a field: r_use = (1-CEIL)*r_pre + CEIL*best. Season best where the
+# athlete has raced this year, career best otherwise, both strictly lagged.
+#
+# The rating tracks an athlete's AVERAGE; the best mark tracks their CEILING,
+# and the two are not redundant — ordering by best mark alone scores 77.22% on
+# the 2026 sealed window against the model's 78.05%, i.e. it is nearly as good
+# on its own while being wrong in different places. Offline sweep on 2025 gave a
+# clean interior peak at 0.30 (+0.332 pp), confirmed at +0.278 pp on 2026.
+#
+# PREDICTION ONLY. The update below deliberately still runs on r_pre: feeding a
+# blended value back into R would make the rating chase its own ceiling, and the
+# two would co-drift with nothing anchoring the level.
+# ADOPTED 2026-08-15 at 0.30 after an end-to-end A/B: 69.127 -> 69.427 tuning,
+# 69.387 -> 69.669 sealed, favourite 52.7% -> 53.2%. SEQ_CEIL=0 is bit-identical
+# to the pre-blend engine (verified: it reproduced 69.127 / 69.387 exactly).
+CEIL <- .env_num("SEQ_CEIL", 0.30)
 TAG <- Sys.getenv("SEQ_TAG","baseline")
 # SEQ_WINP  1 = compute win probabilities and Brier. Default OFF: the draws cost
 #           ~60s of a ~360s run (measured) and nothing reads the accumulators.
@@ -121,6 +138,10 @@ R <- new.env(parent=emptyenv()); NE <- new.env(parent=emptyenv())
 V <- new.env(parent=emptyenv())   # EW variance of own surprises; prior = event pop
 LD <- new.env(parent=emptyenv()); LE <- new.env(parent=emptyenv())
 BYA <- new.env(parent=emptyenv())
+# Running best perf per athlete-event: career, and within the current season.
+# Updated AFTER a race is scored, so reads are always strictly lagged.
+BC <- new.env(parent=emptyenv()); BS <- new.env(parent=emptyenv())
+BSY <- new.env(parent=emptyenv())
 key <- function(a, e) paste0(a, "|", e)
 # All i<j index pairs where the two placings differ. Replaces
 # CJ(i=,j=)[i<j][place[i]!=place[j]], whose cost is data.table dispatch overhead
@@ -196,7 +217,8 @@ acc <- list(y25 = c(conc=0,pairs=0,fav=0,nr=0,brier=0,brier_base=0,npred=0), y26
 # for 757 majors finals but would add per-object overhead across 165,133 races.
 NR <- if (HIST) nrow(d) else 0L
 H <- list(race_key = character(NR), date = numeric(NR), event_id = character(NR),
-          athlete_id = character(NR), r_pre = numeric(NR), n_eff = numeric(NR),
+          athlete_id = character(NR), r_pre = numeric(NR), r_use = numeric(NR),
+          n_eff = numeric(NR),
           v_pre = numeric(NR), perf = numeric(NR), place = integer(NR),
           rc = character(NR), seen = logical(NR))
 hi <- 0L
@@ -239,6 +261,14 @@ for (r_ in seq_along(starts)) {
     if (STALE) ne <- ne * 2^(-gap / z$hl[m])
     r_pre[m] <- v; n_eff[m] <- ne
   }
+  yr <- year(dt0)
+  # r_use is what ORDERS the field; r_pre is what the model learns from.
+  r_use <- r_pre
+  if (CEIL > 0) for (m in seq_along(a)) {
+    if (!seen[m]) next
+    b <- if (identical(BSY[[kk[m]]], yr)) BS[[kk[m]]] else BC[[kk[m]]]
+    if (!is.null(b)) r_use[m] <- (1 - CEIL) * r_pre[m] + CEIL * b
+  }
   vp0 <- VPv[[ev]]; if (is.null(vp0) || !is.finite(vp0)) vp0 <- stats::var(z$perf)
   v_pre <- vapply(kk, function(K) { vv <- V[[K]]; if (is.null(vv)) vp0 else vv }, numeric(1))
   if (HIST) {
@@ -246,11 +276,11 @@ for (r_ in seq_along(starts)) {
     H$race_key[ix] <- z$race_key[1]; H$date[ix] <- as.numeric(dt0)
     H$event_id[ix] <- ev;            H$athlete_id[ix] <- a
     H$r_pre[ix] <- r_pre;            H$n_eff[ix] <- n_eff
+    H$r_use[ix] <- r_use;
     H$v_pre[ix] <- v_pre;            H$perf[ix] <- z$perf
     H$place[ix] <- z$place;          H$rc[ix] <- z$rc
     H$seen[ix] <- seen
   }
-  yr <- year(dt0)
   slot <- if (yr == 2025L) "y25" else if (yr == 2026L) "y26" else NA
   if (!is.na(slot)) {
     # All i<j pairs as plain integer vectors. CJ() cost ~0.4ms per call in fixed
@@ -260,10 +290,10 @@ for (r_ in seq_along(starts)) {
     gg <- .pairs(length(sel), z$place[sel])
     g <- list(i = sel[gg$i], j = sel[gg$j])   # map back to full-field indices
     if (length(g$i)) {
-      acc[[slot]]["conc"] <- acc[[slot]]["conc"] + sum((r_pre[g$i] > r_pre[g$j]) == (z$place[g$i] < z$place[g$j]))
+      acc[[slot]]["conc"] <- acc[[slot]]["conc"] + sum((r_use[g$i] > r_use[g$j]) == (z$place[g$i] < z$place[g$j]))
       acc[[slot]]["pairs"] <- acc[[slot]]["pairs"] + length(g$i)
       acc[[slot]]["fav"] <- acc[[slot]]["fav"] +
-        (z$place[sel][which.max(r_pre[sel])] == min(z$place[sel]))
+        (z$place[sel][which.max(r_use[sel])] == min(z$place[sel]))
       acc[[slot]]["nr"] <- acc[[slot]]["nr"] + 1
       # WIN PROBABILITIES from rating + own-variance draws. The shared race
       # shock cancels from ordering, so it is deliberately absent.
@@ -287,7 +317,7 @@ for (r_ in seq_along(starts)) {
       set.seed(.rk_seed(z$race_key[1]))
       nf <- length(a)
       dr <- matrix(rnorm(1000L * nf), 1000L, nf) * rep(sqrt(v_pre), each = 1000L) +
-            rep(r_pre, each = 1000L)
+            rep(r_use, each = 1000L)
       wins <- tabulate(max.col(dr), nf)
       p_gold <- wins / 1000
       hit <- as.integer(z$place == min(z$place))
@@ -304,11 +334,11 @@ for (r_ in seq_along(starts)) {
     g2 <- list(i = ms[gg2$i], j = ms[gg2$j])
     if (length(g2$i)) maj[[length(maj)+1L]] <- data.table(
       class = z$class[1], yr = as.character(yr), event_id = ev,
-      conc = sum((r_pre[g2$i] > r_pre[g2$j]) == (z$place[g2$i] < z$place[g2$j])),
+      conc = sum((r_use[g2$i] > r_use[g2$j]) == (z$place[g2$i] < z$place[g2$j])),
       pairs = length(g2$i),
-      fav = z$place[which.max(r_pre)] == min(z$place),
-      medal3 = sum(a[order(-r_pre)][1:3] %chin% a[z$place <= 3]),
-      winner_rank = which(order(-r_pre) == which.min(z$place)))
+      fav = z$place[which.max(r_use)] == min(z$place),
+      medal3 = sum(a[order(-r_use)][1:3] %chin% a[z$place <= 3]),
+      winner_rank = which(order(-r_use) == which.min(z$place)))
   }
   est <- n_eff >= 2
   S <- (if (sum(est) >= 3L) mean(z$perf[est] - r_pre[est]) else 0) * (sum(est)/length(a))
@@ -365,6 +395,12 @@ for (r_ in seq_along(starts)) {
       V[[kk[m]]] <- max(v_pre[m] + kv[m] * (surprise[m]^2 - v_pre[m]), 0.04 * vp0)
     NE[[kk[m]]] <- n_eff[m] + 1
     LD[[kk[m]]] <- dt0
+    # running bests, updated last so every read above stayed lagged
+    bc <- BC[[kk[m]]]
+    if (is.null(bc) || z$perf[m] > bc) BC[[kk[m]]] <- z$perf[m]
+    if (identical(BSY[[kk[m]]], yr)) {
+      if (z$perf[m] > BS[[kk[m]]]) BS[[kk[m]]] <- z$perf[m]
+    } else { BSY[[kk[m]]] <- yr; BS[[kk[m]]] <- z$perf[m] }
   }
 }
 el <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
@@ -382,7 +418,7 @@ res <- data.table(tag = TAG,
   # race set, which is what it is for.
   brier25 = if (WINP && acc$y25["npred"] > 0) acc$y25["brier"]/acc$y25["npred"] else NA_real_,
   brier26 = if (WINP && acc$y26["npred"] > 0) acc$y26["brier"]/acc$y26["npred"] else NA_real_,
-  maxplace = MAXPLACE,
+  maxplace = MAXPLACE, ceil = CEIL,
   cens=CENS, age=AGEF, stale=STALE, xev=XEV, kt1=KT1, windcs=WINDCS,
   k0=K0, kappa=KAPPA, kfloor=KFLOOR)
 cat(sprintf("[%s] TUNE 2025: conc %.3f%% fav %.1f%% (%d races) | CONFIRM 2026: conc %.3f%% fav %.1f%% (%d races) | %.1f min\n",
@@ -415,7 +451,13 @@ st <- data.table(k = ids, R = vapply(ids, function(i) R[[i]], numeric(1)),
                  # Use an EMPIRICAL quantile of that ratio, never a normal one.
                  v = vapply(ids, function(i) { vv <- V[[i]]
                                                if (is.null(vv)) NA_real_ else vv }, numeric(1)),
-                 last = as.Date(vapply(ids, function(i) as.character(LD[[i]]), character(1))))
+                 last = as.Date(vapply(ids, function(i) as.character(LD[[i]]), character(1))),
+                 # the athlete's best mark so far, and the blend that ORDERS a
+                 # field. R stays the pure rating so nothing downstream silently
+                 # inherits the ceiling without asking for it.
+                 best = vapply(ids, function(i) { b <- BC[[i]]
+                                                  if (is.null(b)) NA_real_ else b }, numeric(1)))
+st[, R_ceil := fifelse(is.na(best), R, (1 - CEIL) * R + CEIL * best)]
 st[, c("athlete_id","event_id") := tstrsplit(k, "|", fixed = TRUE)]
 if (HIST) {
   hd <- as.data.table(lapply(H, function(v) v[seq_len(hi)]))
