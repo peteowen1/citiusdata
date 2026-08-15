@@ -51,6 +51,51 @@ if (any(is.na(st$orientation)))
 st[, pred_mark := exp(orientation * (R + offset))]
 st[, raw_mark  := exp(orientation * R)]
 
+# --- 2b. PEAK: what the athlete runs on a good day --------------------------
+# A quantile of the athlete's own distribution, using an EMPIRICAL quantile of
+# z = (perf - r_pre)/sqrt(v). A normal quantile would be badly wrong here for
+# two measured reasons: sd(z) is 1.52, not 1 (v learns from the shock-adjusted
+# surprise while the raw residual still carries the race shock), and the
+# good-side tail is fat (q99 3.50 vs a normal 2.33).
+#
+# Only the SPREAD above typical is taken from the quantile -- (q90 - q50) --
+# because the level is already handled by the per-event offset above. Taking
+# the whole quantile would count the level twice.
+zf <- h[seen == TRUE & rc == "final" & date < FIT_BEFORE &
+        is.finite(perf) & is.finite(r_pre) & is.finite(v_pre) & v_pre > 0]
+zf[, z := (perf - r_pre) / sqrt(v_pre)]
+q50 <- stats::quantile(zf$z, 0.50); q90 <- stats::quantile(zf$z, 0.90)
+ZSPREAD <- unname(q90 - q50)
+cat(sprintf("peak spread: empirical q90 %.3f - q50 %.3f = %.3f sd (normal would be %.3f)\n",
+            q90, q50, ZSPREAD, stats::qnorm(0.9)))
+st[, peak_mark := exp(orientation * (R + offset + ZSPREAD * sqrt(v)))]
+st[!is.finite(v) | v <= 0, peak_mark := NA_real_]
+
+# Bound the peak by the best mark ever recorded for the event. A "good day"
+# better than anything anyone has ever done is not a good day, it is an error,
+# and one implausible number on a page costs more than the column earns.
+#
+# 37 of 37,141 rows (0.10%) needed this, concentrated in combined events and
+# walks. The cause is upstream and known: the engine mis-initialises variance on
+# an athlete's first race (see FORM-MODEL.md), so a debutant's v becomes roughly
+# the squared distance of their debut from the population mean. The worst
+# offenders all have n_eff under 4. Fix that and most of this cap goes unused.
+bestp <- rbindlist(lapply(unique(st$event_id), function(EV) {
+  f <- file.path(OUT, sprintf("athletics_corpus_store/event_id=%s/part-0.parquet", EV))
+  if (!file.exists(f)) return(NULL)
+  x <- setDT(read_parquet(f, col_select = "perf"))
+  if (!nrow(x) || all(!is.finite(x$perf))) return(NULL)
+  data.table(event_id = EV, best_perf = max(x$perf, na.rm = TRUE))
+}))
+st <- merge(st, bestp, by = "event_id", all.x = TRUE)
+st[, peak_perf := orientation * log(peak_mark)]
+st[, capped := is.finite(peak_perf) & is.finite(best_perf) & peak_perf > best_perf]
+n_cap <- st[capped == TRUE, .N]
+st[capped == TRUE, peak_mark := exp(orientation * best_perf)]
+cat(sprintf("peak capped at the all-time event best on %s of %s rows (%.2f%%)\n",
+            format(n_cap, big.mark = ","), format(nrow(st), big.mark = ","),
+            100 * n_cap / nrow(st)))
+
 # --- 3. names + activity ----------------------------------------------------
 nm <- setDT(read_parquet("C:/dev/citiusverse/citiusdata/blog/athlete-ratings.parquet"))
 nm <- unique(nm[, .(athlete_id = as.character(athlete_id), athlete_name)])
@@ -72,9 +117,9 @@ show <- function(ev, k = 5) {
   cat(sprintf("== %s  (offset %+.3f%%, n_fit %s) ==\n", sub("^AT-","",ev),
               100*e$offset[1], format(e$n_fit[1], big.mark=",")))
   for (i in seq_len(nrow(e)))
-    cat(sprintf("  %d. %-24s %9s   (raw %9s)  n_eff %.1f\n", e$rk[i],
+    cat(sprintf("  %d. %-24s typical %9s   good day %9s   n_eff %.1f\n", e$rk[i],
                 substr(e$athlete_name[i],1,24), fmt(e$pred_mark[i], e$unit[i]),
-                fmt(e$raw_mark[i], e$unit[i]), e$n_eff[i]))
+                fmt(e$peak_mark[i], e$unit[i]), e$n_eff[i]))
   cat("\n")
 }
 cat("\n")
@@ -97,11 +142,33 @@ res <- c(anchor("AT-100Metres-M", "Lyles",      9.6,  10.1),
          anchor("AT-800Metres-W", "Hodgkinson", 113,  121),
          anchor("AT-PoleVault-M", "Duplantis",  5.7,  6.5),
          anchor("AT-LongJump-M",  "Tentoglou",  7.8,  8.8))
+# The peak column needs its own assertion: the anchors above only test the
+# TYPICAL mark, and the first version of this script shipped a 9.55 100m and a
+# 3:23 1500m because nothing checked the other column.
+bad_peak <- act[is.finite(peak_mark) & is.finite(best_perf) &
+                orientation * log(peak_mark) > best_perf + 1e-9, .N]
+cat(sprintf("peaks still beating the all-time event best after the cap: %d\n", bad_peak))
+res <- c(res, bad_peak == 0L)
 cat(sprintf("\n%d of %d mark anchors hold\n", sum(res), length(res)))
 # A wrong transform and an uncovered event both produce "no sensible mark", and
 # they need opposite responses: the first is a bug, the second is missing data.
 # So assert marks only where there IS coverage, and report coverage separately.
 if (!all(res)) stop("a displayed mark is outside its plausible range - check the transform")
+
+# --- 4b. Is the "good day" column honest? -----------------------------------
+# It claims a 90th percentile, so ~10% of actual finals should beat it. Measured
+# on 2026, which the quantile was NOT fitted on. A column that says "good day"
+# and is beaten 40% of the time is worse than no column at all.
+val <- h[seen == TRUE & rc == "final" & year(date) == 2026 &
+         is.finite(perf) & is.finite(r_pre) & is.finite(v_pre) & v_pre > 0]
+val <- merge(val, off[, .(event_id, offset)], by = "event_id", all.x = TRUE)
+val[is.na(offset), offset := pooled]
+val[, peak_perf := r_pre + offset + ZSPREAD * sqrt(v_pre)]
+hit <- val[, mean(perf > peak_perf)]
+cat(sprintf("\nPEAK CALIBRATION (2026, out of sample): %.1f%% of finals beat the\n", 100*hit))
+cat(sprintf("  'good day' mark over %s rows. Target 10%%.\n", format(nrow(val), big.mark=",")))
+if (abs(hit - 0.10) > 0.05)
+  cat("  *** MISCALIBRATED — do not label this a 90th percentile on the page ***\n")
 
 cov <- merge(reg[, .(event_id, family)],
              act[, .(active = .N), by = event_id], by = "event_id", all.x = TRUE)
@@ -126,7 +193,7 @@ if (nrow(empty)) {
       "not the filter here.\n", sep = "")
 }
 write_parquet(act[, .(event_id, athlete_id, athlete_name, rk, R, offset,
-                      pred_mark, raw_mark, n_eff, last, unit)],
+                      pred_mark, peak_mark, raw_mark, n_eff, v, last, unit)],
               file.path(OUT, sprintf("form_display_%s.parquet", TAG)))
 cat(sprintf("wrote form_display_%s.parquet (%s rows)\n", TAG,
             format(nrow(act), big.mark = ",")))

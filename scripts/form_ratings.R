@@ -327,6 +327,14 @@ fwrite(res, f, append = file.exists(f))
 ids <- ls(R)
 st <- data.table(k = ids, R = vapply(ids, function(i) R[[i]], numeric(1)),
                  n_eff = vapply(ids, function(i) NE[[i]], numeric(1)),
+                 # v carries the per-athlete performance variance, needed for a
+                 # "on a good day" column. NOTE it is the variance of the
+                 # SHOCK-ADJUSTED surprise, so it understates what an athlete
+                 # actually varies by: the raw residual still contains the race
+                 # shock S. Measured sd of (perf-r_pre)/sqrt(v) is 1.52, not 1.
+                 # Use an EMPIRICAL quantile of that ratio, never a normal one.
+                 v = vapply(ids, function(i) { vv <- V[[i]]
+                                               if (is.null(vv)) NA_real_ else vv }, numeric(1)),
                  last = as.Date(vapply(ids, function(i) as.character(LD[[i]]), character(1))))
 st[, c("athlete_id","event_id") := tstrsplit(k, "|", fixed = TRUE)]
 if (HIST) {
