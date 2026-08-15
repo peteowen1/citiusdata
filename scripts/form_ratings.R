@@ -291,9 +291,19 @@ for (r_ in seq_along(starts)) {
     } else {
       R[[kk[m]]] <- r_pre[m] + kv[m] * surprise[m]
     }
-    # variance learns at the same rate; floor stops a lucky streak collapsing
-    # it to zero (the career model's thin-record sigma defect, avoided here)
-    V[[kk[m]]] <- max(v_pre[m] + kv[m] * (surprise[m]^2 - v_pre[m]), 0.04 * vp0)
+    # Variance learns at the same rate; the floor stops a lucky streak
+    # collapsing it to zero (the career model's thin-record sigma defect).
+    #
+    # ONLY for an athlete who carried a rating in. A cold start sets R to absorb
+    # this very performance, so its true surprise is zero — but `surprise[m]` is
+    # still measured against the population mean, and updating V with that made
+    # a debutant's variance the squared distance of their debut from the mean.
+    # Elite newcomers got an enormous variance and average ones almost none,
+    # which is backwards, and it reached the page as a 10,558-point decathlon
+    # and a sub-world-record 100m. Leaving V unset keeps the event prior until
+    # there is a real surprise to learn from.
+    if (seen[m])
+      V[[kk[m]]] <- max(v_pre[m] + kv[m] * (surprise[m]^2 - v_pre[m]), 0.04 * vp0)
     NE[[kk[m]]] <- n_eff[m] + 1
     LD[[kk[m]]] <- dt0
   }
