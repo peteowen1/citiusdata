@@ -506,9 +506,20 @@ pool <- unique(finals[, .(competition_id, comp_start)])[!is.na(comp_start) &
                                                           comp_start >= as.Date("2016-01-01")]
 setorder(pool, comp_start)
 # All meets with finals, not a sample. The old 250 cap dated from when each
-# refit took 17s; restricting history to the meet's own events made it 2.5s, so
-# the full set is ~35 minutes rather than four hours. At 250 meets the backtest
-# used only 13% of the 13,108 available finals.
+# refit took 17s; restricting history to the meet's own events made it 2.5s. At
+# 250 meets the backtest used only 13% of the 13,108 available finals.
+#
+# BUDGET A RUN AT ~30s PER MEET, NOT 2.5s (measured 2026-08-15: 4 meets in two
+# minutes). The 2.5s is the ability refit alone; a meet also runs N_SIMS =
+# 10,000 simulations, and that dominates. So the 900-meet default is about
+# **7.5 hours**, not the ~35 minutes an earlier version of this comment
+# promised — and an A/B is two of those. Set CITIUS_BT_TARGET deliberately:
+# 120 meets is ~60 minutes and ~1,500 finals.
+#
+# Both arms of an A/B MUST share a target. The pool is an evenly spaced sample
+# of the meet list, so a different target selects DIFFERENT MEETS and the arms
+# quietly stop being comparable — which score_arm.R's vintage guard does not
+# check, because the history is identical either way.
 TARGET <- as.integer(Sys.getenv("CITIUS_BT_TARGET", "900"))
 if (nrow(pool) > TARGET) pool <- pool[round(seq(1, .N, length.out = TARGET))]
 
