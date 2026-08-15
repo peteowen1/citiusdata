@@ -22,21 +22,33 @@
 #              SEQ_KT1    k multiplier at T1 meets (1 = off)
 #              SEQ_WINDCS 1 = wind-adjust the first race at cold start
 suppressMessages(library(data.table)); suppressMessages(library(arrow))
+# Numeric knobs from the environment, safely. An env var set to the EMPTY string
+# is not unset: Sys.getenv returns "" rather than the default, and as.numeric("")
+# is NA — so `SEQ_MAXPLACE=""` silently gave MAXPLACE = NA and the run died deep
+# in the loop (2026-08-15). Worse, an empty SEQ_K0 would have run the whole model
+# with an NA learning rate. Treat empty as unset, and refuse garbage loudly.
+.env_num <- function(name, default) {
+  v <- Sys.getenv(name, "")
+  if (!nzchar(v)) return(default)
+  x <- suppressWarnings(as.numeric(v))
+  if (!is.finite(x)) stop(sprintf("%s='%s' is not a finite number", name, v))
+  x
+}
 OUT <- "C:/dev/citiusverse/citiusdata/data"
 SC  <- Sys.getenv("FORM_OUT", here::here("citiusdata", "data"))
 # Defaults are the 2026-08-14 swept optimum (see docs/plans/FORM-MODEL.md):
 # k0 0.95 and floor 0.32 both moved; kappa 3 was already optimal. The old
 # eye-chosen 0.55 / 3 / 0.18 scored 68.028 on the 2025 tuning window; these
 # score 68.564, and 67.353 -> 68.018 on the sealed 2026 window.
-K0 <- as.numeric(Sys.getenv("SEQ_K0","0.95")); KAPPA <- as.numeric(Sys.getenv("SEQ_KAPPA","3"))
-KFLOOR <- as.numeric(Sys.getenv("SEQ_KFLOOR","0.32")); CSHRINK <- as.numeric(Sys.getenv("SEQ_C","4"))
+K0 <- .env_num("SEQ_K0", 0.95); KAPPA <- .env_num("SEQ_KAPPA", 3)
+KFLOOR <- .env_num("SEQ_KFLOOR", 0.32); CSHRINK <- .env_num("SEQ_C", 4)
 # The ladder winners are ON by default, so a bare run IS the chosen model rather
 # than the model minus its adjustments. Set SEQ_AGE=0 / SEQ_STALE=0 / SEQ_CENS=1
 # to turn them off. (Leaving them opt-in is how 350,401 fitted race effects sat
 # inert on every shipped number — dormant by flag, which no wiring guard sees.)
-CENS <- as.numeric(Sys.getenv("SEQ_CENS","0.3")); AGEF <- Sys.getenv("SEQ_AGE","1") != "0"
+CENS <- .env_num("SEQ_CENS", 0.3); AGEF <- Sys.getenv("SEQ_AGE","1") != "0"
 STALE <- Sys.getenv("SEQ_STALE","1") != "0"; XEV <- Sys.getenv("SEQ_XEV","") != ""
-KT1 <- as.numeric(Sys.getenv("SEQ_KT1","1")); WINDCS <- Sys.getenv("SEQ_WINDCS","") != ""
+KT1 <- .env_num("SEQ_KT1", 1); WINDCS <- Sys.getenv("SEQ_WINDCS","") != ""
 TAG <- Sys.getenv("SEQ_TAG","baseline")
 # SEQ_WINP  1 = compute win probabilities and Brier. Default OFF: the draws cost
 #           ~60s of a ~360s run (measured) and nothing reads the accumulators.
@@ -48,9 +60,20 @@ WINP <- Sys.getenv("SEQ_WINP","") != ""
 # question it answers is whether the form model can carry road racing once we
 # stop grading it on ordering the back of a 500-runner field.
 #
+# ON BY DEFAULT AT 12 since 2026-08-15 (Pete's call). The model exists to say who
+# wins and who medals; scoring whether it ranked 40th against 41st in a big field
+# measures something nobody wants. 12 = a full track final plus a couple of
+# places. Set SEQ_MAXPLACE=0 to score the whole field.
+#
 # CAPPING MAKES THE METRIC EASIER, so a capped number is NOT comparable to an
-# uncapped one. Only capped-vs-capped on the same cap is a fair read.
-MAXPLACE <- as.integer(Sys.getenv("SEQ_MAXPLACE","0"))
+# uncapped one. Only capped-vs-capped on the same cap is a fair read, and every
+# figure recorded before 2026-08-15 is UNCAPPED. The cap value cannot be chosen
+# by maximising the metric — a smaller cap scores higher mechanically.
+#
+# Verified not to move the model: the full knob grid re-run at cap 12 puts every
+# optimum where it was uncapped (k0 0.95, kappa 3, floor 0.32), largest deviation
+# 0.02, so adopting it required no re-tuning.
+MAXPLACE <- as.integer(.env_num("SEQ_MAXPLACE", 12))
 HIST <- Sys.getenv("SEQ_HIST","") != ""
 FROM <- as.Date("2020-01-01")
 
@@ -276,7 +299,9 @@ for (r_ in seq_along(starts)) {
   }
   if (!is.na(z$class[1]) && z$class[1] %chin% MAJ && z$rc[1] == "final" &&
       dt0 >= MAJ_FROM) {
-    g2 <- .pairs(length(a), z$place)
+    ms <- if (MAXPLACE > 0L) which(z$place <= MAXPLACE) else seq_along(a)
+    gg2 <- .pairs(length(ms), z$place[ms])
+    g2 <- list(i = ms[gg2$i], j = ms[gg2$j])
     if (length(g2$i)) maj[[length(maj)+1L]] <- data.table(
       class = z$class[1], yr = as.character(yr), event_id = ev,
       conc = sum((r_pre[g2$i] > r_pre[g2$j]) == (z$place[g2$i] < z$place[g2$j])),
