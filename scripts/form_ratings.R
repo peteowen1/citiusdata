@@ -208,7 +208,21 @@ Vath <- d$athlete_id; Vperf <- d$perf; Vplace <- d$place; Vrc <- d$rc
 Vage <- d$age; Vwind <- d$wind; Vbeta <- d$beta; Vhl <- d$hl
 Vev <- d$event_id; Vdate <- d$date; Vfam <- d$family
 Vtier <- d$meet_tier; Vcls <- d$class; Vrk <- d$race_key
-acc <- list(y25 = c(conc=0,pairs=0,fav=0,nr=0,brier=0,brier_base=0,npred=0), y26 = c(conc=0,pairs=0,fav=0,nr=0,brier=0,brier_base=0,npred=0))
+# conc counts a TIE as 0.5 (standard concordance). Before 2026-08-16 the rule
+# was `(r_pre[i] > r_pre[j]) == (place[i] < place[j])`, which is FALSE on a tie,
+# so a tied pair scored correct only when row i finished BEHIND row j — i.e. it
+# was decided by corpus row order, not by the model. Two cold-start athletes in
+# one race carry the identical event mean, so this hit 53,582 pairs (6.9% of the
+# 2026 metric) and they scored 41.37%, below chance. See check_coldstart_share.R.
+#
+# _bs/_mx/_bc split every pair by whether BOTH athletes carried a rating in, one
+# did, or NEITHER did — so a cold-start change can be scored on the band it
+# actually targets instead of diluted across a metric that is 71% established
+# athletes. The ladder's "cross-event cold start is dead" verdict was measured
+# on the undiluted metric and is not established.
+.a0 <- c(conc=0,pairs=0,fav=0,nr=0,brier=0,brier_base=0,npred=0,
+         conc_bs=0,pairs_bs=0, conc_mx=0,pairs_mx=0, conc_bc=0,pairs_bc=0)
+acc <- list(y25 = .a0, y26 = .a0)
 # Per-race rating history (SEQ_HIST=1). r_pre is the rating an athlete CARRIED
 # INTO the race — the only version that answers an out-of-sample question. The
 # final state written below has already absorbed every race you would test it
@@ -290,10 +304,23 @@ for (r_ in seq_along(starts)) {
     gg <- .pairs(length(sel), z$place[sel])
     g <- list(i = sel[gg$i], j = sel[gg$j])   # map back to full-field indices
     if (length(g$i)) {
-      acc[[slot]]["conc"] <- acc[[slot]]["conc"] + sum((r_use[g$i] > r_use[g$j]) == (z$place[g$i] < z$place[g$j]))
+      di <- r_use[g$i] - r_use[g$j]
+      pl <- z$place[g$i] < z$place[g$j]
+      cw <- as.numeric((di > 0) == pl); cw[di == 0] <- 0.5    # tie = half credit
+      acc[[slot]]["conc"] <- acc[[slot]]["conc"] + sum(cw)
       acc[[slot]]["pairs"] <- acc[[slot]]["pairs"] + length(g$i)
-      acc[[slot]]["fav"] <- acc[[slot]]["fav"] +
-        (z$place[sel][which.max(r_use[sel])] == min(z$place[sel]))
+      si <- seen[g$i]; sj <- seen[g$j]
+      bs <- si & sj; bc <- !si & !sj; mx <- !bs & !bc
+      acc[[slot]]["conc_bs"] <- acc[[slot]]["conc_bs"] + sum(cw[bs])
+      acc[[slot]]["pairs_bs"] <- acc[[slot]]["pairs_bs"] + sum(bs)
+      acc[[slot]]["conc_mx"] <- acc[[slot]]["conc_mx"] + sum(cw[mx])
+      acc[[slot]]["pairs_mx"] <- acc[[slot]]["pairs_mx"] + sum(mx)
+      acc[[slot]]["conc_bc"] <- acc[[slot]]["conc_bc"] + sum(cw[bc])
+      acc[[slot]]["pairs_bc"] <- acc[[slot]]["pairs_bc"] + sum(bc)
+      # favourite: ties at the top are broken at random, so credit the expected
+      # hit rate rather than whichever athlete which.max happened to return
+      rs <- r_use[sel]; ps <- z$place[sel]; tm <- which(rs == max(rs))
+      acc[[slot]]["fav"] <- acc[[slot]]["fav"] + mean(ps[tm] == min(ps))
       acc[[slot]]["nr"] <- acc[[slot]]["nr"] + 1
       # WIN PROBABILITIES from rating + own-variance draws. The shared race
       # shock cancels from ordering, so it is deliberately absent.
@@ -334,9 +361,11 @@ for (r_ in seq_along(starts)) {
     g2 <- list(i = ms[gg2$i], j = ms[gg2$j])
     if (length(g2$i)) maj[[length(maj)+1L]] <- data.table(
       class = z$class[1], yr = as.character(yr), event_id = ev,
-      conc = sum((r_use[g2$i] > r_use[g2$j]) == (z$place[g2$i] < z$place[g2$j])),
+      conc = { d2 <- r_use[g2$i] - r_use[g2$j]
+               c2 <- as.numeric((d2 > 0) == (z$place[g2$i] < z$place[g2$j]))
+               c2[d2 == 0] <- 0.5; sum(c2) },
       pairs = length(g2$i),
-      fav = z$place[which.max(r_use)] == min(z$place),
+      fav = { t2 <- which(r_use == max(r_use)); mean(z$place[t2] == min(z$place)) },
       medal3 = sum(a[order(-r_use)][1:3] %chin% a[z$place <= 3]),
       winner_rank = which(order(-r_use) == which.min(z$place)))
   }
@@ -407,6 +436,10 @@ el <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
 res <- data.table(tag = TAG,
   conc25 = 100*acc$y25["conc"]/acc$y25["pairs"], fav25 = 100*acc$y25["fav"]/acc$y25["nr"],
   conc26 = 100*acc$y26["conc"]/acc$y26["pairs"], fav26 = 100*acc$y26["fav"]/acc$y26["nr"],
+  conc26_bs = 100*acc$y26["conc_bs"]/acc$y26["pairs_bs"],
+  conc26_mx = 100*acc$y26["conc_mx"]/acc$y26["pairs_mx"],
+  conc26_bc = 100*acc$y26["conc_bc"]/acc$y26["pairs_bc"],
+  share26_cold = 100*(acc$y26["pairs_mx"]+acc$y26["pairs_bc"])/acc$y26["pairs"],
   races25 = acc$y25["nr"], races26 = acc$y26["nr"], mins = round(el,1),
   # RAW Brier per prediction, written only when SEQ_WINP computed it (NA
   # otherwise, never a silent 0). These accumulators used to be computed on
@@ -423,6 +456,9 @@ res <- data.table(tag = TAG,
   k0=K0, kappa=KAPPA, kfloor=KFLOOR)
 cat(sprintf("[%s] TUNE 2025: conc %.3f%% fav %.1f%% (%d races) | CONFIRM 2026: conc %.3f%% fav %.1f%% (%d races) | %.1f min\n",
     TAG, res$conc25, res$fav25, res$races25, res$conc26, res$fav26, res$races26, el))
+cat(sprintf("[%s] 2026 by band: both-rated %.3f%% | one-cold %.3f%% | both-cold %.3f%% | cold pairs %.1f%% of metric
+",
+    TAG, res$conc26_bs, res$conc26_mx, res$conc26_bc, res$share26_cold))
 mj <- rbindlist(maj)
 if (nrow(mj)) {
   write_parquet(mj, file.path(SC, sprintf("seqv3_majors_%s.parquet", TAG)))
