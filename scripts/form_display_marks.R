@@ -21,7 +21,15 @@ suppressMessages(library(arrow)); suppressMessages(library(data.table))
 OUT <- Sys.getenv("FORM_OUT", "C:/dev/citiusverse/citiusdata/data")
 TAG <- Sys.getenv("FORM_TAG", "final")
 FIT_BEFORE <- as.Date("2025-01-01")
-MIN_N <- as.integer(Sys.getenv("FORM_OFFSET_MIN_N", "200"))
+# An env var set to "" is NOT unset: Sys.getenv returns "" and as.integer("")
+# is NA, which would silently disable the thin-event fallback. Treat empty as
+# unset (learned the hard way on SEQ_MAXPLACE, 2026-08-15).
+.env_int <- function(name, default) {
+  v <- Sys.getenv(name, ""); if (!nzchar(v)) return(default)
+  x <- suppressWarnings(as.integer(v))
+  if (is.na(x)) stop(sprintf("%s='%s' is not an integer", name, v)); x
+}
+MIN_N <- .env_int("FORM_OFFSET_MIN_N", 200L)
 
 h <- setDT(read_parquet(file.path(OUT, sprintf("seqv3_history_%s.parquet", TAG))))
 st <- setDT(read_parquet(file.path(OUT, sprintf("seqv2_state_%s.parquet", TAG))))
