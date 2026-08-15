@@ -210,6 +210,39 @@ if ("place" %in% names(all)) {
              decompose_races() would fit a shared shock across several real races."))
   }
 }
+# A RACE HAPPENS ON ONE DAY. A key spanning two dates is either a mis-dated
+# result or a key collision, and both are worth knowing at build time rather
+# than at read time.
+#
+# Found 2026-08-15 by a contiguity assertion in the form engine, not here:
+# `7174333|10229522||11|4` (100mH W round 1, 2023) has five rows on 2023-08-03
+# and one athlete dated 2023-08-01. Exactly one key in 165,133. Harmless to any
+# code that groups BY KEY, but the corpus race_key carries no date, so anything
+# that assumes a race's rows are adjacent in date order would have folded 186
+# unrelated races into one -- the same shape as the merged-heats defect this
+# file was rewritten to prevent, and just as silent.
+#
+# Reported, not fatal: one stale date should not block a corpus build, and the
+# engine now forces contiguity rather than trusting it. It is here so the count
+# is visible and a REGRESSION would be obvious.
+if ("date" %in% names(all)) {
+  spanning <- all[!is.na(race_key) & !is.na(date),
+                  .(nd = uniqueN(date)), by = race_key][nd > 1L]
+  say("\n  race keys spanning more than one date: %s of %s (%.3f%%)",
+      format(nrow(spanning), big.mark = ","),
+      format(all[!is.na(race_key), uniqueN(race_key)], big.mark = ","),
+      100 * nrow(spanning) / max(1L, all[!is.na(race_key), uniqueN(race_key)]))
+  if (nrow(spanning)) {
+    ex <- utils::head(spanning[order(-nd)], 3)
+    for (i in seq_len(nrow(ex)))
+      say("    %s spans %d dates", ex$race_key[i], ex$nd[i])
+    if (nrow(spanning) > 20L)
+      cli::cli_warn(c(
+        "!" = "{nrow(spanning)} race keys span more than one date.",
+        "i" = "One is a stale source date; twenty is a keying fault. Check
+               before trusting any per-race quantity."))
+  }
+}
 fld <- all[!is.na(race_key), .(k = uniqueN(athlete_id)), by = race_key]
 say("\nraces recovered: %s (was %s in the competition harvest alone)",
     format(nrow(fld), big.mark = ","), format(uniqueN(comp$race_key), big.mark = ","))
