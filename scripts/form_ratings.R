@@ -42,6 +42,15 @@ TAG <- Sys.getenv("SEQ_TAG","baseline")
 #           ~60s of a ~360s run (measured) and nothing reads the accumulators.
 # SEQ_HIST  1 = write the per-race r_pre history (see below).
 WINP <- Sys.getenv("SEQ_WINP","") != ""
+# SEQ_MAXPLACE  score only finishers placing <= this (0 = off, score everyone).
+# A METRIC change, not a model change: updates still use the whole field, so an
+# athlete's own rating still learns from their race whatever they placed. The
+# question it answers is whether the form model can carry road racing once we
+# stop grading it on ordering the back of a 500-runner field.
+#
+# CAPPING MAKES THE METRIC EASIER, so a capped number is NOT comparable to an
+# uncapped one. Only capped-vs-capped on the same cap is a fair read.
+MAXPLACE <- as.integer(Sys.getenv("SEQ_MAXPLACE","0"))
 HIST <- Sys.getenv("SEQ_HIST","") != ""
 FROM <- as.Date("2020-01-01")
 
@@ -212,11 +221,14 @@ for (r_ in seq_along(starts)) {
     # All i<j pairs as plain integer vectors. CJ() cost ~0.4ms per call in fixed
     # data.table dispatch overhead regardless of field size (measured: 79x at
     # n=8), paid once per scored race.
-    g <- .pairs(length(a), z$place)
+    sel <- if (MAXPLACE > 0L) which(z$place <= MAXPLACE) else seq_along(a)
+    gg <- .pairs(length(sel), z$place[sel])
+    g <- list(i = sel[gg$i], j = sel[gg$j])   # map back to full-field indices
     if (length(g$i)) {
       acc[[slot]]["conc"] <- acc[[slot]]["conc"] + sum((r_pre[g$i] > r_pre[g$j]) == (z$place[g$i] < z$place[g$j]))
       acc[[slot]]["pairs"] <- acc[[slot]]["pairs"] + length(g$i)
-      acc[[slot]]["fav"] <- acc[[slot]]["fav"] + (z$place[which.max(r_pre)] == min(z$place))
+      acc[[slot]]["fav"] <- acc[[slot]]["fav"] +
+        (z$place[sel][which.max(r_pre[sel])] == min(z$place[sel]))
       acc[[slot]]["nr"] <- acc[[slot]]["nr"] + 1
       # WIN PROBABILITIES from rating + own-variance draws. The shared race
       # shock cancels from ordering, so it is deliberately absent.
