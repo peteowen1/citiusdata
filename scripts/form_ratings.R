@@ -83,7 +83,12 @@ CEIL <- .env_num("SEQ_CEIL", 0.30)
 # and MAJORS FINALS 70.84 -> 73.89 (+3.05 pp), favourite 47.1% -> 51.9%, medal
 # hits 60.5% -> 64.9%. Set SEQ_SEED=0 to turn it off.
 SEEDON <- Sys.getenv("SEQ_SEED","1") != "0"
-SEEDHL <- .env_num("SEQ_SEEDHL", 365)   # half-life in days for the weighted mean
+# 45, not 365 (2026-08-16). Bracketed on the WEIGHTED metric: 365 -> 71.847,
+# 180 -> 71.323 (at 20/8), 45 -> 72.019, 21 -> 72.000, 10 -> 71.357 — worse on
+# both sides. +0.172 over 365 against a 0.118 pp noise floor. An earlier reading
+# that majors preferred 365 was noise: that metric has a ~0.39 pp floor and the
+# spread being read off it was 0.35 pp.
+SEEDHL <- .env_num("SEQ_SEEDHL", 45)    # half-life in days for the weighted mean
 SEEDNE <- .env_num("SEQ_SEEDNE", 5)     # cap on seeded n_eff, so it still learns fast
 # SEQ_HUBER  robust update. 0 = off. Otherwise a surprise larger than
 # HUBER x the athlete's OWN sd has its step capped there, so a catastrophe moves
@@ -102,7 +107,13 @@ SEEDNE <- .env_num("SEQ_SEEDNE", 5)     # cap on seeded n_eff, so it still learn
 #
 # Heat censoring is a crude special case of this (bad qualifiers only); Huber is
 # the general form and applies in finals too, which is where falls hurt most.
-HUBER <- .env_num("SEQ_HUBER", 0)
+# 3. Huber 2 scores 0.047 pp higher on the tuning window and 3 scores 0.039 pp
+# higher on the sealed one, both inside a 0.118 pp noise floor — so the pair is
+# not separable and the score cannot choose. 3 is taken because it is the value
+# check_huber_decline.R validated, and because it clips LESS aggressively, which
+# is the conservative side of the one failure this knob has that the metric
+# cannot see: blunting a genuine collapse. Both clearly beat off (+0.202/+0.155).
+HUBER <- .env_num("SEQ_HUBER", 3)
 TAG <- Sys.getenv("SEQ_TAG","baseline")
 # SEQ_WINP  1 = compute win probabilities and Brier. Default OFF: the draws cost
 #           ~60s of a ~360s run (measured) and nothing reads the accumulators.
@@ -289,30 +300,6 @@ Vage <- d$age; Vwind <- d$wind; Vbeta <- d$beta; Vhl <- d$hl
 Vev <- d$event_id; Vdate <- d$date; Vfam <- d$family
 Vtier <- d$meet_tier; Vcls <- d$class; Vrk <- d$race_key
 
-# --- metric weight per row, enumerated and asserted -------------------------
-# Computed up front rather than inline so that EVERY combination present in the
-# corpus is visible and checked. A fall-through that quietly assigns the T2
-# weight to an uncatalogued major would bias the metric in the exact direction
-# the weighting exists to correct, and nothing downstream would show it.
-d[, w_tier := fifelse(!is.na(class) & class %chin% MAJ, W_MAJ,
-              fifelse(!is.na(meet_tier) & meet_tier == "T1_elite", W_T1, W_T2))]
-d[, w_rnd := fifelse(rc == "final", 1, W_RND)]
-d[, wt := w_tier * w_rnd]
-wtab <- d[, .(races = uniqueN(race_key), rows = .N, weight = wt[1]),
-          by = .(class = fifelse(is.na(class), "(uncatalogued)", class),
-                 meet_tier, rc)][order(-weight, -races)]
-cat(sprintf("[%s] METRIC WEIGHTS -- every race type present, %d combinations:
-", TAG, nrow(wtab)))
-print(wtab)
-# rc is derived by regex and can only be final/semi/heat, but assert it rather
-# than trust it: a new round label would silently become a "heat".
-stopifnot("every row must carry a finite weight" = all(is.finite(d$wt)),
-          "rc must be one of final/semi/heat"    = all(d$rc %chin% c("final","semi","heat")),
-          "no weight may be zero"                = all(d$wt > 0))
-cat(sprintf("[%s] weight check: all %s rows weighted, range %g to %g
-",
-            TAG, format(nrow(d), big.mark=","), min(d$wt), max(d$wt)))
-Vwt <- d$wt
 # conc counts a TIE as 0.5 (standard concordance). Before 2026-08-16 the rule
 # was `(r_pre[i] > r_pre[j]) == (place[i] < place[j])`, which is FALSE on a tie,
 # so a tied pair scored correct only when row i finished BEHIND row j — i.e. it
@@ -359,10 +346,41 @@ MAJ <- c("olympics","world_champs","european_champs","commonwealth")
 #
 # These weights are a judgement call and are FIXED HERE, before any arm runs.
 # Tuning them until a favoured arm wins would make the metric a formality.
-W_MAJ <- .env_num("SEQ_W_MAJ", 20)   # olympics / worlds / euros / commonwealth
-W_T1  <- .env_num("SEQ_W_T1",   8)   # other T1_elite: diamond league, world indoor
+# Raised from 20/8 to 40/12 (Pete, 2026-08-16). At 20/8/1 championships carried
+# 16.3% of the metric; at 40/12/1 they carry 27.2% and T2 drops 77.1% -> 64.5%,
+# for almost no precision cost (noise 0.079 -> 0.118 pp, still well under the
+# 0.17-0.26 pp effects being measured). Chosen over 20/8/0.5, which reaches a
+# similar share by suppressing everything else rather than lifting the races we
+# care about, and lands at the same noise. Past ~40% majors the noise floor
+# collides with the effects and the metric stops being able to choose at all.
+W_MAJ <- .env_num("SEQ_W_MAJ", 40)   # olympics / worlds / euros / commonwealth
+W_T1  <- .env_num("SEQ_W_T1",  12)   # other T1_elite: diamond league, world indoor
 W_T2  <- .env_num("SEQ_W_T2",   1)   # T2_strong
 W_RND <- .env_num("SEQ_W_RND", 0.5)  # multiplier for a non-final round
+# --- metric weight per row, enumerated and asserted -------------------------
+# Computed up front rather than inline so that EVERY combination present in the
+# corpus is visible and checked. A fall-through that quietly assigns the T2
+# weight to an uncatalogued major would bias the metric in the exact direction
+# the weighting exists to correct, and nothing downstream would show it.
+d[, w_tier := fifelse(!is.na(class) & class %chin% MAJ, W_MAJ,
+              fifelse(!is.na(meet_tier) & meet_tier == "T1_elite", W_T1, W_T2))]
+d[, w_rnd := fifelse(rc == "final", 1, W_RND)]
+d[, wt := w_tier * w_rnd]
+wtab <- d[, .(races = uniqueN(race_key), rows = .N, weight = wt[1]),
+          by = .(class = fifelse(is.na(class), "(uncatalogued)", class),
+                 meet_tier, rc)][order(-weight, -races)]
+cat(sprintf("[%s] METRIC WEIGHTS -- every race type present, %d combinations:
+", TAG, nrow(wtab)))
+print(wtab)
+# rc is derived by regex and can only be final/semi/heat, but assert it rather
+# than trust it: a new round label would silently become a "heat".
+stopifnot("every row must carry a finite weight" = all(is.finite(d$wt)),
+          "rc must be one of final/semi/heat"    = all(d$rc %chin% c("final","semi","heat")),
+          "no weight may be zero"                = all(d$wt > 0))
+cat(sprintf("[%s] weight check: all %s rows weighted, range %g to %g
+",
+            TAG, format(nrow(d), big.mark=","), min(d$wt), max(d$wt)))
+Vwt <- d$wt
 MAJ_FROM <- as.Date("2021-01-01")   # hoisted: was re-parsed on every race
 maj <- list()
 t0 <- Sys.time()
