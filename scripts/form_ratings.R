@@ -114,6 +114,34 @@ SEEDNE <- .env_num("SEQ_SEEDNE", 5)     # cap on seeded n_eff, so it still learn
 # is the conservative side of the one failure this knob has that the metric
 # cannot see: blunting a genuine collapse. Both clearly beat off (+0.202/+0.155).
 HUBER <- .env_num("SEQ_HUBER", 3)
+# SEQ_VPRIOR  1 = derive the thin-record variance prior from WITHIN-ATHLETE
+# variation instead of within-race spread. Default off until A/B'd.
+#
+# The old prior was the median within-race variance of `perf` — how spread out
+# DIFFERENT athletes are in one race. `v_pre` is supposed to be ONE athlete's
+# race-to-race variation. Those are different quantities, and the first is
+# **5.19x larger** than the second at the median event, up to 12.9x for the
+# throws (shot put M: prior sd 8.93% of a mark against a learned 2.44%) — for
+# the obvious reason that a shot put final spans 15m to 22m while any one
+# athlete varies by ~2.4%.
+#
+# Estimated as median over athletes with >= 8 races of var(diff(perf))/2.
+# Differencing removes the athlete's level AND any slow improvement trend, which
+# a plain var(perf) would wrongly bank as race-to-race noise. Correlates 0.968
+# (log scale) with what deep records actually learn, and unlike the learned
+# value it is computable from the corpus, so it is not circular.
+#
+# VPADJ: the estimator runs 1.63x larger than the learned variance because
+# var(diff) retains the race shock while v_pre is the variance of the
+# SHOCK-ADJUSTED surprise. Dividing puts the prior on the scale the model
+# actually learns on, so a thin record starts where a deep one ends.
+# ON by default (2026-08-16). Costs 0.034 pp on the weighted metric — inside its
+# 0.118 pp noise floor, so effectively free — and takes the "good day" column
+# from being beaten 12.19% of the time to 10.06%, i.e. it becomes a genuine 90th
+# percentile rather than one in name. Set SEQ_VPRIOR=0 to revert.
+VPRIOR <- Sys.getenv("SEQ_VPRIOR","1") != "0"
+VPADJ  <- .env_num("SEQ_VPADJ", 1.63)
+VPMINA <- .env_num("SEQ_VPMINA", 20)   # min athletes before an event is trusted
 TAG <- Sys.getenv("SEQ_TAG","baseline")
 # SEQ_WINP  1 = compute win probabilities and Brier. Default OFF: the draws cost
 #           ~60s of a ~360s run (measured) and nothing reads the accumulators.
@@ -182,6 +210,34 @@ MU <- d[, .(mu = mean(perf)), by = event_id]; MUv <- setNames(MU$mu, MU$event_id
 VP <- d[, .(v = var(perf)), by = .(event_id, race_key)][is.finite(v),
         .(vp = stats::median(v)), by = event_id]
 VPv <- setNames(VP$vp, VP$event_id)
+if (VPRIOR) {
+  # computed on a COPY: d must stay in (date, race_key) order, since the
+  # boundary scan that drives the whole sweep is built from its row order
+  dd <- d[, .(athlete_id, event_id, date, race_key, perf)]
+  setorder(dd, athlete_id, event_id, date, race_key)
+  dv <- dd[, if (.N >= 8L) .(vd = stats::var(diff(perf))/2) else NULL,
+           by = .(athlete_id, event_id)]
+  est <- dv[is.finite(vd) & vd > 0, .(vp = stats::median(vd)/VPADJ, n_ath = .N),
+            by = event_id][n_ath >= VPMINA]
+  # events too thin for their own estimate keep a SHRUNK version of the old
+  # prior rather than the wide one - the failure being fixed is worst exactly
+  # where evidence is thinnest, so falling back to the old value would leave
+  # combined events (the 9,126-point decathlon) untouched.
+  cmp <- merge(data.table(event_id = names(VPv), old = as.numeric(VPv)), est, by = "event_id")
+  shrink <- stats::median(cmp$old / cmp$vp)
+  newv <- VPv
+  newv[] <- as.numeric(VPv) / shrink
+  newv[est$event_id] <- est$vp
+  cat(sprintf("[%s] variance prior: %d of %d events from within-athlete data, %d shrunk by %.2fx
+",
+      TAG, nrow(est), length(VPv), length(VPv) - nrow(est), shrink))
+  cat(sprintf("[%s]   median prior sd %.2f%% -> %.2f%% of a mark
+", TAG,
+      100*(exp(sqrt(stats::median(as.numeric(VPv))))-1),
+      100*(exp(sqrt(stats::median(as.numeric(newv))))-1)))
+  VPv <- newv
+  rm(dd, dv, est, cmp); invisible(gc())
+}
 R <- new.env(parent=emptyenv()); NE <- new.env(parent=emptyenv())
 V <- new.env(parent=emptyenv())   # EW variance of own surprises; prior = event pop
 LD <- new.env(parent=emptyenv()); LE <- new.env(parent=emptyenv())

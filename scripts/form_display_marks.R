@@ -87,6 +87,27 @@ cat(sprintf("peak spread: empirical q90 %.3f - q50 %.3f = %.3f sd (normal would 
             q90, q50, ZSPREAD, stats::qnorm(0.9)))
 st[, peak_mark := exp(orientation * (R + offset + ZSPREAD * sqrt(v)))]
 st[!is.finite(v) | v <= 0, peak_mark := NA_real_]
+# SUPPRESS the good-day mark on a thin record rather than capping it.
+#
+# The column claims a 90th percentile of an athlete's own distribution, and on
+# 3-5 races we do not know that distribution: 42.6% of that band get a mark more
+# than 2% past their own best and 8.4% more than 5% past it, against 27.7%/3.9%
+# at 5-8 races and 7.7%/0.0% at 20+. The extremes are indefensible - a 42.15m
+# discus thrower shown 58.08m.
+#
+# The cause is a CONFLATION, not a scale error, so clipping would hide it rather
+# than fix it: for a thin record, uncertainty about the athlete's LEVEL is large,
+# and that is not the same quantity as their race-to-race UPSIDE. `v` currently
+# carries both, so a good-day mark reads "level + our ignorance of the level +
+# upside". Until those are separated (see the over-confident-sigma item in
+# NEXT-STEPS), declining to make the claim is the honest option; a capped number
+# would still be a claim, just a quieter wrong one.
+PEAK_MIN_N <- .env_int("FORM_PEAK_MIN_N", 8L)
+n_thin <- st[is.finite(peak_mark) & n_eff < PEAK_MIN_N, .N]
+st[n_eff < PEAK_MIN_N, peak_mark := NA_real_]
+cat(sprintf("good day suppressed on %s rows with n_eff < %d (%.1f%% of those with a peak)\n",
+            format(n_thin, big.mark = ","), PEAK_MIN_N,
+            100 * n_thin / max(1L, n_thin + st[is.finite(peak_mark), .N])))
 
 # Bound the peak by the best mark ever recorded for the event. A "good day"
 # better than anything anyone has ever done is not a good day, it is an error,
@@ -177,7 +198,8 @@ if (!all(res)) stop("a displayed mark is outside its plausible range - check the
 # on 2026, which the quantile was NOT fitted on. A column that says "good day"
 # and is beaten 40% of the time is worse than no column at all.
 val <- h[seen == TRUE & rc == "final" & year(date) == 2026 &
-         is.finite(perf) & is.finite(r_pre) & is.finite(v_pre) & v_pre > 0]
+         is.finite(perf) & is.finite(r_pre) & is.finite(v_pre) & v_pre > 0 &
+         n_eff >= PEAK_MIN_N]   # score only what the page actually displays
 val <- merge(val, off[, .(event_id, offset)], by = "event_id", all.x = TRUE)
 val[is.na(offset), offset := pooled]
 val[, peak_perf := r_pre + offset + ZSPREAD * sqrt(v_pre)]
