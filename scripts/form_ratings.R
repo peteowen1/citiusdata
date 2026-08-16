@@ -288,6 +288,31 @@ Vath <- d$athlete_id; Vperf <- d$perf; Vplace <- d$place; Vrc <- d$rc
 Vage <- d$age; Vwind <- d$wind; Vbeta <- d$beta; Vhl <- d$hl
 Vev <- d$event_id; Vdate <- d$date; Vfam <- d$family
 Vtier <- d$meet_tier; Vcls <- d$class; Vrk <- d$race_key
+
+# --- metric weight per row, enumerated and asserted -------------------------
+# Computed up front rather than inline so that EVERY combination present in the
+# corpus is visible and checked. A fall-through that quietly assigns the T2
+# weight to an uncatalogued major would bias the metric in the exact direction
+# the weighting exists to correct, and nothing downstream would show it.
+d[, w_tier := fifelse(!is.na(class) & class %chin% MAJ, W_MAJ,
+              fifelse(!is.na(meet_tier) & meet_tier == "T1_elite", W_T1, W_T2))]
+d[, w_rnd := fifelse(rc == "final", 1, W_RND)]
+d[, wt := w_tier * w_rnd]
+wtab <- d[, .(races = uniqueN(race_key), rows = .N, weight = wt[1]),
+          by = .(class = fifelse(is.na(class), "(uncatalogued)", class),
+                 meet_tier, rc)][order(-weight, -races)]
+cat(sprintf("[%s] METRIC WEIGHTS -- every race type present, %d combinations:
+", TAG, nrow(wtab)))
+print(wtab)
+# rc is derived by regex and can only be final/semi/heat, but assert it rather
+# than trust it: a new round label would silently become a "heat".
+stopifnot("every row must carry a finite weight" = all(is.finite(d$wt)),
+          "rc must be one of final/semi/heat"    = all(d$rc %chin% c("final","semi","heat")),
+          "no weight may be zero"                = all(d$wt > 0))
+cat(sprintf("[%s] weight check: all %s rows weighted, range %g to %g
+",
+            TAG, format(nrow(d), big.mark=","), min(d$wt), max(d$wt)))
+Vwt <- d$wt
 # conc counts a TIE as 0.5 (standard concordance). Before 2026-08-16 the rule
 # was `(r_pre[i] > r_pre[j]) == (place[i] < place[j])`, which is FALSE on a tie,
 # so a tied pair scored correct only when row i finished BEHIND row j — i.e. it
@@ -301,7 +326,12 @@ Vtier <- d$meet_tier; Vcls <- d$class; Vrk <- d$race_key
 # athletes. The ladder's "cross-event cold start is dead" verdict was measured
 # on the undiluted metric and is not established.
 .a0 <- c(conc=0,pairs=0,fav=0,nr=0,brier=0,brier_base=0,npred=0,
-         conc_bs=0,pairs_bs=0, conc_mx=0,pairs_mx=0, conc_bc=0,pairs_bc=0)
+         conc_bs=0,pairs_bs=0, conc_mx=0,pairs_mx=0, conc_bc=0,pairs_bc=0,
+         # weighted concordance, plus the sums needed for its EFFECTIVE sample
+         # size: ESS = (sum w)^2 / sum(w^2). Heavy upweighting of a small
+         # stratum crushes ESS, so the metric must report how much resolving
+         # power it actually has rather than implying the full pair count.
+         conc_w=0, w_sum=0, w_sq=0)
 acc <- list(y25 = .a0, y26 = .a0)
 # Per-race rating history (SEQ_HIST=1). r_pre is the rating an athlete CARRIED
 # INTO the race — the only version that answers an out-of-sample question. The
@@ -317,6 +347,22 @@ H <- list(race_key = character(NR), date = numeric(NR), event_id = character(NR)
           rc = character(NR), seen = logical(NR))
 hi <- 0L
 MAJ <- c("olympics","world_champs","european_champs","commonwealth")
+# WEIGHTED CONCORDANCE. The unweighted metric is 98% ordinary meets, so it tunes
+# for exactly the races the verse does not exist to predict — and the majors
+# scorecard cannot substitute: 757 finals is 33,240 pairs, a noise floor of
+# ~0.25pp optimistic and ~0.39pp with within-race correlation, against effects
+# of 0.18-0.35pp. It literally cannot choose between arms.
+#
+# Championships are rare by construction (~120 major finals a year), so no
+# harvesting fixes that. The only way to let majors DRIVE a decision while
+# keeping an estimate stable enough to resolve the effect is to weight.
+#
+# These weights are a judgement call and are FIXED HERE, before any arm runs.
+# Tuning them until a favoured arm wins would make the metric a formality.
+W_MAJ <- .env_num("SEQ_W_MAJ", 20)   # olympics / worlds / euros / commonwealth
+W_T1  <- .env_num("SEQ_W_T1",   8)   # other T1_elite: diamond league, world indoor
+W_T2  <- .env_num("SEQ_W_T2",   1)   # T2_strong
+W_RND <- .env_num("SEQ_W_RND", 0.5)  # multiplier for a non-final round
 MAJ_FROM <- as.Date("2021-01-01")   # hoisted: was re-parsed on every race
 maj <- list()
 t0 <- Sys.time()
@@ -333,7 +379,8 @@ for (r_ in seq_along(starts)) {
             rc = Vrc[ii], age = Vage[ii], wind = Vwind[ii], beta = Vbeta[ii],
             hl = Vhl[ii],
             event_id = Vev[i1], date = Vdate[i1], family = Vfam[i1],
-            meet_tier = Vtier[i1], class = Vcls[i1], race_key = Vrk[i1])
+            meet_tier = Vtier[i1], class = Vcls[i1], race_key = Vrk[i1],
+            wt = Vwt[i1])
   a <- z$athlete_id; ev <- z$event_id[1]; kk <- key(a, ev); dt0 <- z$date[1]
   mu <- MUv[[ev]]
   r_pre <- numeric(length(a)); n_eff <- numeric(length(a)); seen <- logical(length(a))
@@ -397,6 +444,10 @@ for (r_ in seq_along(starts)) {
       acc[[slot]]["pairs_mx"] <- acc[[slot]]["pairs_mx"] + sum(mx)
       acc[[slot]]["conc_bc"] <- acc[[slot]]["conc_bc"] + sum(cw[bc])
       acc[[slot]]["pairs_bc"] <- acc[[slot]]["pairs_bc"] + sum(bc)
+      wt <- z$wt
+      acc[[slot]]["conc_w"] <- acc[[slot]]["conc_w"] + wt * sum(cw)
+      acc[[slot]]["w_sum"]  <- acc[[slot]]["w_sum"]  + wt * length(cw)
+      acc[[slot]]["w_sq"]   <- acc[[slot]]["w_sq"]   + wt * wt * length(cw)
       # favourite: ties at the top are broken at random, so credit the expected
       # hit rate rather than whichever athlete which.max happened to return
       rs <- r_use[sel]; ps <- z$place[sel]; tm <- which(rs == max(rs))
@@ -521,6 +572,9 @@ el <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
 res <- data.table(tag = TAG,
   conc25 = 100*acc$y25["conc"]/acc$y25["pairs"], fav25 = 100*acc$y25["fav"]/acc$y25["nr"],
   conc26 = 100*acc$y26["conc"]/acc$y26["pairs"], fav26 = 100*acc$y26["fav"]/acc$y26["nr"],
+  wconc25 = 100*acc$y25["conc_w"]/acc$y25["w_sum"],
+  wconc26 = 100*acc$y26["conc_w"]/acc$y26["w_sum"],
+  ess25 = acc$y25["w_sum"]^2/acc$y25["w_sq"], ess26 = acc$y26["w_sum"]^2/acc$y26["w_sq"],
   conc26_bs = 100*acc$y26["conc_bs"]/acc$y26["pairs_bs"],
   conc26_mx = 100*acc$y26["conc_mx"]/acc$y26["pairs_mx"],
   conc26_bc = 100*acc$y26["conc_bc"]/acc$y26["pairs_bc"],
@@ -537,6 +591,8 @@ res <- data.table(tag = TAG,
   brier25 = if (WINP && acc$y25["npred"] > 0) acc$y25["brier"]/acc$y25["npred"] else NA_real_,
   brier26 = if (WINP && acc$y26["npred"] > 0) acc$y26["brier"]/acc$y26["npred"] else NA_real_,
   maxplace = MAXPLACE, ceil = CEIL, seeded = n_seeded, huber = HUBER,
+  seedhl = SEEDHL, seedne = SEEDNE, k0 = K0, kappa = KAPPA, kfloor = KFLOOR,
+  w_maj = W_MAJ, w_t1 = W_T1, w_t2 = W_T2, w_rnd = W_RND,
   cens=CENS, age=AGEF, stale=STALE, xev=XEV, kt1=KT1, windcs=WINDCS,
   k0=K0, kappa=KAPPA, kfloor=KFLOOR)
 cat(sprintf("[%s] TUNE 2025: conc %.3f%% fav %.1f%% (%d races) | CONFIRM 2026: conc %.3f%% fav %.1f%% (%d races) | %.1f min\n",
@@ -544,6 +600,10 @@ cat(sprintf("[%s] TUNE 2025: conc %.3f%% fav %.1f%% (%d races) | CONFIRM 2026: c
 cat(sprintf("[%s] 2026 by band: both-rated %.3f%% | one-cold %.3f%% | both-cold %.3f%% | cold pairs %.1f%% of metric
 ",
     TAG, res$conc26_bs, res$conc26_mx, res$conc26_bc, res$share26_cold))
+cat(sprintf("[%s] WEIGHTED (maj %g / T1 %g / T2 %g, non-final x%g): tune %.3f%% (ess %s) | sealed %.3f%% (ess %s)
+",
+    TAG, W_MAJ, W_T1, W_T2, W_RND, res$wconc25, format(round(res$ess25), big.mark=","),
+    res$wconc26, format(round(res$ess26), big.mark=",")))
 mj <- rbindlist(maj)
 if (nrow(mj)) {
   write_parquet(mj, file.path(SC, sprintf("seqv3_majors_%s.parquet", TAG)))
