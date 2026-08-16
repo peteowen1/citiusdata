@@ -85,6 +85,24 @@ CEIL <- .env_num("SEQ_CEIL", 0.30)
 SEEDON <- Sys.getenv("SEQ_SEED","1") != "0"
 SEEDHL <- .env_num("SEQ_SEEDHL", 365)   # half-life in days for the weighted mean
 SEEDNE <- .env_num("SEQ_SEEDNE", 5)     # cap on seeded n_eff, so it still learns fast
+# SEQ_HUBER  robust update. 0 = off. Otherwise a surprise larger than
+# HUBER x the athlete's OWN sd has its step capped there, so a catastrophe moves
+# the rating by a bounded amount instead of a proportional one.
+#
+# Motivating case: Werro, European Indoors final 2025-03-09, ran 2:27.37 off a
+# 2:01.39 rating — a 4.9-sigma miss — while the other five finished within 1.3%
+# of theirs. She fell. Her rating went 2:01.4 -> 2:07.6 in one afternoon and took
+# four races to recover. Results >11% off a rating are 0.81% of the corpus and
+# the residual distribution is left-skewed (-0.47): nobody runs 18% FAST.
+#
+# The tension worth remembering before tuning this: a fall and a genuine
+# collapse are IDENTICAL in the data. Clipping the tail also blunts real
+# decline, so a lower HUBER is not automatically better even if it scores
+# better — check what it does to athletes who really did fall off.
+#
+# Heat censoring is a crude special case of this (bad qualifiers only); Huber is
+# the general form and applies in finals too, which is where falls hurt most.
+HUBER <- .env_num("SEQ_HUBER", 0)
 TAG <- Sys.getenv("SEQ_TAG","baseline")
 # SEQ_WINP  1 = compute win probabilities and Brier. Default OFF: the draws cost
 #           ~60s of a ~360s run (measured) and nothing reads the accumulators.
@@ -440,6 +458,11 @@ for (r_ in seq_along(starts)) {
     neg_heat <- z$rc != "final" & surprise < 0
     kv[neg_heat] <- kv[neg_heat] * CENS
   }
+  if (HUBER > 0) {
+    lim <- HUBER * sqrt(v_pre)
+    ex <- is.finite(lim) & lim > 0 & abs(surprise) > lim
+    if (any(ex)) kv[ex] <- kv[ex] * (lim[ex] / abs(surprise[ex]))
+  }
   for (m in seq_along(a)) {
     if (!seen[m]) {
       p0 <- z$perf[m]
@@ -513,7 +536,7 @@ res <- data.table(tag = TAG,
   # race set, which is what it is for.
   brier25 = if (WINP && acc$y25["npred"] > 0) acc$y25["brier"]/acc$y25["npred"] else NA_real_,
   brier26 = if (WINP && acc$y26["npred"] > 0) acc$y26["brier"]/acc$y26["npred"] else NA_real_,
-  maxplace = MAXPLACE, ceil = CEIL, seeded = n_seeded,
+  maxplace = MAXPLACE, ceil = CEIL, seeded = n_seeded, huber = HUBER,
   cens=CENS, age=AGEF, stale=STALE, xev=XEV, kt1=KT1, windcs=WINDCS,
   k0=K0, kappa=KAPPA, kfloor=KFLOOR)
 cat(sprintf("[%s] TUNE 2025: conc %.3f%% fav %.1f%% (%d races) | CONFIRM 2026: conc %.3f%% fav %.1f%% (%d races) | %.1f min\n",
