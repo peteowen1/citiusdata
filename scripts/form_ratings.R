@@ -142,6 +142,20 @@ HUBER <- .env_num("SEQ_HUBER", 3)
 VPRIOR <- Sys.getenv("SEQ_VPRIOR","1") != "0"
 VPADJ  <- .env_num("SEQ_VPADJ", 1.63)
 VPMINA <- .env_num("SEQ_VPMINA", 20)   # min athletes before an event is trusted
+# SEQ_KPOW  scale the initial learning rate by how NOISY the event is:
+#   k0_event = k0 * (median_sd / event_sd) ^ KPOW
+#
+# One knob, not one per family, because the mechanism says what the shape should
+# be rather than leaving it to be fitted. A filter should learn SLOWLY from a
+# noisy measurement and FAST from a precise one, and athletics events differ by
+# 2.7x in exactly that: measured within-athlete sd is 2.44% of a mark in the
+# shot put against 0.90% in the 60m hurdles. One global k0 cannot be right for
+# both, and until now every event has used the same one.
+#
+# KPOW = 0 is the current behaviour exactly (identity check). 1 is full inverse
+# scaling. The per-event sd comes from the same within-athlete estimate the
+# variance prior uses, so this needs SEQ_VPRIOR on - which it is by default.
+KPOW <- .env_num("SEQ_KPOW", 0)
 TAG <- Sys.getenv("SEQ_TAG","baseline")
 # SEQ_WINP  1 = compute win probabilities and Brier. Default OFF: the draws cost
 #           ~60s of a ~360s run (measured) and nothing reads the accumulators.
@@ -238,6 +252,23 @@ if (VPRIOR) {
   VPv <- newv
   rm(dd, dv, est, cmp); invisible(gc())
 }
+# per-event k0, derived from that same variance
+K0v <- setNames(rep(K0, length(VPv)), names(VPv))
+if (KPOW != 0) {
+  sd_ev <- sqrt(as.numeric(VPv)); ref <- stats::median(sd_ev)
+  k0_raw <- K0 * (ref / sd_ev)^KPOW
+  # bounded: k > 1 means the update overshoots PAST the race it just saw, and a
+  # rate near zero freezes an event entirely. Neither is a rate, so clamp.
+  K0v[] <- pmin(pmax(k0_raw, 0.25), 1.30)
+  o <- order(K0v)
+  cat(sprintf("[%s] per-event k0 (KPOW %.2f): range %.3f-%.3f, median %.3f
+",
+      TAG, KPOW, min(K0v), max(K0v), stats::median(K0v)))
+  cat(sprintf("[%s]   slowest: %s | fastest: %s
+", TAG,
+      paste(sprintf("%s %.2f", sub("^AT-","",names(K0v)[utils::head(o,3)]), K0v[utils::head(o,3)]), collapse=", "),
+      paste(sprintf("%s %.2f", sub("^AT-","",names(K0v)[utils::tail(o,3)]), K0v[utils::tail(o,3)]), collapse=", ")))
+}
 R <- new.env(parent=emptyenv()); NE <- new.env(parent=emptyenv())
 V <- new.env(parent=emptyenv())   # EW variance of own surprises; prior = event pop
 LD <- new.env(parent=emptyenv()); LE <- new.env(parent=emptyenv())
@@ -285,7 +316,7 @@ if (SEEDON) {
   for (i in seq_len(nrow(sg))) {
     K <- kz[i]
     R[[K]] <- sg$r0[i]; NE[[K]] <- sg$ne0[i]
-    LD[[K]] <- sg$last0[i]; BC[[K]] <- sg$best0[i]
+    LD[[K]] <- as.numeric(sg$last0[i]); BC[[K]] <- sg$best0[i]
   }
   n_seeded <- nrow(sg)
   rm(ca, sd0, sg); invisible(gc())
@@ -355,6 +386,10 @@ Vath <- d$athlete_id; Vperf <- d$perf; Vplace <- d$place; Vrc <- d$rc
 Vage <- d$age; Vwind <- d$wind; Vbeta <- d$beta; Vhl <- d$hl
 Vev <- d$event_id; Vdate <- d$date; Vfam <- d$family
 Vtier <- d$meet_tier; Vcls <- d$class; Vrk <- d$race_key
+# Dates as plain numbers for the hot loop, and the year precomputed. Both were
+# recomputed per athlete or per race from Date objects; year() in particular
+# goes through an IDate conversion every time it is called.
+Vdaten <- as.numeric(d$date); Vyr <- year(d$date)
 
 # conc counts a TIE as 0.5 (standard concordance). Before 2026-08-16 the rule
 # was `(r_pre[i] > r_pre[j]) == (place[i] < place[j])`, which is FALSE on a tie,
@@ -455,19 +490,21 @@ for (r_ in seq_along(starts)) {
             event_id = Vev[i1], date = Vdate[i1], family = Vfam[i1],
             meet_tier = Vtier[i1], class = Vcls[i1], race_key = Vrk[i1],
             wt = Vwt[i1])
+  dt0n <- Vdaten[i1]; yr <- Vyr[i1]
   a <- z$athlete_id; ev <- z$event_id[1]; kk <- key(a, ev); dt0 <- z$date[1]
   mu <- MUv[[ev]]
   r_pre <- numeric(length(a)); n_eff <- numeric(length(a)); seen <- logical(length(a))
+  fam1 <- z$family[1]
+  agef <- if (AGEF && !is.na(fam1)) agefun[[fam1]] else NULL
   for (m in seq_along(a)) {
     v <- R[[kk[m]]]
     if (is.null(v)) { r_pre[m] <- mu; n_eff[m] <- 0; next }
     seen[m] <- TRUE
-    gap <- as.numeric(dt0 - LD[[kk[m]]])
-    if (AGEF && !is.na(z$age[m]) && !is.na(z$family[1])) {
-      f <- agefun[[z$family[1]]]
-      if (!is.null(f)) {
+    gap <- dt0n - LD[[kk[m]]]
+    if (!is.null(agef) && !is.na(z$age[m])) {
+      {
         le <- LE[[kk[m]]]
-        eff_now <- f(z$age[m])
+        eff_now <- agef(z$age[m])
         if (!is.null(le) && !is.na(le)) v <- v + (eff_now - le)
         LE[[kk[m]]] <- eff_now
       }
@@ -476,16 +513,17 @@ for (r_ in seq_along(starts)) {
     if (STALE) ne <- ne * 2^(-gap / z$hl[m])
     r_pre[m] <- v; n_eff[m] <- ne
   }
-  yr <- year(dt0)
   # r_use is what ORDERS the field; r_pre is what the model learns from.
   r_use <- r_pre
   if (CEIL > 0) for (m in seq_along(a)) {
     if (!seen[m]) next
-    b <- if (identical(BSY[[kk[m]]], yr)) BS[[kk[m]]] else BC[[kk[m]]]
+    bsy <- BSY[[kk[m]]]
+    b <- if (!is.null(bsy) && bsy == yr) BS[[kk[m]]] else BC[[kk[m]]]
     if (!is.null(b)) r_use[m] <- (1 - CEIL) * r_pre[m] + CEIL * b
   }
   vp0 <- VPv[[ev]]; if (is.null(vp0) || !is.finite(vp0)) vp0 <- stats::var(z$perf)
-  v_pre <- vapply(kk, function(K) { vv <- V[[K]]; if (is.null(vv)) vp0 else vv }, numeric(1))
+  v_pre <- numeric(length(a))
+  for (m in seq_along(a)) { vv <- V[[kk[m]]]; v_pre[m] <- if (is.null(vv)) vp0 else vv }
   if (HIST) {
     ix <- hi + seq_along(a); hi <- hi + length(a)
     H$race_key[ix] <- z$race_key[1]; H$date[ix] <- as.numeric(dt0)
@@ -577,7 +615,8 @@ for (r_ in seq_along(starts)) {
   est <- n_eff >= 2
   S <- (if (sum(est) >= 3L) mean(z$perf[est] - r_pre[est]) else 0) * (sum(est)/length(a))
   surprise <- (z$perf - r_pre) - S
-  kv <- pmax(K0 * KAPPA / (n_eff + KAPPA), KFLOOR)
+  k0e <- K0v[[ev]]; if (is.null(k0e) || !is.finite(k0e)) k0e <- K0
+  kv <- pmax(k0e * KAPPA / (n_eff + KAPPA), KFLOOR)
   if (KT1 != 1 && z$meet_tier[1] == "T1_elite") kv <- pmin(kv * KT1, 0.9)
   if (CENS < 1) {
     neg_heat <- z$rc != "final" & surprise < 0
@@ -612,9 +651,7 @@ for (r_ in seq_along(starts)) {
         }
       }
       R[[kk[m]]] <- init
-      if (AGEF && !is.na(z$age[m]) && !is.na(z$family[1])) {
-        f <- agefun[[z$family[1]]]; if (!is.null(f)) LE[[kk[m]]] <- f(z$age[m])
-      }
+      if (!is.null(agef) && !is.na(z$age[m])) LE[[kk[m]]] <- agef(z$age[m])
       BYA[[a[m]]] <- unique(c(BYA[[a[m]]], ev))
     } else {
       R[[kk[m]]] <- r_pre[m] + kv[m] * surprise[m]
@@ -633,11 +670,12 @@ for (r_ in seq_along(starts)) {
     if (seen[m])
       V[[kk[m]]] <- max(v_pre[m] + kv[m] * (surprise[m]^2 - v_pre[m]), 0.04 * vp0)
     NE[[kk[m]]] <- n_eff[m] + 1
-    LD[[kk[m]]] <- dt0
+    LD[[kk[m]]] <- dt0n
     # running bests, updated last so every read above stayed lagged
     bc <- BC[[kk[m]]]
     if (is.null(bc) || z$perf[m] > bc) BC[[kk[m]]] <- z$perf[m]
-    if (identical(BSY[[kk[m]]], yr)) {
+    bsy <- BSY[[kk[m]]]
+    if (!is.null(bsy) && bsy == yr) {
       if (z$perf[m] > BS[[kk[m]]]) BS[[kk[m]]] <- z$perf[m]
     } else { BSY[[kk[m]]] <- yr; BS[[kk[m]]] <- z$perf[m] }
   }
@@ -666,6 +704,7 @@ res <- data.table(tag = TAG,
   brier26 = if (WINP && acc$y26["npred"] > 0) acc$y26["brier"]/acc$y26["npred"] else NA_real_,
   maxplace = MAXPLACE, ceil = CEIL, seeded = n_seeded, huber = HUBER,
   seedhl = SEEDHL, seedne = SEEDNE, k0 = K0, kappa = KAPPA, kfloor = KFLOOR,
+  kpow = KPOW,
   w_maj = W_MAJ, w_t1 = W_T1, w_t2 = W_T2, w_rnd = W_RND,
   cens=CENS, age=AGEF, stale=STALE, xev=XEV, kt1=KT1, windcs=WINDCS,
   k0=K0, kappa=KAPPA, kfloor=KFLOOR)
@@ -706,7 +745,8 @@ st <- data.table(k = ids, R = vapply(ids, function(i) R[[i]], numeric(1)),
                  # Use an EMPIRICAL quantile of that ratio, never a normal one.
                  v = vapply(ids, function(i) { vv <- V[[i]]
                                                if (is.null(vv)) NA_real_ else vv }, numeric(1)),
-                 last = as.Date(vapply(ids, function(i) as.character(LD[[i]]), character(1))),
+                 last = as.Date(vapply(ids, function(i) LD[[i]], numeric(1)),
+                                origin = "1970-01-01"),
                  # the athlete's best mark so far, and the blend that ORDERS a
                  # field. R stays the pure rating so nothing downstream silently
                  # inherits the ceiling without asking for it.
