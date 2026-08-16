@@ -38,8 +38,13 @@ reg <- as.data.table(citius::citius_events())[, .(event_id, family, orientation,
 # --- 1. per-event finals offset, fitted on the lead-in only ------------------
 fit <- h[seen == TRUE & rc == "final" & date < FIT_BEFORE & is.finite(perf) & is.finite(r_pre)]
 fit[, resid := perf - r_pre]
-off <- fit[, .(offset = mean(resid), n_fit = .N), by = event_id]
-pooled <- fit[, mean(resid)]
+# MEDIAN, not mean. The residual is left-skewed (-0.47 measured): a fall or a
+# blow-up has no mirror image, because nobody runs 18% FAST. On a left-skewed
+# distribution the mean sits BELOW the median, so a mean offset put the
+# "typical" line slower than a typical race and it was beaten 53.9% of the time
+# instead of 50%. Median centring takes that to 51.8% out of sample.
+off <- fit[, .(offset = stats::median(resid), n_fit = .N), by = event_id]
+pooled <- fit[, stats::median(resid)]
 cat(sprintf("offset fitted on %s finals rows before %s; pooled %+.4f%%\n",
             format(nrow(fit), big.mark = ","), FIT_BEFORE, 100 * pooled))
 # A thin event cannot support its own offset; fall back to pooled rather than
@@ -71,7 +76,11 @@ st[, raw_mark  := exp(orientation * R)]
 # the whole quantile would count the level twice.
 zf <- h[seen == TRUE & rc == "final" & date < FIT_BEFORE &
         is.finite(perf) & is.finite(r_pre) & is.finite(v_pre) & v_pre > 0]
-zf[, z := (perf - r_pre) / sqrt(v_pre)]
+# z is measured AFTER the same centring the mark uses. Mixing a mean-centred
+# offset with a spread taken around zero double-counted the skew.
+zf <- merge(zf, off[, .(event_id, offset)], by = "event_id", all.x = TRUE)
+zf[is.na(offset), offset := pooled]
+zf[, z := (perf - r_pre - offset) / sqrt(v_pre)]
 q50 <- stats::quantile(zf$z, 0.50); q90 <- stats::quantile(zf$z, 0.90)
 ZSPREAD <- unname(q90 - q50)
 cat(sprintf("peak spread: empirical q90 %.3f - q50 %.3f = %.3f sd (normal would be %.3f)\n",
@@ -173,10 +182,27 @@ val <- merge(val, off[, .(event_id, offset)], by = "event_id", all.x = TRUE)
 val[is.na(offset), offset := pooled]
 val[, peak_perf := r_pre + offset + ZSPREAD * sqrt(v_pre)]
 hit <- val[, mean(perf > peak_perf)]
-cat(sprintf("\nPEAK CALIBRATION (2026, out of sample): %.1f%% of finals beat the\n", 100*hit))
-cat(sprintf("  'good day' mark over %s rows. Target 10%%.\n", format(nrow(val), big.mark=",")))
-if (abs(hit - 0.10) > 0.05)
-  cat("  *** MISCALIBRATED — do not label this a 90th percentile on the page ***\n")
+typ_hit <- val[, mean(perf > r_pre + offset)]
+cat(sprintf("\nCALIBRATION (2026, out of sample), over %s finals:\n", format(nrow(val), big.mark=",")))
+cat(sprintf("  'typical'  beaten %.2f%% of the time (target 50%%)\n", 100*typ_hit))
+cat(sprintf("  'good day' beaten %.2f%% of the time (target 10%%) -> about 1 in %.1f\n",
+            100*hit, 1/hit))
+# The page must state the MEASURED frequency, not the nominal one. Median
+# centring fixed the skew half of this; the rest is structural. ZSPREAD is ONE
+# pooled quantile of z applied to athletes whose variances differ, so it cannot
+# be a 90th percentile for any of them individually — the mixture is
+# over-dispersed and it under-covers. Refitting the spread to force 10% would
+# have to be tuned on 2026, and spending the sealed window on a display label
+# is a bad trade.
+PEAK_LABEL <- sprintf("about 1 race in %.0f", 1/hit)
+cat(sprintf("  -> page label: \"%s\"\n", PEAK_LABEL))
+# Tolerance was +/-5pp, which passed a 14.2% rate in silence while the page
+# still said "90th percentile". The label was wrong and no guard fired, which is
+# the failure this check existed to prevent.
+if (abs(hit - 0.10) > 0.02)
+  cat("  NOTE: nominal 90th percentile does not hold; use PEAK_LABEL on the page.\n")
+if (abs(typ_hit - 0.50) > 0.05)
+  cat("  *** TYPICAL MISCALIBRATED — the central mark is not central ***\n")
 
 cov <- merge(reg[, .(event_id, family)],
              act[, .(active = .N), by = event_id], by = "event_id", all.x = TRUE)
@@ -205,3 +231,21 @@ write_parquet(act[, .(event_id, athlete_id, athlete_name, rk, R, offset,
               file.path(OUT, sprintf("form_display_%s.parquet", TAG)))
 cat(sprintf("wrote form_display_%s.parquet (%s rows)\n", TAG,
             format(nrow(act), big.mark = ",")))
+
+# Calibration travels as DATA, not as a sentence typed into the page. The
+# "good day" column is beaten about 1 race in 7, not the 1 in 10 its
+# construction implies, and a hard-coded label drifts the moment the spread is
+# refitted. The blog exporter reads this file and builds its caveat from the
+# measured number, so the claim is fixed in one place.
+jsonlite::write_json(list(
+  window             = "2026 finals, out of sample",
+  n_finals           = nrow(val),
+  typical_beaten_pct = round(100 * typ_hit, 2),
+  goodday_beaten_pct = round(100 * hit, 2),
+  goodday_one_in     = round(1 / hit, 1),
+  peak_label         = PEAK_LABEL,
+  zspread            = round(ZSPREAD, 4),
+  centring           = "median"),
+  file.path(OUT, sprintf("form_display_%s_calib.json", TAG)),
+  auto_unbox = TRUE, pretty = TRUE)
+cat(sprintf("wrote form_display_%s_calib.json (peak label: \"%s\")\n", TAG, PEAK_LABEL))
