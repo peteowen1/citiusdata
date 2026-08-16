@@ -30,6 +30,10 @@ FIT_BEFORE <- as.Date("2025-01-01")
   if (is.na(x)) stop(sprintf("%s='%s' is not an integer", name, v)); x
 }
 MIN_N <- .env_int("FORM_OFFSET_MIN_N", 200L)
+# Minimum evidence before a "good day" mark is shown at all. Also the population
+# the spread is FITTED on, so the column is calibrated for the readers who see
+# it rather than for an average over athletes it is hidden from.
+PEAK_MIN_N <- .env_int("FORM_PEAK_MIN_N", 8L)
 
 h <- setDT(read_parquet(file.path(OUT, sprintf("seqv3_history_%s.parquet", TAG))))
 st <- setDT(read_parquet(file.path(OUT, sprintf("seqv2_state_%s.parquet", TAG))))
@@ -50,6 +54,12 @@ cat(sprintf("offset fitted on %s finals rows before %s; pooled %+.4f%%\n",
 # A thin event cannot support its own offset; fall back to pooled rather than
 # to a number estimated from a handful of races.
 off[n_fit < MIN_N, offset := pooled]
+# NOTE the offset is deliberately NOT refitted per evidence depth, even though
+# deep records beat 'typical' only ~44.5% of the time against 50.26% overall.
+# A depth-dependent offset would give two athletes in the same event different
+# shifts and could therefore REORDER them, which this file guarantees it never
+# does (see the header). That is the known evidence-depth bias; it is reported
+# by the calibration block below and belongs upstream, not here.
 cat(sprintf("%d of %d events use their own offset; %d fall back to pooled (n < %d)\n",
             off[n_fit >= MIN_N, .N], nrow(off), off[n_fit < MIN_N, .N], MIN_N))
 
@@ -74,7 +84,12 @@ st[, raw_mark  := exp(orientation * R)]
 # Only the SPREAD above typical is taken from the quantile -- (q90 - q50) --
 # because the level is already handled by the per-event offset above. Taking
 # the whole quantile would count the level twice.
-zf <- h[seen == TRUE & rc == "final" & date < FIT_BEFORE &
+# FITTED ON THE DISPLAY POPULATION. The column is only shown at n_eff >=
+# PEAK_MIN_N, and deep records vary less and beat their typical mark less often
+# than thin ones do. A spread fitted across all depths and applied to deep
+# records alone made the column a 1-in-17 event when it claims 1-in-10 - fitting
+# one population and displaying to another.
+zf <- h[seen == TRUE & rc == "final" & date < FIT_BEFORE & n_eff >= PEAK_MIN_N &
         is.finite(perf) & is.finite(r_pre) & is.finite(v_pre) & v_pre > 0]
 # z is measured AFTER the same centring the mark uses. Mixing a mean-centred
 # offset with a spread taken around zero double-counted the skew.
@@ -102,7 +117,6 @@ st[!is.finite(v) | v <= 0, peak_mark := NA_real_]
 # upside". Until those are separated (see the over-confident-sigma item in
 # NEXT-STEPS), declining to make the claim is the honest option; a capped number
 # would still be a claim, just a quieter wrong one.
-PEAK_MIN_N <- .env_int("FORM_PEAK_MIN_N", 8L)
 n_thin <- st[is.finite(peak_mark) & n_eff < PEAK_MIN_N, .N]
 st[n_eff < PEAK_MIN_N, peak_mark := NA_real_]
 cat(sprintf("good day suppressed on %s rows with n_eff < %d (%.1f%% of those with a peak)\n",
@@ -197,18 +211,29 @@ if (!all(res)) stop("a displayed mark is outside its plausible range - check the
 # It claims a 90th percentile, so ~10% of actual finals should beat it. Measured
 # on 2026, which the quantile was NOT fitted on. A column that says "good day"
 # and is beaten 40% of the time is worse than no column at all.
+# EACH COLUMN IS SCORED ON THE POPULATION IT IS SHOWN TO. 'typical' is displayed
+# for every athlete; only 'good day' is suppressed below PEAK_MIN_N. An earlier
+# version filtered BOTH to deep records, which measured 'typical' on a
+# population the page does not restrict, and duly reported it as broken (44.54%)
+# when the column readers actually see is fine.
 val <- h[seen == TRUE & rc == "final" & year(date) == 2026 &
-         is.finite(perf) & is.finite(r_pre) & is.finite(v_pre) & v_pre > 0 &
-         n_eff >= PEAK_MIN_N]   # score only what the page actually displays
+         is.finite(perf) & is.finite(r_pre) & is.finite(v_pre) & v_pre > 0]
 val <- merge(val, off[, .(event_id, offset)], by = "event_id", all.x = TRUE)
 val[is.na(offset), offset := pooled]
 val[, peak_perf := r_pre + offset + ZSPREAD * sqrt(v_pre)]
-hit <- val[, mean(perf > peak_perf)]
+val_pk <- val[n_eff >= PEAK_MIN_N]        # the good-day column's own population
+hit <- val_pk[, mean(perf > peak_perf)]
 typ_hit <- val[, mean(perf > r_pre + offset)]
-cat(sprintf("\nCALIBRATION (2026, out of sample), over %s finals:\n", format(nrow(val), big.mark=",")))
-cat(sprintf("  'typical'  beaten %.2f%% of the time (target 50%%)\n", 100*typ_hit))
-cat(sprintf("  'good day' beaten %.2f%% of the time (target 10%%) -> about 1 in %.1f\n",
-            100*hit, 1/hit))
+cat(sprintf("\nCALIBRATION (2026, out of sample):\n"))
+cat(sprintf("  'typical'  beaten %.2f%% over %s finals (target 50%%)\n",
+            100*typ_hit, format(nrow(val), big.mark=",")))
+cat(sprintf("  'good day' beaten %.2f%% over %s finals with n_eff >= %d (target 10%%) -> about 1 in %.1f\n",
+            100*hit, format(nrow(val_pk), big.mark=","), PEAK_MIN_N, 1/hit))
+# Depth-dependent, and worth watching: the offset is fitted pooled, but deep
+# records beat 'typical' LESS often than thin ones do. Reported rather than
+# corrected - it is the known evidence-depth bias, not a fault in this file.
+cat(sprintf("  ...'typical' among those same deep records: %.2f%%\n",
+            100*val_pk[, mean(perf > r_pre + offset)]))
 # The page must state the MEASURED frequency, not the nominal one. Median
 # centring fixed the skew half of this; the rest is structural. ZSPREAD is ONE
 # pooled quantile of z applied to athletes whose variances differ, so it cannot
@@ -264,6 +289,7 @@ jsonlite::write_json(list(
   n_finals           = nrow(val),
   typical_beaten_pct = round(100 * typ_hit, 2),
   goodday_beaten_pct = round(100 * hit, 2),
+  goodday_min_n_eff  = PEAK_MIN_N,
   goodday_one_in     = round(1 / hit, 1),
   peak_label         = PEAK_LABEL,
   zspread            = round(ZSPREAD, 4),
