@@ -63,7 +63,17 @@ sc[, noise := 100 * sqrt(0.75 * 0.25 / pairs)]
 # the default is the FIRST arm listed - the value the engine uses today
 base_tag <- arms$tag[1]; base_val <- arms$value[1]
 b <- sc[tag == base_tag, .(event_id, yr, base = conc, pairs, noise)]
-x <- merge(sc[tag != base_tag], b, by = c("event_id", "yr"))
+# take only tag/value/conc from the candidate arms: `pairs` and `noise` must come
+# from ONE side, or the merge yields pairs.x/pairs.y and a bare `pairs` silently
+# resolves to base R's pairs() FUNCTION instead of erroring on a missing column.
+# The pair count is a property of the races, not of the parameter, so the base
+# arm's count is the right one for every arm.
+x <- merge(sc[tag != base_tag, .(tag, event_id, yr, conc, value)], b,
+           by = c("event_id", "yr"))
+stopifnot("merge produced no rows - do the arms share events?" = nrow(x) > 0,
+          "pairs/noise collided in the merge" =
+            all(c("pairs", "noise") %in% names(x)) &&
+            !any(grepl("\\.(x|y)$", names(x))))
 x[, delta := conc - base]
 
 w25 <- x[yr == 2025 & pairs >= MINP]

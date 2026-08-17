@@ -214,7 +214,15 @@ SEEDHLPOW <- .env_num("SEQ_SEEDHLPOW", 0)
 # ORDERING ONLY. Like the ceiling blend, this changes what `r_use` compares and
 # never what `R` learns - a rating that trained on its own sibling would drift
 # toward the family mean and stop being about the event.
-XBLEND  <- .env_num("SEQ_XBLEND", 0)
+# ADOPTED 2026-08-17 at 1. End-to-end arms, all on the same corpus:
+#   off                                  71.994 tune / 71.711 sealed
+#   on, every family                     72.023 / 71.718
+#   on, distance+middle+road+walk        72.013 / 71.746
+#   on, distance+middle+sprint+hurdles   72.053 / 71.755   <- adopted
+#   same set at strength 2               72.052 / 71.739
+# Strength 1 beats 0 below it and 2 above it, so this is an interior optimum
+# rather than the highest value that happened to be tried.
+XBLEND  <- .env_num("SEQ_XBLEND", 1)
 XB_MAXN <- .env_num("SEQ_XB_MAXN", 8)    # skip the lookup once evidence is real
 XB_MINS <- .env_num("SEQ_XB_MINS", 2)    # a sibling needs some evidence itself
 # SEQ_XB_FAM  which families may borrow from a sibling event.
@@ -232,8 +240,128 @@ XB_MINS <- .env_num("SEQ_XB_MINS", 2)    # a sibling needs some evidence itself
 # nothing about their hammer, and forcing the borrow makes the throw ratings
 # worse. Applied globally the two cancelled to +0.029 pp - which is how a real
 # effect hides inside an aggregate.
-XB_FAM <- strsplit(Sys.getenv("SEQ_XB_FAM", "distance,middle,road,walk"), ",")[[1]]
+#
+# THE SET BELOW WAS CHOSEN ON THREE WINDOWS, NOT TWO. Pooled delta by family
+# (score_by_event.R), blend on vs off:
+#
+#   family     2022-24    2025     2026        family     2022-24   2025     2026
+#   sprint      +0.093   +0.151   +0.065       walk        +0.012  -0.051   -0.247
+#   hurdles     +0.076   +0.113   +0.036       road        -0.019  +0.199    0.000
+#   distance    +0.069   +0.250   +0.296       jump        -0.023  +0.022   -0.063
+#   middle      +0.066   +0.139   +0.044       combined    -0.077  +0.316   +0.272
+#                                              throw       -0.091  -0.177   -0.265
+#
+# Four families are positive on all three; throw is negative on all three. The
+# previous default carried walk and road - walk is the largest family in the
+# sport by event count and the blend actively damages it - and omitted sprint
+# and hurdles, which help everywhere. Combined looks strong on the two recent
+# windows and goes negative on the earlier one; on four events that is noise, so
+# it stays out.
+#
+# WHY FAMILY AND NOT PER EVENT. pool_event_params.R fits a hierarchical model
+# over per-event estimates, shrinking each toward its neighbours by
+# w = n/(n + kappa) with kappa estimated by empirical Bayes (measured: tau^2
+# 0.0243, kappa 5,935 pairs, weights 0.04-0.87). Its assembled per-event config
+# scored 72.061 / 71.753 - a tie with this family gate at 72.053 / 71.755. The
+# family is the resolution the data supports; per-event freedom buys nothing.
+# Independent per-event fitting would have taken +1.619 on the women's 600m and
+# -0.543 on the men's, on ~250 pairs each, as findings.
+XB_FAM <- strsplit(Sys.getenv("SEQ_XB_FAM", "distance,middle,sprint,hurdles"), ",")[[1]]
+
+# SEQ_XB_MINCOR  above 0, replace the family gate entirely with MEASURED event
+# similarity: borrow from a sibling only where the two events correlate at least
+# this much. 0 keeps the family gate.
+#
+# WHY. Family is a hand-drawn stand-in for similarity, and build_event_similarity.R
+# shows it is wrong in both directions. It BLOCKS the 1500m from the 3000m
+# (r = 0.91), the 400m from the 400mH (0.82) and the heptathlon from the long
+# jump (0.83) because a taxonomy separates them; it PERMITS the hammer to borrow
+# from the shot (r = 0.24) and the high jump from the pole vault (0.36) because
+# a taxonomy joins them. The rank correlation between a family's internal
+# similarity and how much blending helps it is 0.886 - so similarity, not
+# family, is what the blend is really keyed on, and the throws were damaged
+# because the engine borrowed from siblings that say nothing about the event.
+TAG <- Sys.getenv("SEQ_TAG","baseline")   # needed by the log line below
+XB_MINCOR <- .env_num("SEQ_XB_MINCOR", 0)
+SIM <- new.env(hash = TRUE, parent = emptyenv())
+if (XB_MINCOR > 0) {
+  sf <- file.path(SC, "event_similarity.parquet")
+  if (!file.exists(sf))
+    stop("SEQ_XB_MINCOR is set but event_similarity.parquet is missing - run build_event_similarity.R")
+  sm <- setDT(read_parquet(sf))
+  sm <- sm[is.finite(cor)]
+  stopifnot("the similarity matrix is empty" = nrow(sm) > 0)
+  for (i in seq_len(nrow(sm))) {
+    e1 <- as.character(sm$e1[i]); e2 <- as.character(sm$e2[i])
+    assign(if (e1 < e2) paste0(e1, "|", e2) else paste0(e2, "|", e1), sm$cor[i], envir = SIM)
+  }
+  cat(sprintf("[%s] similarity gate: %d event pairs, %d at or above %.2f\n",
+              TAG, nrow(sm), sum(sm$cor >= XB_MINCOR), XB_MINCOR))
+  rm(sm)
+}
+
+# --- PER-EVENT PARAMETER OVERRIDES -------------------------------------------
+# SEQ_EVPARAM  path to a parquet with an `event_id` column and one column per
+# parameter to override (k0, kfloor, ceil, huber, xblend). NA means "use the
+# global value", so a file may cover one event or all of them.
+#
+# Why this is safe to have, having refused it four times: the DANGER was never
+# per-event values, it was per-event FITTING. Eighty-five events, several
+# parameters, and events holding a few thousand pairs will produce a "winner"
+# for every cell whether or not one exists. optimise_event_params.R is the
+# guard - it takes winners only where the same value also wins the SEALED
+# window, and reports how many failed that test.
+#
+# The measurement that changed my mind is cross-event blending: +1.349 on the
+# women's 10,000m, -1.079 on the men's weight throw, both replicating, summing
+# to +0.029 globally. A single global value there is not a compromise, it is an
+# average of two opposite truths.
 TAG <- Sys.getenv("SEQ_TAG","baseline")
+EVPARAM <- Sys.getenv("SEQ_EVPARAM", "")
+EVP <- NULL
+# A path that is set but unreadable must be an ERROR, not a shrug. Falling back
+# to the global config would produce a run that looks like "the per-event gain
+# did not reproduce" when the real answer is "the file was never loaded".
+if (nzchar(EVPARAM) && !file.exists(EVPARAM))
+  stop(sprintf("SEQ_EVPARAM is set to '%s' but that file does not exist", EVPARAM))
+if (nzchar(EVPARAM)) {
+  EVP <- setDT(read_parquet(EVPARAM))
+  stopifnot("SEQ_EVPARAM file has no event_id column" = "event_id" %in% names(EVP))
+  EVP[, event_id := as.character(event_id)]
+  ovr <- setdiff(names(EVP), "event_id")
+  # a mistyped column would otherwise be silently ignored by .ev_vec()
+  known <- c("k0", "kfloor", "ceil", "huber", "xblend")
+  if (length(setdiff(ovr, known)))
+    stop(sprintf("SEQ_EVPARAM has unknown column(s): %s (known: %s)",
+                 paste(setdiff(ovr, known), collapse = ", "),
+                 paste(known, collapse = ", ")))
+  stopifnot("SEQ_EVPARAM has no parameter columns" = length(ovr) > 0)
+  cat(sprintf("[%s] per-event overrides from %s: %d events, columns %s\n",
+      TAG, basename(EVPARAM), nrow(EVP), paste(ovr, collapse = ", ")))
+  for (cn in ovr) cat(sprintf("[%s]   %-8s set on %d events, range %.3f-%.3f\n",
+      TAG, cn, sum(!is.na(EVP[[cn]])),
+      suppressWarnings(min(EVP[[cn]], na.rm = TRUE)),
+      suppressWarnings(max(EVP[[cn]], na.rm = TRUE))))
+}
+# Resolve a per-event vector for one parameter: the global value everywhere,
+# overridden where the file says so.
+.ev_vec <- function(nm, global, events) {
+  v <- setNames(rep(global, length(events)), events)
+  if (!is.null(EVP) && nm %in% names(EVP)) {
+    want <- EVP[!is.na(get(nm))]
+    e <- want[event_id %chin% events]
+    # an event_id that matches nothing applies nothing, silently - say so
+    if (nrow(e) < nrow(want))
+      cat(sprintf("[%s]   WARNING %s: %d of %d override event_ids match no event: %s\n",
+          TAG, nm, nrow(want) - nrow(e), nrow(want),
+          paste(head(setdiff(want$event_id, e$event_id), 5), collapse = ", ")))
+    if (nrow(e)) {
+      v[e$event_id] <- e[[nm]]
+      cat(sprintf("[%s]   %s applied to %d event(s)\n", TAG, nm, nrow(e)))
+    }
+  }
+  v
+}
 # SEQ_WINP  1 = compute win probabilities and Brier. Default OFF: the draws cost
 #           ~60s of a ~360s run (measured) and nothing reads the accumulators.
 # SEQ_HIST  1 = write the per-race r_pre history (see below).
@@ -329,8 +457,12 @@ if (VPRIOR) {
   VPv <- newv
   rm(dd, dv, est, cmp); invisible(gc())
 }
+KFLOORv <- .ev_vec("kfloor", KFLOOR, names(MUv))
+HUBERv  <- .ev_vec("huber",  HUBER,  names(MUv))
+XBLENDv <- .ev_vec("xblend", XBLEND, names(MUv))
+
 # per-event ceiling weight: baseline plus an adjustment by event character
-CEILv <- setNames(rep(CEIL, length(MUv)), names(MUv))
+CEILv <- .ev_vec("ceil", CEIL, names(MUv))
 if (CEILADJ != 0) {
   rg <- as.data.table(citius::citius_events())[, .(event_id, tactical, technical)]
   tech <- rg[technical == TRUE, event_id]; tact <- rg[tactical == TRUE, event_id]
@@ -345,7 +477,7 @@ if (CEILADJ != 0) {
 }
 
 # per-event k0, derived from that same variance
-K0v <- setNames(rep(K0, length(VPv)), names(VPv))
+K0v <- .ev_vec("k0", K0, names(VPv))
 if (KPOW != 0) {
   sd_ev <- sqrt(as.numeric(VPv)); ref <- stats::median(sd_ev)
   k0_raw <- K0 * (ref / sd_ev)^KPOW
@@ -630,23 +762,38 @@ for (r_ in seq_along(starts)) {
   # r_use is what ORDERS the field; r_pre is what the model learns from.
   r_use <- r_pre
   # cross-event: only for thin records, and only worth the lookup there
-  if (XBLEND > 0) for (m in seq_along(a)) {
+  xb_e <- XBLENDv[[ev]]; if (is.null(xb_e) || !is.finite(xb_e)) xb_e <- XBLEND
+  if (xb_e > 0) for (m in seq_along(a)) {
     if (!seen[m] || n_eff[m] >= XB_MAXN) next
     sib <- BYA[[a[m]]]
     if (is.null(sib)) next
     sib <- sib[sib != ev]
     if (!length(sib)) next
-    if (!(z$family[1] %chin% XB_FAM)) next
-    fam <- reg$family[match(sib, reg$event_id)]
-    sib <- sib[!is.na(fam) & fam == z$family[1]]
-    if (!length(sib)) next
+    if (XB_MINCOR > 0) {
+      # MEASURED similarity instead of the taxonomy. See the SEQ_XB_MINCOR note
+      # above: family both blocks 1500m<->3000m at r=0.91 and permits
+      # Hammer<->Shot at r=0.24.
+      cs <- vapply(sib, function(sv) {
+        q <- SIM[[if (ev < sv) paste0(ev, "|", sv) else paste0(sv, "|", ev)]]
+        if (is.null(q)) NA_real_ else q
+      }, numeric(1))
+      keep <- is.finite(cs) & cs >= XB_MINCOR
+      sib <- sib[keep]; cs <- cs[keep]
+      if (!length(sib)) next
+    } else {
+      if (!(z$family[1] %chin% XB_FAM)) next
+      fam <- reg$family[match(sib, reg$event_id)]
+      sib <- sib[!is.na(fam) & fam == z$family[1]]
+      if (!length(sib)) next
+      cs <- rep(NA_real_, length(sib))
+    }
     ne_s <- vapply(sib, function(sv) { q <- NE[[key(a[m], sv)]]
                                        if (is.null(q)) 0 else q }, numeric(1))
     b <- which.max(ne_s)
     if (ne_s[b] < XB_MINS) next
     rs <- R[[key(a[m], sib[b])]]; ms <- MUv[[sib[b]]]
     if (is.null(rs) || is.null(ms) || !is.finite(rs) || !is.finite(ms)) next
-    w <- XBLEND / (n_eff[m] + XBLEND)
+    w <- xb_e / (n_eff[m] + xb_e)
     r_use[m] <- (1 - w) * r_use[m] + w * (rs - ms + mu)
   }
   ceil_e <- CEILv[[ev]]; if (is.null(ceil_e) || !is.finite(ceil_e)) ceil_e <- CEIL
@@ -756,14 +903,16 @@ for (r_ in seq_along(starts)) {
   S <- (if (sum(est) >= 3L) mean(z$perf[est] - r_pre[est]) else 0) * (sum(est)/length(a))
   surprise <- (z$perf - r_pre) - S
   k0e <- K0v[[ev]]; if (is.null(k0e) || !is.finite(k0e)) k0e <- K0
-  kv <- pmax(k0e * KAPPA / (n_eff + KAPPA), KFLOOR)
+  kfl_e <- KFLOORv[[ev]]; if (is.null(kfl_e) || !is.finite(kfl_e)) kfl_e <- KFLOOR
+  kv <- pmax(k0e * KAPPA / (n_eff + KAPPA), kfl_e)
   if (KT1 != 1 && z$meet_tier[1] == "T1_elite") kv <- pmin(kv * KT1, 0.9)
   if (CENS < 1) {
     neg_heat <- z$rc != "final" & surprise < 0
     kv[neg_heat] <- kv[neg_heat] * CENS
   }
-  if (HUBER > 0) {
-    lim <- HUBER * sqrt(v_pre)
+  hub_e <- HUBERv[[ev]]; if (is.null(hub_e) || !is.finite(hub_e)) hub_e <- HUBER
+  if (hub_e > 0) {
+    lim <- hub_e * sqrt(v_pre)
     ex <- is.finite(lim) & lim > 0 & abs(surprise) > lim
     if (any(ex)) kv[ex] <- kv[ex] * (lim[ex] / abs(surprise[ex]))
   }
@@ -846,6 +995,7 @@ res <- data.table(tag = TAG,
   seedhl = SEEDHL, seedhlpow = SEEDHLPOW, seedne = SEEDNE, k0 = K0, kappa = KAPPA, kfloor = KFLOOR,
   kpow = KPOW, ceiladj = CEILADJ, xblend = XBLEND,
   xb_fam = paste(XB_FAM, collapse = "+"),
+  evparam = if (is.null(EVP)) "" else basename(EVPARAM),
   w_maj = W_MAJ, w_t1 = W_T1, w_t2 = W_T2, w_rnd = W_RND,
   cens=CENS, age=AGEF, stale=STALE, xev=XEV, kt1=KT1, windcs=WINDCS,
   k0=K0, kappa=KAPPA, kfloor=KFLOOR)

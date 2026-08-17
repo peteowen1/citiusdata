@@ -1,0 +1,94 @@
+# Score any set of engine arms PER EVENT, not in aggregate.
+#
+# WHY THIS EXISTS. The engine's headline number is a single weighted concordance
+# over the whole corpus, and that corpus is ~98% T2 track. An effect concentrated
+# in one family is invisible in it: cross-event blending measured +0.029 pp
+# globally while being +1.35 pp on the women's 10,000m and -0.27 pp across the
+# throws. A global metric reported those two opposite truths as "nothing".
+#
+# So: run the arms, then run this. The global number says whether a change is
+# safe overall; this says where it actually acts, and whether the sign holds on
+# a window that took no part in choosing it.
+#
+# NOTE ON COMPARABILITY. This is NOT the engine's headline metric computed per
+# event. It is unweighted pairwise concordance within an event (finishers in the
+# top 12 of a race, both with a rating), which is what makes arms comparable to
+# each other inside one event. Do not compare its level to the engine's 71.x -
+# compare DELTAS between arms.
+#
+# Usage:
+#   ARMS="xbh_0,xbh_1,f_core" Rscript score_by_event.R
+#   ARMS="..." YEARS="2022,2023,2024" Rscript score_by_event.R   # untouched window
+# The FIRST arm listed is the base every other arm is differenced against.
+# Each tag needs seqv3_history_<tag>.parquet, i.e. that arm ran with SEQ_HIST=1.
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
+suppressMessages(library(arrow)); suppressMessages(library(data.table))
+D     <- here::here("citiusdata", "data")
+tags  <- trimws(strsplit(Sys.getenv("ARMS", ""), ",")[[1]])
+YEARS <- as.integer(trimws(strsplit(Sys.getenv("YEARS", "2025,2026"), ",")[[1]]))
+MINP  <- as.integer(Sys.getenv("MIN_PAIRS", "300"))
+stopifnot("ARMS needs at least two tags" = length(tags) >= 2,
+          "YEARS parsed to nothing" = length(YEARS) > 0 && all(is.finite(YEARS)))
+base <- tags[1]
+cat(sprintf("base arm: %s | comparing: %s | years: %s\n",
+            base, paste(tags[-1], collapse = ", "), paste(YEARS, collapse = ", ")))
+
+score_arm <- function(tag) {
+  f <- file.path(D, sprintf("seqv3_history_%s.parquet", tag))
+  if (!file.exists(f))
+    stop(sprintf("no history for arm '%s' - was it run with SEQ_HIST=1?", tag))
+  h <- setDT(read_parquet(f))
+  if (!"r_use" %in% names(h)) h[, r_use := r_pre]
+  h <- h[seen == TRUE & is.finite(r_use) & is.finite(place) & place <= 12 &
+         year(date) %in% YEARS]
+  stopifnot("no rows survived the year filter" = nrow(h) > 0)
+  h[, rid := .GRP, by = race_key]
+  a <- h[, .(rid, event_id, yr = year(date), i = seq_len(.N), place, r = r_use)]
+  m <- merge(a, a, by = c("rid", "event_id", "yr"), allow.cartesian = TRUE,
+             suffixes = c(".x", ".y"))
+  m <- m[i.x < i.y & place.x != place.y]
+  d <- m$r.x - m$r.y
+  m[, cw := as.numeric((d > 0) == (place.x < place.y))]
+  m[d == 0, cw := 0.5]
+  m[, .(tag = tag, pairs = .N, conc = 100 * mean(cw)), by = .(event_id, yr)]
+}
+
+sc <- rbindlist(lapply(tags, score_arm))
+# collapse the requested years into one figure per event per arm
+ev <- sc[, .(pairs = sum(pairs), conc = weighted.mean(conc, pairs)),
+         by = .(tag, event_id)]
+b  <- ev[tag == base, .(event_id, base_conc = conc, pairs)]
+x  <- merge(ev[tag != base, .(tag, event_id, conc)], b, by = "event_id")
+stopifnot("no shared events between arms" = nrow(x) > 0)
+x[, delta := conc - base_conc]
+# a per-event noise floor, reported but NOT used as a gate: it answers "could
+# this event alone show this?", which is the wrong question when the effect is
+# predicted by mechanism and checkable on another window. Judge on sign
+# agreement across windows and on the family pattern instead.
+x[, noise := 100 * sqrt(0.75 * 0.25 / pairs)]
+
+reg <- as.data.table(citius::citius_events())[, .(event_id, discipline, sex, family)]
+x <- merge(x, reg, by = "event_id", all.x = TRUE)
+
+for (t in tags[-1]) {
+  a <- x[tag == t & pairs >= MINP]
+  setorder(a, -delta)
+  cat(sprintf("\n================ %s vs %s ================\n", t, base))
+  cat(sprintf("events scored (>= %d pairs): %d | up %d, down %d\n",
+              MINP, nrow(a), sum(a$delta > 0), sum(a$delta < 0)))
+  cat(sprintf("pair-weighted mean delta: %+.3f pp\n",
+              weighted.mean(a$delta, a$pairs)))
+
+  cat("\n-- by family (where the effect actually lives) --\n")
+  fam <- a[, .(events = .N, up = sum(delta > 0), down = sum(delta < 0),
+               pooled = round(weighted.mean(delta, pairs), 3)), by = family]
+  setorder(fam, -pooled)
+  print(fam)
+
+  cat("\n-- 10 biggest gains --\n")
+  print(head(a[, .(discipline, sex, family, pairs,
+                   delta = round(delta, 3), noise = round(noise, 3))], 10))
+  cat("\n-- 10 biggest losses --\n")
+  print(head(a[order(delta), .(discipline, sex, family, pairs,
+                               delta = round(delta, 3), noise = round(noise, 3))], 10))
+}
