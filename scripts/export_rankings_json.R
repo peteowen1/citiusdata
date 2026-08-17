@@ -66,6 +66,64 @@ if (nrow(drop)) cat(sprintf("dropping %d events with fewer than %d ranked athlet
 ",
                             nrow(drop), MINA))
 d <- d[event_id %chin% depth[n_ath >= MINA, event_id]]
+# --- athlete metadata: nationality, age, evidence -----------------------------
+# From the profile harvest. World Athletics use IOC codes, which are NOT ISO
+# 3166 - SUI is Switzerland, GER Germany, NED the Netherlands, RSA South Africa.
+# A flag built by feeding IOC codes to a regional-indicator conversion would
+# render a wrong flag rather than none, which is worse.
+IOC2ISO <- c(
+  ALG="DZ", ARM="AM", AUS="AU", BAH="BS", BEL="BE", BLR="BY", BOT="BW", BRA="BR",
+  BRN="BH", BUL="BG", CAN="CA", CHN="CN", CMR="CM", COL="CO", CUB="CU", CZE="CZ",
+  DMA="DM", DOM="DO", ECU="EC", ESP="ES", EST="EE", ETH="ET", FIN="FI", FRA="FR",
+  GAM="GM", GBR="GB", GER="DE", GRE="GR", GRN="GD", HUN="HU", IND="IN", IRL="IE",
+  ISR="IL", ITA="IT", IVB="VG", JAM="JM", JPN="JP", KAZ="KZ", KEN="KE", KOR="KR",
+  LCA="LC", LTU="LT", LUX="LU", MAR="MA", MEX="MX", NED="NL", NGR="NG", NOR="NO",
+  NZL="NZ", PAK="PK", PAN="PA", PER="PE", POL="PL", POR="PT", QAT="QA", ROU="RO",
+  RSA="ZA", RUS="RU", SEN="SN", SLO="SI", SRB="RS", SRI="LK", SUI="CH", SVK="SK",
+  SWE="SE", THA="TH", TTO="TT", TUN="TN", UGA="UG", UKR="UA", USA="US", UZB="UZ",
+  VEN="VE", ZAM="ZM", ZIM="ZW", AUT="AT", DEN="DK", CRO="HR", TUR="TR", CHI="CL",
+  PHI="PH", INA="ID", MAS="MY", SGP="SG", VIE="VN", EGY="EG", KSA="SA", UAE="AE",
+  JOR="JO", LBN="LB", CYP="CY", MLT="MT", ISL="IS", LAT="LV", GEO="GE", AZE="AZ",
+  MDA="MD", MKD="MK", ALB="AL", BIH="BA", MNE="ME", KOS="XK", LUX="LU", AND="AD",
+  MON="MC", SMR="SM", LIE="LI", ERI="ER", ETH="ET", SUD="SD", TAN="TZ", RWA="RW",
+  BDI="BI", DJI="DJ", SOM="SO", GHA="GH", CIV="CI", BUR="BF", MLI="ML", NIG="NE",
+  TOG="TG", BEN="BJ", GUI="GN", ANG="AO", MOZ="MZ", NAM="NA", ZAF="ZA", LES="LS",
+  SWZ="SZ", MRI="MU", SEY="SC", MAD="MG", MAW="MW", COD="CD", CGO="CG", GAB="GA",
+  CHA="TD", CAF="CF", LBA="LY", MTN="MR", ARG="AR", URU="UY", PAR="PY", BOL="BO",
+  CRC="CR", GUA="GT", HON="HN", ESA="SV", NCA="NI", CAY="KY", PUR="PR", BAR="BB",
+  ANT="AG", SKN="KN", VIN="VC", BIZ="BZ", GUY="GY", SUR="SR", HAI="HT", JPN="JP",
+  PRK="KP", MGL="MN", NEP="NP", BAN="BD", BHU="BT", MYA="MM", CAM="KH", LAO="LA",
+  TPE="TW", HKG="HK", MAC="MO", FIJ="FJ", PNG="PG", SAM="WS", TGA="TO", VAN="VU",
+  SOL="SB", KIR="KI", NRU="NR", TUV="TV", PLW="PW", FSM="FM", MHL="MH", COK="CK")
+flag_of <- function(ioc) {
+  iso <- unname(IOC2ISO[ioc])
+  vapply(seq_along(iso), function(i) {
+    if (is.na(iso[i]) || nchar(iso[i]) != 2) return("")
+    ch <- utf8ToInt(substr(iso[i], 1, 1)) - 65L
+    cl <- utf8ToInt(substr(iso[i], 2, 2)) - 65L
+    if (ch < 0 || ch > 25 || cl < 0 || cl > 25) return("")
+    intToUtf8(c(0x1F1E6L + ch, 0x1F1E6L + cl))
+  }, character(1))
+}
+mf <- file.path(D, "athlete_meta.parquet")
+if (file.exists(mf)) {
+  am <- setDT(read_parquet(mf))[, .(athlete_id = as.character(athlete_id), country, birthdate)]
+  d <- merge(d, am, by = "athlete_id", all.x = TRUE)
+  ASOF <- max(d$last, na.rm = TRUE)
+  d[, age := round(as.numeric(ASOF - birthdate) / 365.25, 1)]
+  d[, flag := flag_of(country)]
+  cat(sprintf("metadata joined: country on %.0f%% of ranked rows, age on %.0f%%
+",
+      100 * mean(!is.na(d[rk <= TOPN, country])), 100 * mean(!is.na(d[rk <= TOPN, age]))))
+  miss <- unique(d[rk <= TOPN & !is.na(country) & flag == "", country])
+  if (length(miss)) cat(sprintf("  no flag mapping for: %s
+", paste(miss, collapse = ", ")))
+} else {
+  d[, `:=`(country = NA_character_, age = NA_real_, flag = "")]
+  cat("athlete_meta.parquet not found - no nationality or age
+")
+}
+
 setorder(d, event_id, rk)
 top <- d[rk <= TOPN]
 top[, `:=`(typical_s = fmt(pred_mark, unit), good_s = fmt(peak_mark, unit))]
@@ -87,6 +145,9 @@ out <- lapply(seq_len(nrow(ev)), function(i) {
        dist = if (is.finite(e$dist_num)) e$dist_num else NULL,
        athletes = lapply(seq_len(nrow(a)), function(j) list(
          rk = a$rk[j], name = a$athlete_name[j],
+         nat = if (is.na(a$country[j])) NULL else a$country[j],
+         flag = if (is.na(a$flag[j]) || !nzchar(a$flag[j])) NULL else a$flag[j],
+         age = if (is.na(a$age[j])) NULL else a$age[j],
          typical = a$typical_s[j],
          # NULL, not a number, where the good-day mark is suppressed: the page
          # must show an explicit dash rather than imply a missing value is zero

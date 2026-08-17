@@ -156,6 +156,24 @@ VPMINA <- .env_num("SEQ_VPMINA", 20)   # min athletes before an event is trusted
 # scaling. The per-event sd comes from the same within-athlete estimate the
 # variance prior uses, so this needs SEQ_VPRIOR on - which it is by default.
 KPOW <- .env_num("SEQ_KPOW", 0)
+# SEQ_CEILADJ  event-specific ADJUSTMENT to the ceiling blend, on top of the
+# baseline CEIL. Pete's framing: baseline parameters, then event-specific
+# adjustments - rather than free parameters per event, which is 68 knobs and an
+# invitation to overfit.
+#
+#   technical events (jump, throw)   CEIL + ADJ
+#   tactical  events (middle, dist)  CEIL - ADJ
+#   everything else                  CEIL
+#
+# Mechanism, and it is the reason to prefer this over fitting: in a jump or a
+# throw a best mark is a TECHNICAL CEILING the athlete can repeat, so it says a
+# lot about them. In a tactical 1500m the best mark is a property of how the
+# race was run - a sit-and-kick final and a paced meet record produce very
+# different marks from the same athlete - so it says less.
+#
+# `technical` and `tactical` are already in the event registry and have never
+# been used by this model. ADJ = 0 is the current behaviour exactly.
+CEILADJ <- .env_num("SEQ_CEILADJ", 0)
 TAG <- Sys.getenv("SEQ_TAG","baseline")
 # SEQ_WINP  1 = compute win probabilities and Brier. Default OFF: the draws cost
 #           ~60s of a ~360s run (measured) and nothing reads the accumulators.
@@ -252,6 +270,21 @@ if (VPRIOR) {
   VPv <- newv
   rm(dd, dv, est, cmp); invisible(gc())
 }
+# per-event ceiling weight: baseline plus an adjustment by event character
+CEILv <- setNames(rep(CEIL, length(MUv)), names(MUv))
+if (CEILADJ != 0) {
+  rg <- as.data.table(citius::citius_events())[, .(event_id, tactical, technical)]
+  tech <- rg[technical == TRUE, event_id]; tact <- rg[tactical == TRUE, event_id]
+  CEILv[names(CEILv) %chin% tech] <- CEIL + CEILADJ
+  CEILv[names(CEILv) %chin% tact] <- CEIL - CEILADJ
+  # a weight outside [0,1] is not a blend, it is an extrapolation
+  CEILv[] <- pmin(pmax(CEILv, 0), 1)
+  cat(sprintf("[%s] ceiling blend: technical %.2f (%d events), tactical %.2f (%d), other %.2f
+",
+      TAG, CEIL + CEILADJ, sum(names(CEILv) %chin% tech),
+      CEIL - CEILADJ, sum(names(CEILv) %chin% tact), CEIL))
+}
+
 # per-event k0, derived from that same variance
 K0v <- setNames(rep(K0, length(VPv)), names(VPv))
 if (KPOW != 0) {
@@ -515,11 +548,12 @@ for (r_ in seq_along(starts)) {
   }
   # r_use is what ORDERS the field; r_pre is what the model learns from.
   r_use <- r_pre
-  if (CEIL > 0) for (m in seq_along(a)) {
+  ceil_e <- CEILv[[ev]]; if (is.null(ceil_e) || !is.finite(ceil_e)) ceil_e <- CEIL
+  if (ceil_e > 0) for (m in seq_along(a)) {
     if (!seen[m]) next
     bsy <- BSY[[kk[m]]]
     b <- if (!is.null(bsy) && bsy == yr) BS[[kk[m]]] else BC[[kk[m]]]
-    if (!is.null(b)) r_use[m] <- (1 - CEIL) * r_pre[m] + CEIL * b
+    if (!is.null(b)) r_use[m] <- (1 - ceil_e) * r_pre[m] + ceil_e * b
   }
   vp0 <- VPv[[ev]]; if (is.null(vp0) || !is.finite(vp0)) vp0 <- stats::var(z$perf)
   v_pre <- numeric(length(a))
@@ -704,7 +738,7 @@ res <- data.table(tag = TAG,
   brier26 = if (WINP && acc$y26["npred"] > 0) acc$y26["brier"]/acc$y26["npred"] else NA_real_,
   maxplace = MAXPLACE, ceil = CEIL, seeded = n_seeded, huber = HUBER,
   seedhl = SEEDHL, seedne = SEEDNE, k0 = K0, kappa = KAPPA, kfloor = KFLOOR,
-  kpow = KPOW,
+  kpow = KPOW, ceiladj = CEILADJ,
   w_maj = W_MAJ, w_t1 = W_T1, w_t2 = W_T2, w_rnd = W_RND,
   cens=CENS, age=AGEF, stale=STALE, xev=XEV, kt1=KT1, windcs=WINDCS,
   k0=K0, kappa=KAPPA, kfloor=KFLOOR)

@@ -152,7 +152,45 @@ cat(sprintf("peak capped at the all-time event best on %s of %s rows (%.2f%%)\n"
 nm <- setDT(read_parquet("C:/dev/citiusverse/citiusdata/blog/athlete-ratings.parquet"))
 nm <- unique(nm[, .(athlete_id = as.character(athlete_id), athlete_name)])
 st <- merge(st, nm, by = "athlete_id", all.x = TRUE)
-act <- st[n_eff >= 3 & last >= as.Date("2026-01-01")]
+# WHO IS SHOWN. The old rule was `n_eff >= 3 & last >= 2026-01-01`, applied per
+# athlete-EVENT, and it hid people who were plainly active: Josh Kerr had no
+# 1500m ranking despite 35 races and a 3:27.79 Olympic final, because his last
+# 1500m was 2025-09-17 - while he raced a mile that July. The same rule emptied
+# the 20km race walk, where walkers contest the distance twice a year.
+#
+# The profile harvest gave the first external referee for this: World Athletics
+# publish their own ranking per event, built by a different method. Judged on
+# precision@10 against it (check_active_filter.R, 18 variants):
+#
+#   old rule                                   62.5%   WA #1 shown 82.5%
+#   athlete active + n_eff>=1 + event 11mo     65.2%   WA #1 shown 93.2%
+#
+# Three separate conditions, each doing a distinct job:
+#   ATHLETE recency  - drives precision. Without it, stale athletes crowd the
+#                      top ten and precision falls to 59.1%.
+#   evidence bar     - drives coverage. Dropping it from 3 to 1 is what lifts
+#                      "is the world number one even on the page" from 82.5% to
+#                      93.2%, because elite 10,000m runners race it twice a year.
+#   EVENT recency    - stops the low bar admitting ratings built on one race two
+#                      years ago. Bracketed: 17mo 64.8, 14mo 65.2, 11mo 65.2,
+#                      8mo 60.2 - a clean peak and a sharp cliff.
+#
+# Expressed in months back from the DATA date, not as fixed dates: hardcoding
+# them would silently tighten the window every time the corpus is extended.
+ASOF        <- max(st$last, na.rm = TRUE)
+ACT_ATHLETE <- as.integer(Sys.getenv("FORM_ACT_ATHLETE_D", "210"))  # ~7 months
+ACT_EVENT   <- as.integer(Sys.getenv("FORM_ACT_EVENT_D",   "330"))  # ~11 months
+ACT_MIN_N   <- as.numeric(Sys.getenv("FORM_ACT_MIN_NEFF",  "1"))
+la <- h[, .(last_any = max(date)), by = athlete_id]
+la[, athlete_id := as.character(athlete_id)]
+st <- merge(st, la, by = "athlete_id", all.x = TRUE)
+act <- st[n_eff >= ACT_MIN_N &
+          !is.na(last_any) & last_any >= ASOF - ACT_ATHLETE &
+          !is.na(last)     & last     >= ASOF - ACT_EVENT]
+cat(sprintf("active: %s of %s athlete-events (as at %s; athlete within %dd, event within %dd, n_eff >= %.1f)
+",
+            format(nrow(act), big.mark = ","), format(nrow(st), big.mark = ","),
+            ASOF, ACT_ATHLETE, ACT_EVENT, ACT_MIN_N))
 setorder(act, event_id, -R)
 act[, rk := seq_len(.N), by = event_id]
 
