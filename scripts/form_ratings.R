@@ -300,6 +300,13 @@ TAG <- Sys.getenv("SEQ_TAG","baseline")   # needed by the log line below
 # 20 gives 72.070/71.776 and removing it entirely 72.070/71.770, both inside
 # noise of keeping it. It stays because it is marginally better and cheaper.
 XB_MINCOR <- .env_num("SEQ_XB_MINCOR", 0.80)
+# SEQ_XB_PICK  "evidence" (the original rule: the other event with the most
+#              races) or "cor" (the most strongly related one).
+# SEQ_XB_NSIB  how many other events to combine. 1 reproduces the old shape.
+# Both default to the original behaviour so the change is measured, not assumed.
+XB_PICK <- Sys.getenv("SEQ_XB_PICK", "evidence")
+XB_NSIB <- max(1L, as.integer(.env_num("SEQ_XB_NSIB", 1)))
+stopifnot("SEQ_XB_PICK must be 'evidence' or 'cor'" = XB_PICK %in% c("evidence", "cor"))
 SIM <- new.env(hash = TRUE, parent = emptyenv())
 if (XB_MINCOR > 0) {
   sf <- file.path(SC, "event_similarity.parquet")
@@ -839,12 +846,33 @@ for (r_ in seq_along(starts)) {
     }
     ne_s <- vapply(sib, function(sv) { q <- NE[[key(a[m], sv)]]
                                        if (is.null(q)) 0 else q }, numeric(1))
-    b <- which.max(ne_s)
-    if (ne_s[b] < XB_MINS) next
-    rs <- R[[key(a[m], sib[b])]]; ms <- MUv[[sib[b]]]
-    if (is.null(rs) || is.null(ms) || !is.finite(rs) || !is.finite(ms)) next
+    okm <- ne_s >= XB_MINS
+    sib <- sib[okm]; cs <- cs[okm]; ne_s <- ne_s[okm]
+    if (!length(sib)) next
+    # WHICH other events to borrow from, and HOW MANY.
+    #
+    # The original rule took the single other event with the most races. That
+    # picks the relationship with the most EVIDENCE rather than the strongest
+    # one, and the two disagree: for Kerr's 1500m it takes his 3000m (r 0.847,
+    # 1.36 races) over his Mile (r 0.873, 1.27) - and the Mile implies 3:28.75
+    # for him against the 3000m's 3:33.28. Ordering by correlation fixes that.
+    #
+    # Taking only one also discards the rest. Every event above the correlation
+    # gate carries information; combining them weighted by how much they explain
+    # (r^2) and how much evidence stands behind them uses all of it.
+    ord <- if (XB_PICK == "cor" && any(is.finite(cs))) order(-cs) else order(-ne_s)
+    take <- ord[seq_len(min(XB_NSIB, length(ord)))]
+    tw <- 0; tv <- 0
+    for (t in take) {
+      rs <- R[[key(a[m], sib[t])]]; ms <- MUv[[sib[t]]]
+      if (is.null(rs) || is.null(ms) || !is.finite(rs) || !is.finite(ms)) next
+      cw <- if (is.finite(cs[t])) cs[t]^2 else 1
+      tw <- tw + cw * ne_s[t]
+      tv <- tv + cw * ne_s[t] * (rs - ms + mu)
+    }
+    if (tw <= 0) next
     w <- xb_e / (n_eff[m] + xb_e)
-    r_use[m] <- (1 - w) * r_use[m] + w * (rs - ms + mu)
+    r_use[m] <- (1 - w) * r_use[m] + w * (tv / tw)
   }
   ceil_e <- CEILv[[ev]]; if (is.null(ceil_e) || !is.finite(ceil_e)) ceil_e <- CEIL
   if (ceil_e > 0) for (m in seq_along(a)) {
