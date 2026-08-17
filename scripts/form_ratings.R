@@ -223,7 +223,17 @@ SEEDHLPOW <- .env_num("SEQ_SEEDHLPOW", 0)
 # Strength 1 beats 0 below it and 2 above it, so this is an interior optimum
 # rather than the highest value that happened to be tried.
 XBLEND  <- .env_num("SEQ_XBLEND", 1)
-XB_MAXN <- .env_num("SEQ_XB_MAXN", 8)    # skip the lookup once evidence is real
+# ADOPTED 2026-08-18: no cutoff. The wall was a lookup optimisation, not a
+# modelling decision - the blend weight is already xb/(n_eff + xb), which is
+# 4.8% at n_eff 20 and 2% at 50, so deep records self-attenuate without help.
+# Measured: cutoff 8 gave 72.073/71.782, cutoff 20 gave 72.070/71.776, none at
+# all 72.070/71.770 - all inside noise of each other.
+#
+# Removed because the wall was excluding real cases while buying nothing. Josh
+# Kerr sits at n_eff 10.05 in the 1500m, just past the old cutoff, so it skipped
+# him entirely while his Mile (r 0.883, and 2.23 races after Glasgow) had
+# something to say. Information should be downweighted, not discarded.
+XB_MAXN <- .env_num("SEQ_XB_MAXN", 1e9)
 XB_MINS <- .env_num("SEQ_XB_MINS", 2)    # a sibling needs some evidence itself
 # SEQ_XB_FAM  which families may borrow from a sibling event.
 #
@@ -304,8 +314,18 @@ XB_MINCOR <- .env_num("SEQ_XB_MINCOR", 0.80)
 #              races) or "cor" (the most strongly related one).
 # SEQ_XB_NSIB  how many other events to combine. 1 reproduces the old shape.
 # Both default to the original behaviour so the change is measured, not assumed.
-XB_PICK <- Sys.getenv("SEQ_XB_PICK", "evidence")
-XB_NSIB <- max(1L, as.integer(.env_num("SEQ_XB_NSIB", 1)))
+# ADOPTED 2026-08-18, on principle rather than on a score. Measured across four
+# arms on the post-harvest corpus, all four land within 0.005 pp of each other
+# (raw 2026 concordance 71.541 / 71.540 / 71.542 / 71.542) - so this buys no
+# measurable accuracy. It is not inert: pick=cor changes 4,291 rows and nsib=3
+# changes 7,450, with a median shift of ~0.001-0.002. It is simply that the
+# population the blend can touch is too small to move an aggregate.
+#
+# Adopted anyway because borrowing from the event that actually relates is the
+# correct reasoning, it costs nothing, and it is right per athlete even where it
+# is invisible in the mean. Do NOT quote it as an accuracy gain.
+XB_PICK <- Sys.getenv("SEQ_XB_PICK", "cor")
+XB_NSIB <- max(1L, as.integer(.env_num("SEQ_XB_NSIB", 3)))
 stopifnot("SEQ_XB_PICK must be 'evidence' or 'cor'" = XB_PICK %in% c("evidence", "cor"))
 SIM <- new.env(hash = TRUE, parent = emptyenv())
 if (XB_MINCOR > 0) {

@@ -191,7 +191,43 @@ cat(sprintf("active: %s of %s athlete-events (as at %s; athlete within %dd, even
 ",
             format(nrow(act), big.mark = ","), format(nrow(st), big.mark = ","),
             ASOF, ACT_ATHLETE, ACT_EVENT, ACT_MIN_N))
-setorder(act, event_id, -R)
+# RANK ON THE CEILING-BLENDED RATING, not the raw one.
+#
+# R tracks an athlete's AVERAGE form, and for a championship ranking that is the
+# wrong quantity. Josh Kerr's carried R is 3:36.55 - SLOWER than his own median
+# 1500m of 3:34.93 and nine seconds off his 3:27.79 best - because the average
+# includes a fall and several tactical rounds. He ranked 21st.
+#
+# The engine already computes the fix and nobody read it. form_ratings.R writes
+# R_ceil, the same (1-CEIL)*R + CEIL*best blend it uses to ORDER a field inside
+# a race, adopted 2026-08-15 on +0.28 sealed. Until now NOTHING in the repo read
+# that column, so the ceiling blend had never once changed a published ranking.
+#
+# Measured against World Athletics as an outside referee:
+#   precision@10      67.7% -> 68.2%   (interior peak at CEIL 0.30; 0.50 worse)
+#   middle distance   57.5% -> 67.5%
+#   Kerr              21st -> 9th
+# 75 athlete-events across 35 events have a best mark that would rank top-10
+# while their raw rank sits outside the top 20 - a systematic bias against
+# athletes who peak in championships, not one anecdote.
+#
+# KNOWN COST, accepted: 55 rows newly enter a top ten, 91% on marks under a year
+# old, about 3 on marks over two years. The clean bad case is Jack Rayner,
+# 10,000m, 35th -> 9th on a March 2024 mark a minute faster than anything else
+# in his record. The fix is to blend toward a high percentile rather than the
+# single best - that keeps Kerr (five sub-3:30s) and drops Rayner (one outlier).
+# Not built yet; see NEXT-STEPS.
+#
+# DISPLAY HONESTY, unresolved: the mark columns are still derived from R, so a
+# reader can see an athlete ranked above someone showing a faster typical time.
+if (!"R_ceil" %in% names(act))
+  stop("form_display_marks.R expects R_ceil from the state table.\n",
+       "  Re-run form_ratings.R - a state file written before 2026-08-15 lacks it.")
+act[, R_rank := fifelse(is.finite(R_ceil), R_ceil, R)]
+cat(sprintf("ranking on R_ceil; %s of %s rows fall back to raw R (no best mark)\n",
+            format(sum(!is.finite(act$R_ceil)), big.mark = ","),
+            format(nrow(act), big.mark = ",")))
+setorder(act, event_id, -R_rank)
 act[, rk := seq_len(.N), by = event_id]
 
 fmt <- function(m, unit) {
