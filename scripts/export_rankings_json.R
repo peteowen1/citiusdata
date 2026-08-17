@@ -32,8 +32,17 @@ d[is.na(athlete_name) | !nzchar(athlete_name), athlete_name := paste0("Athlete "
 # reader looking for "field" expects to find the decathlon there.
 # Three groups, not two. Putting the half marathon under "track" because it is
 # a running event is the kind of tidy-looking wrongness a reader spots at once.
+# Race walks split by SURFACE, not by family. "10,000 Metres Race Walk" is a
+# TRACK event and "10 Kilometres Race Walk" is a road event - same distance,
+# different races, and World Athletics keeps separate records for them. Putting
+# both under road (as `family == "walk"` does) was wrong, and visibly so: the
+# track 10,000m walk was sitting in the road section.
+#
+# The distinction is carried by the name: athletics uses METRES for track and
+# KILOMETRES for road, which is exactly why both spellings exist.
 d[, grp := fifelse(family %chin% c("sprint","middle","distance","hurdles"), "track",
-            fifelse(family %chin% c("road","walk"), "road", "field"))]
+            fifelse(family == "walk" & grepl("Metres", discipline), "track",
+            fifelse(family %chin% c("road","walk"), "road", "field")))]
 
 # --- a distance to sort by ---------------------------------------------------
 # Parsed from the discipline name, which carries it explicitly ("800 Metres",
@@ -66,6 +75,34 @@ fmt <- function(mark, unit) {
 # than shown with a caveat: the page is a ranking, and a ranking of three people
 # is not a ranking. 11 events fall out, all minor (2000m steeplechase W, 5km
 # race walk M, half marathon M each had 1-6).
+# NOVELTY DISTANCES. Pete: "think 600m and 1000m can go". The principled rule
+# is the one that catches them for a reason rather than by name: an event with
+# ZERO T1_elite races has no elite competition to rank, so a top ten of it is a
+# top ten of nobody in particular. Fourteen events qualify - 150m, 300m, 600m,
+# 1000m, 2000m, 2000m steeplechase, weight throw, and the short race walks -
+# and the ladder already flagged 300/600/1000m as the model's worst events.
+#
+# Overridable, because "no T1 race in OUR corpus" is a statement about coverage
+# as well as about the sport: half marathon has only two and is plainly real.
+DROP_ZERO_T1 <- Sys.getenv("RANK_DROP_ZERO_T1", "1") != "0"
+if (DROP_ZERO_T1) {
+  cg <- setDT(read_parquet(file.path(D, "competition_catalogue.parquet")))
+  cg[, competition_id := as.character(competition_id)]
+  hh <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG)),
+                           col_select = c("race_key", "event_id")))
+  hh[, competition_id := tstrsplit(race_key, "[|]", keep = 1L)[[1]]]
+  hh <- merge(hh, cg[, .(competition_id, meet_tier)], by = "competition_id", all.x = TRUE)
+  t1 <- hh[, .(t1 = uniqueN(race_key[meet_tier == "T1_elite"])), by = event_id]
+  zero <- t1[t1 == 0, event_id]
+  if (length(zero)) {
+    gone <- unique(d[event_id %chin% zero, .(discipline, sex)])
+    cat(sprintf("dropping %d events with no T1_elite race: %s
+", nrow(gone),
+                paste(sprintf("%s %s", gone$discipline, gone$sex), collapse = "; ")))
+    d <- d[!event_id %chin% zero]
+  }
+}
+
 MINA <- as.integer(Sys.getenv("RANK_MIN_ATHLETES", "10"))
 depth <- d[, .(n_ath = .N), by = event_id]
 drop <- depth[n_ath < MINA]

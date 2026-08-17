@@ -188,6 +188,51 @@ CEILADJ <- .env_num("SEQ_CEILADJ", 0)
 # 45 days is right for a sprinter racing weekly and meaningless for an event
 # contested annually. POW = 0 is the current global behaviour exactly.
 SEEDHLPOW <- .env_num("SEQ_SEEDHLPOW", 0)
+# SEQ_XBLEND  lean a THIN rating on the same athlete's rating in a SIBLING
+# EVENT, mapped onto this event's scale. 0 = off.
+#
+#   w      = XBLEND / (n_eff + XBLEND)
+#   mapped = R_sibling - mu_sibling + mu_event
+#   r_use  = (1 - w) * r_use + w * mapped
+#
+# So a deep record ignores its siblings and a thin one leans on them heavily,
+# which is the whole point: the fix has to be invisible where evidence exists.
+#
+# WHY THIS IS NOT `SEQ_XEV`, WHICH WAS REFUTED TWICE. That knob fires only at
+# COLD START, once, and needs a sibling with n_eff >= 5 of the SAME FAMILY. It
+# was measured on average pairwise concordance both times - a metric dominated
+# by sprinters racing twenty times a year - and found worth +0.007 and +0.018 pp.
+# Neither measurement looked where the effect lives.
+#
+# The failures it leaves behind are blatant. Josh Kerr set the mile world record
+# and is unranked in the mile, because it is his first mile in the corpus
+# (n_eff 0.3) - while he holds 35 races and a 3:27.79 Olympic final at 1500m, a
+# distance 8% shorter. Andreas Almgren is 1st at 3000m and 5000m and outside the
+# 10,000m top ten on n_eff 1.5. The two 10km race walks correlate 0.614 across a
+# 1.1% surface offset and share nothing.
+#
+# ORDERING ONLY. Like the ceiling blend, this changes what `r_use` compares and
+# never what `R` learns - a rating that trained on its own sibling would drift
+# toward the family mean and stop being about the event.
+XBLEND  <- .env_num("SEQ_XBLEND", 0)
+XB_MAXN <- .env_num("SEQ_XB_MAXN", 8)    # skip the lookup once evidence is real
+XB_MINS <- .env_num("SEQ_XB_MINS", 2)    # a sibling needs some evidence itself
+# SEQ_XB_FAM  which families may borrow from a sibling event.
+#
+# Measured per event (check_concordance_by_event.R), XBLEND 1 vs 0, deltas that
+# beat the event's own noise floor and mostly replicate on the sealed window:
+#
+#   10,000m W  +1.349 / +1.104     Hammer Throw M   -0.527 / -0.665
+#   10,000m M  +0.911              Discus Throw W   -0.686
+#   Mile W     +0.686              Weight Throw M   -1.079
+#   5000m W    +0.469
+#
+# AEROBIC ABILITY TRANSFERS AND TECHNICAL SKILL DOES NOT. A 5000m rating says a
+# great deal about the same athlete's 10,000m; a discus rating says almost
+# nothing about their hammer, and forcing the borrow makes the throw ratings
+# worse. Applied globally the two cancelled to +0.029 pp - which is how a real
+# effect hides inside an aggregate.
+XB_FAM <- strsplit(Sys.getenv("SEQ_XB_FAM", "distance,middle,road,walk"), ",")[[1]]
 TAG <- Sys.getenv("SEQ_TAG","baseline")
 # SEQ_WINP  1 = compute win probabilities and Brier. Default OFF: the draws cost
 #           ~60s of a ~360s run (measured) and nothing reads the accumulators.
@@ -584,12 +629,37 @@ for (r_ in seq_along(starts)) {
   }
   # r_use is what ORDERS the field; r_pre is what the model learns from.
   r_use <- r_pre
+  # cross-event: only for thin records, and only worth the lookup there
+  if (XBLEND > 0) for (m in seq_along(a)) {
+    if (!seen[m] || n_eff[m] >= XB_MAXN) next
+    sib <- BYA[[a[m]]]
+    if (is.null(sib)) next
+    sib <- sib[sib != ev]
+    if (!length(sib)) next
+    if (!(z$family[1] %chin% XB_FAM)) next
+    fam <- reg$family[match(sib, reg$event_id)]
+    sib <- sib[!is.na(fam) & fam == z$family[1]]
+    if (!length(sib)) next
+    ne_s <- vapply(sib, function(sv) { q <- NE[[key(a[m], sv)]]
+                                       if (is.null(q)) 0 else q }, numeric(1))
+    b <- which.max(ne_s)
+    if (ne_s[b] < XB_MINS) next
+    rs <- R[[key(a[m], sib[b])]]; ms <- MUv[[sib[b]]]
+    if (is.null(rs) || is.null(ms) || !is.finite(rs) || !is.finite(ms)) next
+    w <- XBLEND / (n_eff[m] + XBLEND)
+    r_use[m] <- (1 - w) * r_use[m] + w * (rs - ms + mu)
+  }
   ceil_e <- CEILv[[ev]]; if (is.null(ceil_e) || !is.finite(ceil_e)) ceil_e <- CEIL
   if (ceil_e > 0) for (m in seq_along(a)) {
     if (!seen[m]) next
     bsy <- BSY[[kk[m]]]
     b <- if (!is.null(bsy) && bsy == yr) BS[[kk[m]]] else BC[[kk[m]]]
-    if (!is.null(b)) r_use[m] <- (1 - ceil_e) * r_pre[m] + ceil_e * b
+    # COMPOSES with whatever r_use already holds - it must not reset to r_pre.
+    # It did, and that silently discarded the cross-event blend above for every
+    # athlete carrying a best mark, which is nearly all of them: XBLEND 0, 1, 2
+    # and 3 all returned byte-identical scores because the feature never
+    # survived to be measured.
+    if (!is.null(b)) r_use[m] <- (1 - ceil_e) * r_use[m] + ceil_e * b
   }
   vp0 <- VPv[[ev]]; if (is.null(vp0) || !is.finite(vp0)) vp0 <- stats::var(z$perf)
   v_pre <- numeric(length(a))
@@ -774,7 +844,8 @@ res <- data.table(tag = TAG,
   brier26 = if (WINP && acc$y26["npred"] > 0) acc$y26["brier"]/acc$y26["npred"] else NA_real_,
   maxplace = MAXPLACE, ceil = CEIL, seeded = n_seeded, huber = HUBER,
   seedhl = SEEDHL, seedhlpow = SEEDHLPOW, seedne = SEEDNE, k0 = K0, kappa = KAPPA, kfloor = KFLOOR,
-  kpow = KPOW, ceiladj = CEILADJ,
+  kpow = KPOW, ceiladj = CEILADJ, xblend = XBLEND,
+  xb_fam = paste(XB_FAM, collapse = "+"),
   w_maj = W_MAJ, w_t1 = W_T1, w_t2 = W_T2, w_rnd = W_RND,
   cens=CENS, age=AGEF, stale=STALE, xev=XEV, kt1=KT1, windcs=WINDCS,
   k0=K0, kappa=KAPPA, kfloor=KFLOOR)
