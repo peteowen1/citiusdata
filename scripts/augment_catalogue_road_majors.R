@@ -75,7 +75,13 @@ is_half <- function(x) grepl("Half|Halb|Semi[- ]|Mini|10 ?K|5 ?K|Relay", x, igno
 miss[, is_wmm  := grepl(rx(WMM_CITY), competition, ignore.case = TRUE) &
                   grepl("Marathon", competition, ignore.case = TRUE) &
                   !is_half(competition)]
-miss[, is_plat := !is_wmm & grepl(rx(PLATINUM), competition, ignore.case = TRUE)]
+# !is_half() belongs here too, not only on is_wmm. Without it the bare city names
+# in PLATINUM ("Valencia", "Xiamen", "Rotterdam") match that city's HALF marathon
+# and tier it as a full-marathon label race. That is how the three Valencia Half
+# Marathon ids entered the catalogue - by accident rather than by decision. The
+# label halves are handled deliberately in augment_catalogue_road_half_majors.R.
+miss[, is_plat := !is_wmm & grepl(rx(PLATINUM), competition, ignore.case = TRUE) &
+                  !is_half(competition)]
 add <- miss[is_wmm | is_plat]
 if (!nrow(add)) { cat("nothing to add\n"); quit(status = 0) }
 
