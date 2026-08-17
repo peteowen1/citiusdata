@@ -330,7 +330,7 @@ if (nzchar(EVPARAM)) {
   EVP[, event_id := as.character(event_id)]
   ovr <- setdiff(names(EVP), "event_id")
   # a mistyped column would otherwise be silently ignored by .ev_vec()
-  known <- c("k0", "kfloor", "ceil", "huber", "xblend")
+  known <- c("k0", "kfloor", "ceil", "huber", "xblend", "seedhl")
   if (length(setdiff(ovr, known)))
     stop(sprintf("SEQ_EVPARAM has unknown column(s): %s (known: %s)",
                  paste(setdiff(ovr, known), collapse = ", "),
@@ -542,6 +542,30 @@ if (SEEDON) {
         paste(sprintf("%s %.0fd", sub("^AT-","",names(sl)[(length(sl)-2):length(sl)]),
                       sl[(length(sl)-2):length(sl)]), collapse=", ")))
     rm(g, fq)
+  }
+  # An explicit per-event override wins over the frequency scaling above.
+  #
+  # WHY AN OVERRIDE RATHER THAN THE PARAMETRIC FORM. Decay genuinely does vary
+  # by event - half-life 200 against 45, replicated on two independent windows:
+  #   road     +0.263 (2025-26, 3 up 1 down)   +0.212 (2022-24, 4 up 0 down)
+  #   distance +0.064                          +0.170
+  #   sprint   -0.042                          -0.100 (1 up of 10)
+  #   hurdles  -0.053                          -0.048
+  # SEQ_SEEDHLPOW was the elegant way to get that from one parameter, and it
+  # does not work: at 0.5 it pooled to -0.006 and -0.009, kept the sign for road
+  # and distance at a fraction of the strength, lost the sprint effect entirely,
+  # and damaged jumps (-0.049) and combined (-0.061). Race frequency alone is
+  # the wrong functional form - it adjusts all 86 events including the field
+  # events that want no adjustment, and hands walks a long memory when walks are
+  # the one family the direct test showed does not want one.
+  # Override only the events the file names, so any frequency scaling above
+  # survives everywhere else - replacing the whole vector would silently discard
+  # it for every event the override file does not mention.
+  if (!is.null(EVP) && "seedhl" %in% names(EVP)) {
+    ov <- .ev_vec("seedhl", NA_real_, names(hl_ev))
+    hl_ev[is.finite(ov)] <- ov[is.finite(ov)]
+    cat(sprintf("[%s] seed half-life overridden on %d event(s): %.0f-%.0f days\n",
+                TAG, sum(is.finite(ov)), min(hl_ev), max(hl_ev)))
   }
   sd0[, hl_e := hl_ev[event_id]]
   sd0[!is.finite(hl_e), hl_e := SEEDHL]
