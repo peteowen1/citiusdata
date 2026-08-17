@@ -282,12 +282,38 @@ XB_FAM <- strsplit(Sys.getenv("SEQ_XB_FAM", "distance,middle,sprint,hurdles"), "
 # family, is what the blend is really keyed on, and the throws were damaged
 # because the engine borrowed from siblings that say nothing about the event.
 TAG <- Sys.getenv("SEQ_TAG","baseline")   # needed by the log line below
-XB_MINCOR <- .env_num("SEQ_XB_MINCOR", 0)
+# ADOPTED 2026-08-17 at 0.80, replacing the family gate. Full sweep, all arms on
+# the same corpus, with the number of event pairs the gate admits:
+#   0.60  93 pairs  72.021 / 71.709      0.85  16 pairs  72.052 / 71.761
+#   0.70  57 pairs  72.037 / 71.727      0.90   8 pairs  72.031 / 71.742
+#   0.80  28 pairs  72.073 / 71.782      0.95   1 pair   71.995 / 71.713
+# Both windows peak at 0.80 with monotone decline either side, so it is an
+# interior optimum rather than the edge of the range tried. The 0.95 arm is the
+# machinery checking itself: with one eligible pair it reproduces blend-off
+# (71.994 / 71.711) to within a thousandth.
+#
+# For comparison the family gate it replaces scored 72.053 / 71.755.
+#
+# XB_MAXN is left at 8 although it is redundant: the blend weight is already
+# xb/(n_eff + xb), which is 4.8% at n_eff 20 and 2% at 50, so the cutoff is a
+# lookup optimisation rather than a modelling decision. Measured - raising it to
+# 20 gives 72.070/71.776 and removing it entirely 72.070/71.770, both inside
+# noise of keeping it. It stays because it is marginally better and cheaper.
+XB_MINCOR <- .env_num("SEQ_XB_MINCOR", 0.80)
 SIM <- new.env(hash = TRUE, parent = emptyenv())
 if (XB_MINCOR > 0) {
   sf <- file.path(SC, "event_similarity.parquet")
+  # Deliberately a hard stop, not a fallback to the family gate. SEQ_XB_MINCOR
+  # is ON BY DEFAULT now, and data files are gitignored, so a fresh clone or a CI
+  # runner will land here - and quietly running a DIFFERENT model than the one
+  # the caller asked for is the failure mode this repo has been bitten by
+  # repeatedly. Build the file, or set SEQ_XB_MINCOR=0 to ask for the family gate
+  # explicitly. (TODO: publish event_similarity.parquet via piggyback so this is
+  # fetched like every other data artifact rather than rebuilt by hand.)
   if (!file.exists(sf))
-    stop("SEQ_XB_MINCOR is set but event_similarity.parquet is missing - run build_event_similarity.R")
+    stop("SEQ_XB_MINCOR is ", XB_MINCOR, " (default) but ", basename(sf),
+         " is missing.\n  Build it:  Rscript citiusdata/scripts/build_event_similarity.R",
+         "\n  Or ask for the old family gate explicitly:  SEQ_XB_MINCOR=0")
   sm <- setDT(read_parquet(sf))
   sm <- sm[is.finite(cor)]
   stopifnot("the similarity matrix is empty" = nrow(sm) > 0)
