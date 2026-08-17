@@ -95,8 +95,11 @@ print(add[, .(competitions = .N, first = min(date), last = max(date)),
 cat("\nnamed competitions being added (top 20 by count):\n")
 print(add[, .N, by = .(competition, meet_tier)][order(-N)][1:min(20, .N)])
 
+# Carry the NAME across - without it every added row is anonymous in the
+# catalogue (54 of 54 marathon_major rows currently have comp_name NA).
 new <- data.table(competition_id = add$competition_id, class = add$class,
                   meet_tier = add$meet_tier)
+if ("comp_name" %in% names(cat0)) new[, comp_name := add$competition]
 for (cn in setdiff(names(cat0), names(new))) new[, (cn) := NA]
 out <- rbind(cat0, new[, names(cat0), with = FALSE])
 stopifnot("duplicate competition ids" = !anyDuplicated(out$competition_id),

@@ -57,7 +57,13 @@ is_other <- function(x) grepl("Mini|10 ?K|5 ?K|Relay|Marathon Relay|Ekiden|Quart
 # recomputing, so a re-run corrects its own earlier rows instead of leaving them
 # stranded. Without this the first run's bad matches would be permanent - they
 # are in the catalogue, so `miss` no longer sees them.
-mine <- cat0[class %chin% c("road_label", "world_other") &
+# ONLY road_label. An earlier version of this line also swept `world_other`,
+# which this script does NOT own - build_competition_catalogue.R assigns it, and
+# so does augment_catalogue_coverage.R. The delete-then-readd cycle rebuilt those
+# rows from three columns and nulled comp_name, year, results, athletes, events
+# and strength on 16 genuine World Half Marathon Championship editions in the
+# live catalogue. A "self-repair" must only repair its own rows.
+mine <- cat0[class == "road_label" &
              competition_id %chin% nm[is_half(competition), competition_id]]
 if (nrow(mine)) {
   cat(sprintf("removing %d previously-placed half marathon(s) to recompute\n",
@@ -104,8 +110,13 @@ print(add[, .(competitions = .N, first = min(date), last = max(date)),
 cat("\nnamed competitions being added (top 25 by edition count):\n")
 print(add[, .N, by = competition][order(-N)][1:min(25, .N)])
 
+# Carry the NAME across. Without this every row this script adds lands with
+# comp_name NA, which is why 203 of 203 road_label rows in the live catalogue
+# are anonymous - invisible to every later audit or spot-check that reports a
+# competition by name.
 new <- data.table(competition_id = add$competition_id, class = add$class,
                   meet_tier = add$meet_tier)
+if ("comp_name" %in% names(cat0)) new[, comp_name := add$competition]
 for (cn in setdiff(names(cat0), names(new))) new[, (cn) := NA]
 out <- rbind(cat0, new[, names(cat0), with = FALSE])
 stopifnot("duplicate competition ids" = !anyDuplicated(out$competition_id),

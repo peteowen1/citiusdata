@@ -328,8 +328,22 @@ if (XB_MINCOR > 0) {
     e1 <- as.character(sm$e1[i]); e2 <- as.character(sm$e2[i])
     assign(if (e1 < e2) paste0(e1, "|", e2) else paste0(e2, "|", e1), sm$cor[i], envir = SIM)
   }
+  XB_PAIRS <- sum(sm$cor >= XB_MINCOR)
   cat(sprintf("[%s] similarity gate: %d event pairs, %d at or above %.2f\n",
-              TAG, nrow(sm), sum(sm$cor >= XB_MINCOR), XB_MINCOR))
+              TAG, nrow(sm), XB_PAIRS, XB_MINCOR))
+  # A gate that admits NOTHING is not a configuration, it is a broken run. The
+  # blend would no-op for every athlete while the results row still recorded
+  # xblend=1, so an arm with a stale similarity file is indistinguishable from
+  # one where the feature simply does not help. That is how a knob that changes
+  # nothing gets read as a null result - which this repo did once already, when
+  # four XBLEND settings gave byte-identical scores.
+  # The likeliest cause is a similarity file built against a different corpus
+  # vintage than the one being scored, so rebuild it rather than lowering the gate.
+  if (XB_PAIRS == 0)
+    stop("SEQ_XB_MINCOR is ", XB_MINCOR, " but NO event pair reaches it (",
+         nrow(sm), " pairs, max ", sprintf("%.3f", max(sm$cor)), ").\n",
+         "  The blend would silently do nothing. Rebuild the similarity matrix\n",
+         "  against the current corpus:  Rscript citiusdata/scripts/build_event_similarity.R")
   rm(sm)
 }
 
@@ -589,8 +603,12 @@ if (SEEDON) {
   # and distance at a fraction of the strength, lost the sprint effect entirely,
   # and damaged jumps (-0.049) and combined (-0.061). Race frequency alone is
   # the wrong functional form - it adjusts all 86 events including the field
-  # events that want no adjustment, and hands walks a long memory when walks are
-  # the one family the direct test showed does not want one.
+  # events that want no adjustment, and hands walks a long memory on the strength
+  # of their race frequency alone - when the direct test showed walks FLIP sign
+  # between windows (-0.095 on 2025-26, +0.553 on 2022-24), i.e. unstable rather
+  # than long-memory. An earlier version of this comment claimed the test showed
+  # walks "do not want one", which is a stronger statement than the measurement
+  # supports.
   # Override only the events the file names, so any frequency scaling above
   # survives everywhere else - replacing the whole vector would silently discard
   # it for every event the override file does not mention.
