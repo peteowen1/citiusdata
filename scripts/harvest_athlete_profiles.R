@@ -26,10 +26,14 @@
 # run would retry the same dead ids forever.
 #
 #   CITIUS_MAX_PROFILES   how many to fetch this run (0 = no limit)
+#   CITIUS_THROTTLE       min seconds between requests (default 0.25 = 4/s,
+#                         the citius_get_json() default). Raise this to go
+#                         gentler after a rate-limit backoff.
 #
-# Rate: citius_get_json throttles to 4 requests/second with retries and an
-# identifying user agent. Do NOT parallelise this - httr2 throttles per request
-# object, so N processes would issue 4N/s at a third-party service.
+# Rate: citius_get_json throttles to 1/CITIUS_THROTTLE requests/second with
+# retries and an identifying user agent. Do NOT parallelise this - httr2
+# throttles per request object, so N processes would issue N times the rate
+# at a third-party service.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(data.table)); suppressMessages(library(arrow))
 ns <- asNamespace("citius")
@@ -38,6 +42,8 @@ OUT   <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "ath_profile_cache")
 dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
 MAX <- as.integer(Sys.getenv("CITIUS_MAX_PROFILES", "0"))
+THROTTLE <- as.numeric(Sys.getenv("CITIUS_THROTTLE", "0.25"))
+cat(sprintf("throttle: %.2f s/request (%.2f req/s)\n", THROTTLE, 1 / THROTTLE))
 
 # --- who to fetch: every athlete we have ever seen ---------------------------
 ids <- character(0)
@@ -112,7 +118,8 @@ t0 <- Sys.time(); ok <- 0L; miss <- 0L; err <- 0L
 for (i in seq_along(todo)) {
   id <- todo[i]
   f <- file.path(CACHE, paste0(id, ".rds"))
-  a <- tryCatch(ns$citius_get_json(paste0(ns$athletics_base_url(), "/athletes/", id)),
+  a <- tryCatch(ns$citius_get_json(paste0(ns$athletics_base_url(), "/athletes/", id),
+                                    throttle = THROTTLE),
                 error = function(e) structure(list(), class = "citius_fetch_error"))
   if (inherits(a, "citius_fetch_error")) { err <- err + 1L; next }
   # A 404 is cached as a sentinel, not skipped: without it every future run
