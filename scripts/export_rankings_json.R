@@ -45,12 +45,19 @@ d[!grepl("^[0-9]", discipline), dist_num := NA_real_]
 d[grepl("Kilometre|Mile", discipline) & is.finite(dist_num), dist_num := dist_num * 1000]
 d[grepl("Mile", discipline) & is.finite(dist_num), dist_num := dist_num * 1.609]
 
+# Marks over an hour need HOURS. Without this a 2:00:07 marathon renders as
+# "120:07.28" - which looks like a number rather than a time and hides that the
+# rating is implausible. Road events are exactly where the ratings need the most
+# scrutiny, so a formatter that obscures them is worse than useless.
 fmt <- function(mark, unit) {
   ifelse(is.na(mark), NA_character_,
     ifelse(unit == "seconds",
+      ifelse(mark >= 3600,
+             sprintf("%d:%02d:%02d", floor(mark / 3600),
+                     floor((mark %% 3600) / 60), round(mark %% 60)),
       ifelse(mark >= 60,
              sprintf("%d:%05.2f", floor(mark / 60), mark %% 60),
-             sprintf("%.2f", mark)),
+             sprintf("%.2f", mark))),
       ifelse(unit == "points", format(round(mark), big.mark = ","),
              sprintf("%.2f", mark))))
 }

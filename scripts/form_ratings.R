@@ -174,6 +174,20 @@ KPOW <- .env_num("SEQ_KPOW", 0)
 # `technical` and `tactical` are already in the event registry and have never
 # been used by this model. ADJ = 0 is the current behaviour exactly.
 CEILADJ <- .env_num("SEQ_CEILADJ", 0)
+# SEQ_SEEDHLPOW  scale the SEED half-life by how often the event is contested:
+#   hl_event = SEEDHL * (event median race gap / median across events) ^ POW
+#
+# Pete's observation, and the mechanism is worse than a slightly-wrong half-life.
+# The seed weights are 2^(-gap/SEEDHL) and the seeded evidence is
+# ne0 = min(sum(weights), SEEDNE). For a marathoner whose previous marathon was
+# 200+ days ago every weight underflows, so ne0 ~ 0: they are seeded with a
+# VALUE but no EVIDENCE, k runs at its maximum, and their first corpus marathon
+# overwrites the seed almost entirely. That is why the marathon top ten sits at
+# n_eff 1.0-5.6 with ratings equal to single races.
+#
+# 45 days is right for a sprinter racing weekly and meaningless for an event
+# contested annually. POW = 0 is the current global behaviour exactly.
+SEEDHLPOW <- .env_num("SEQ_SEEDHLPOW", 0)
 TAG <- Sys.getenv("SEQ_TAG","baseline")
 # SEQ_WINP  1 = compute win probabilities and Brier. Default OFF: the draws cost
 #           ~60s of a ~360s run (measured) and nothing reads the accumulators.
@@ -332,7 +346,29 @@ if (SEEDON) {
   sd0 <- ca[fd, on = .(athlete_id, event_id), allow.cartesian = TRUE, nomatch = NULL]
   # STRICTLY earlier than the first scored race, or the gain is leakage
   sd0 <- sd0[date < first_date]
-  sd0[, w := 2^(-as.numeric(first_date - date) / SEEDHL)]
+  # per-event half-life, from the observed race frequency of the event itself
+  hl_ev <- setNames(rep(SEEDHL, length(MUv)), names(MUv))
+  if (SEEDHLPOW != 0) {
+    g <- d[order(athlete_id, event_id, date)]
+    g[, .gap := as.numeric(date - shift(date)), by = .(athlete_id, event_id)]
+    fq <- g[is.finite(.gap) & .gap > 0, .(mg = stats::median(.gap)), by = event_id]
+    ref <- stats::median(fq$mg)
+    fq[, hl := SEEDHL * (mg / ref)^SEEDHLPOW]
+    hl_ev[fq$event_id] <- pmin(pmax(fq$hl, 7), 1460)
+    cat(sprintf("[%s] seed half-life by event (pow %.2f): %.0f-%.0f days, median %.0f
+",
+        TAG, SEEDHLPOW, min(hl_ev), max(hl_ev), stats::median(hl_ev)))
+    sl <- sort(hl_ev)
+    cat(sprintf("[%s]   shortest: %s | longest: %s
+", TAG,
+        paste(sprintf("%s %.0fd", sub("^AT-","",names(sl)[1:3]), sl[1:3]), collapse=", "),
+        paste(sprintf("%s %.0fd", sub("^AT-","",names(sl)[(length(sl)-2):length(sl)]),
+                      sl[(length(sl)-2):length(sl)]), collapse=", ")))
+    rm(g, fq)
+  }
+  sd0[, hl_e := hl_ev[event_id]]
+  sd0[!is.finite(hl_e), hl_e := SEEDHL]
+  sd0[, w := 2^(-as.numeric(first_date - date) / hl_e)]
   sg <- sd0[, .(r0 = sum(w * perf) / sum(w), ne0 = min(sum(w), SEEDNE),
                 best0 = max(perf), last0 = max(date)), by = .(athlete_id, event_id)]
   sg <- sg[is.finite(r0) & is.finite(ne0)]
@@ -737,7 +773,7 @@ res <- data.table(tag = TAG,
   brier25 = if (WINP && acc$y25["npred"] > 0) acc$y25["brier"]/acc$y25["npred"] else NA_real_,
   brier26 = if (WINP && acc$y26["npred"] > 0) acc$y26["brier"]/acc$y26["npred"] else NA_real_,
   maxplace = MAXPLACE, ceil = CEIL, seeded = n_seeded, huber = HUBER,
-  seedhl = SEEDHL, seedne = SEEDNE, k0 = K0, kappa = KAPPA, kfloor = KFLOOR,
+  seedhl = SEEDHL, seedhlpow = SEEDHLPOW, seedne = SEEDNE, k0 = K0, kappa = KAPPA, kfloor = KFLOOR,
   kpow = KPOW, ceiladj = CEILADJ,
   w_maj = W_MAJ, w_t1 = W_T1, w_t2 = W_T2, w_rnd = W_RND,
   cens=CENS, age=AGEF, stale=STALE, xev=XEV, kt1=KT1, windcs=WINDCS,
