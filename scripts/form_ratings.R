@@ -196,8 +196,20 @@ SHOCK_TRIM <- .env_num("SEQ_SHOCK_TRIM", 0.20)
 # estimate rests on, m / (m + SEQ_SHOCK_K), which does not care how many
 # strangers were also in the race - because a shock measured off 6 athletes is
 # equally well measured whether the field is 8 or 80.
-SHOCK_MINN <- .env_num("SEQ_SHOCK_MINN", 3)
-SHOCK_W    <- Sys.getenv("SEQ_SHOCK_W", "share")
+# ADOPTED 2026-08-19 after a five-point sweep. Weighted-sealed by K:
+#   0.5 -> 72.997 | 1 -> 73.025 | 2 -> 73.039 | 4 -> 73.043, against the old
+# share weighting at 73.006 and lowering the floor alone at 73.010. K=4 edges
+# the weighted metric by 0.004 (noise) while losing 0.033 on raw, so K=2 is the
+# interior optimum: +0.009 raw and +0.033 weighted over the previous default.
+#
+# The aggregate understates it because the corpus is 98% T2 track, where fields
+# are mostly established athletes and the share multiplier barely bit. By family
+# the effect lands where the mechanism says it should - road +0.630 (4 of 4
+# events up, none down) and distance +0.245 (7 of 9), with 10,000m M +0.804,
+# 5000m M +0.336 and 5000m W +0.320 all clearing their noise floors. Every
+# family that lost sits inside its own floor.
+SHOCK_MINN <- .env_num("SEQ_SHOCK_MINN", 2)
+SHOCK_W    <- Sys.getenv("SEQ_SHOCK_W", "kappa")
 SHOCK_K    <- .env_num("SEQ_SHOCK_K", 2)
 stopifnot("SEQ_SHOCK_W must be 'share' or 'kappa'" = SHOCK_W %chin% c("share", "kappa"))
 # SEQ_SLOPE  fit a per-race SLOPE as well as a shift. 0 = shift only (original).
@@ -436,7 +448,10 @@ SIM <- new.env(hash = TRUE, parent = emptyenv())
 if (XB_MINCOR > 0) {
   # Overridable so a rebuilt matrix can be tested against the deployed one in
   # the same batch, rather than by swapping files under a running experiment.
-  sf <- file.path(SC, Sys.getenv("SEQ_SIMFILE", "event_similarity.parquet"))
+  # DEFAULT CHANGED 2026-08-19 to the specialist matrix: the old 200-pair file
+  # contained no road or walk events at all, and its correlations were inflated
+  # by athletes a combined event forced into both events.
+  sf <- file.path(SC, Sys.getenv("SEQ_SIMFILE", "event_similarity_spec.parquet"))
   # Deliberately a hard stop, not a fallback to the family gate. SEQ_XB_MINCOR
   # is ON BY DEFAULT now, and data files are gitignored, so a fresh clone or a CI
   # runner will land here - and quietly running a DIFFERENT model than the one
