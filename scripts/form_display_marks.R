@@ -179,7 +179,29 @@ st <- merge(st, nm, by = "athlete_id", all.x = TRUE)
 # them would silently tighten the window every time the corpus is extended.
 ASOF        <- max(st$last, na.rm = TRUE)
 ACT_ATHLETE <- as.integer(Sys.getenv("FORM_ACT_ATHLETE_D", "210"))  # ~7 months
-ACT_EVENT   <- as.integer(Sys.getenv("FORM_ACT_EVENT_D",   "330"))  # ~11 months
+# WIDENED 330 -> 365 on 2026-08-18. Pete asked whether 330 was too strict. It
+# was, though not for the reason offered: staleness decays `n_eff`, never `R`,
+# so a rating sits at full strength indefinitely and the window is the ONLY
+# thing holding a stale athlete down. Widening is a real risk, not a free option.
+#
+# Swept against World Athletics on the current corpus, athlete-recency held at
+# 210 days (precision@10 / WA #1 shown):
+#   330  70.2 / 92.9     390  70.0 / 97.7     550  69.3 / 97.7
+#   345  70.0 / 97.7     400  70.0 / 97.7     730  69.3 / 97.7
+#   360  70.0 / 97.7     420  69.5 / 97.7     900  68.2 / 97.7
+# Having the world number one on the page at all jumps 92.9 -> 97.7 at 345 days
+# and precision holds flat to 400 before a cliff at 420. Missing the actual #1
+# is a worse failure than one extra wrong name in a top ten, and 0.2 pp is about
+# one slot. Two years costs 0.9 pp for nothing further.
+#
+# 400, not 365. Pete's reason, and it is the better one: an athlete who contests
+# an event ANNUALLY will often exceed a year between runnings, because the
+# calendar moves - a championship a few weeks later than last time, a meeting
+# shifted in the schedule. A 365-day window drops exactly those athletes in the
+# weeks before they next contest the event. 400 gives five weeks of slack for
+# calendar drift, still sits on the 70.0 / 97.7 plateau, and stays clear of the
+# cliff at 420.
+ACT_EVENT   <- as.integer(Sys.getenv("FORM_ACT_EVENT_D",   "400"))  # a year plus calendar slack
 ACT_MIN_N   <- as.numeric(Sys.getenv("FORM_ACT_MIN_NEFF",  "1"))
 la <- h[, .(last_any = max(date)), by = athlete_id]
 la[, athlete_id := as.character(athlete_id)]

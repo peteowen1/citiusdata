@@ -152,7 +152,14 @@ RULES <- list(
   list(class = "olympics",       pat = "Olympic Games|XXX+ Olympic"),
   list(class = "world_champs",   pat = "World Athletics Championships|IAAF World Championships(?! in Athletics.*Indoor)|World Championships in Athletics"),
   list(class = "world_indoor",   pat = "World (Athletics )?Indoor Championships|IAAF World Indoor"),
-  list(class = "world_other",    pat = "World Athletics (Relays|Cross Country|Race Walking|Road Running)|World Half Marathon|World Cross Country|World Race Walking|World Mountain"),
+  # "World ... Championships" is a global title; "World ... Tour" is a circuit,
+  # and tiering a tour meeting as a world championship is what the strength
+  # anchor caught: World Race Walking Tour 2023 and 2025 came through here at
+  # strength 25.4 and 32.5 against a T1 floor of 40. The Team Championships is
+  # the real title event and still matches. Tours are left to the ordinary
+  # classifier, which puts them where a circuit meeting belongs.
+  list(class = "world_other",    pat = "World Athletics (Relays|Cross Country|Race Walking|Road Running)|World Half Marathon|World Cross Country|World Race Walking|World Mountain",
+       exclude = "\\bTour\\b"),
   list(class = "commonwealth",   pat = "Commonwealth Games"),
   list(class = "asian_games",    pat = "Asian Games"),
   list(class = "panam_games",    pat = "Pan American Games"),
@@ -216,8 +223,13 @@ cat_of <- function(x) {
     elite <- r$class %in% c("olympics","world_champs","world_indoor","commonwealth",
                             "continental","diamond_league")
     never <- grepl(NEVER_ELITE, x, ignore.case = TRUE, perl = TRUE)
+    # a rule may carry its own exclusion, for the case where a pattern is right
+    # about the words and wrong about the event - "World Race Walking Tour"
+    # matches the championship pattern and is a circuit, not a title
+    own_ex <- if (!is.null(r$exclude))
+      grepl(r$exclude, x, ignore.case = TRUE, perl = TRUE) else FALSE
     hit <- is.na(out) & grepl(r$pat, x, ignore.case = TRUE, perl = TRUE) &
-      !(senior & excluded) & !(elite & never)
+      !(senior & excluded) & !(elite & never) & !own_ex
     out[hit] <- r$class
   }
   out[is.na(out)] <- "unclassified"
