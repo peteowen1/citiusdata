@@ -211,12 +211,22 @@ cat(sprintf("active: %s of %s athlete-events (as at %s; athlete within %dd, even
 # while their raw rank sits outside the top 20 - a systematic bias against
 # athletes who peak in championships, not one anecdote.
 #
-# KNOWN COST, accepted: 55 rows newly enter a top ten, 91% on marks under a year
-# old, about 3 on marks over two years. The clean bad case is Jack Rayner,
-# 10,000m, 35th -> 9th on a March 2024 mark a minute faster than anything else
-# in his record. The fix is to blend toward a high percentile rather than the
-# single best - that keeps Kerr (five sub-3:30s) and drops Rayner (one outlier).
-# Not built yet; see NEXT-STEPS.
+# KNOWN COST: 55 rows newly enter a top ten, 91% on marks under a year old,
+# about 3 on marks over two years.
+#
+# The obvious fix - blend toward a top-k mean rather than the single best - was
+# BUILT AND MEASURED, and does not work. Against World Athletics at display
+# time, precision@10 falls monotonically: 70.2% single-best, 69.8% top-3, 69.0%
+# top-5, 68.8% top-3-with-decay, and it is worst in the families it was meant to
+# help (middle 65.0 -> 62.5, distance 60.0 -> 56.7). Of 37 athletes it removes
+# from a top ten, a sample split 2 clean catches, 1 borderline, 1 unrelated
+# filter confound and 1 wrongful demotion of a genuinely consistent thrower. See
+# SEQ_BEST_K in form_ratings.R, which stays at 1.
+#
+# An earlier version of this comment cited Jack Rayner going 35th -> 9th as the
+# bad case. That was measured on the pre-harvest corpus and is now stale: his
+# 28:15.73 from 2025-12-13 is in the data and he sits 19th under this rule with
+# no change needed.
 #
 # DISPLAY HONESTY, unresolved: the mark columns are still derived from R, so a
 # reader can see an athlete ranked above someone showing a faster typical time.
