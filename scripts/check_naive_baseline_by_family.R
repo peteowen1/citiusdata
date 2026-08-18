@@ -24,8 +24,30 @@ h[, p_mean3    := shift(frollmean(perf, 3, na.rm = TRUE), 1L), by = .(athlete_id
 h[, p_seasbest := shift(cummax(perf), 1L),                    by = .(athlete_id, event_id, yr)]
 setorder(h, date, race_key)
 
-PRED <- c(model = "r_pre", season_best = "p_seasbest", mean_last3 = "p_mean3",
-          last = "p_last", career_best = "p_best")
+# A pure head-to-head rating, from build_h2h_rating.R. It knows only who beat
+# whom - no times at all - which is exactly the comparison worth having, because
+# the form model is fitted on times and scored on ordering.
+hf <- file.path(OUT, sprintf("h2h_history_%s.parquet", TAG))
+if (file.exists(hf)) {
+  e <- setDT(read_parquet(hf, col_select = c("race_key","athlete_id","event_id",
+                                             "elo_pre","elo_n")))
+  e[, athlete_id := as.character(athlete_id)]
+  # only where a prior rating exists, matching how every other predictor is
+  # treated - a debut carries no information for any of them
+  e[elo_n < 1, elo_pre := NA_real_]
+  h <- merge(h, e[, .(race_key, athlete_id, event_id, p_h2h = elo_pre)],
+             by = c("race_key", "athlete_id", "event_id"), all.x = TRUE)
+  cat(sprintf("head-to-head rating joined on %.0f%% of rows
+",
+              100 * mean(!is.na(h$p_h2h))))
+} else {
+  h[, p_h2h := NA_real_]
+  cat("no head-to-head file - run build_h2h_rating.R
+")
+}
+
+PRED <- c(model = "r_pre", head_to_head = "p_h2h", season_best = "p_seasbest",
+          mean_last3 = "p_mean3", last = "p_last", career_best = "p_best")
 s <- h[seen == TRUE & place <= 12]
 s <- s[complete.cases(s[, ..PRED])]
 s[, nf := .N, by = race_key]; s <- s[nf >= 2]
@@ -65,7 +87,9 @@ byfam <- rbindlist(lapply(sort(unique(sealed$family)), function(f) {
 np <- byfam[predictor == "model", .(family, pairs)]
 w <- dcast(byfam, family ~ predictor, value.var = "conc")
 w <- merge(np, w, by = "family")
-w <- w[, .(family, pairs, model, season_best, mean_last3, last, career_best)]
+w <- w[, .(family, pairs, model, head_to_head, season_best, mean_last3,
+           last, career_best)]
+w[, h2h_vs_model := round(head_to_head - model, 2)]
 w[, edge_over_SB := round(model - season_best, 2)]
 setorder(w, -edge_over_SB)
 print(w)
