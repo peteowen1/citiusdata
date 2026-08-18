@@ -24,7 +24,13 @@ print(me[, .(event_id, rk, R = round(R, 4), pred_mark = round(pred_mark, 2),
 aid <- unique(me$athlete_id)
 stopifnot("expected a single athlete id" = length(aid) == 1)
 
-h <- setDT(read_parquet(file.path(D, "seqv3_history_final.parquet")))
+# The history to trace and the published table to look the athlete up in are
+# separate tags: a fresh experimental arm has a history but no display table.
+HTAG <- Sys.getenv("TRACE_TAG", "final")
+h <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", HTAG))))
+cat(sprintf("
+tracing history arm: %s
+", HTAG))
 k <- h[athlete_id == aid]
 cat(sprintf("\nraces in the corpus: %d across %d events\n", nrow(k), uniqueN(k$event_id)))
 print(k[, .N, by = event_id][order(-N)])
@@ -35,13 +41,39 @@ fmt <- function(s) sprintf("%d:%05.2f", floor(s / 60), s %% 60)
 
 e <- k[event_id == EV][order(date)]
 stopifnot("no races in that event" = nrow(e) > 0)
-e[, `:=`(surprise = perf - r_pre,
+# The engine feeds (perf - r_pre) - shock to the update, NOT perf - r_pre. This
+# script printed the raw deviation and called it "surprise" until 2026-08-18,
+# when reading it that way produced a wrong diagnosis of Almgren's 10,000m: his
+# 28:53 win showed -0.0412, of which the shared race shock accounted for part.
+# The shock cannot be reconstructed after the fact - it is a trimmed mean over
+# ESTABLISHED athletes scaled by their share of the field - so the engine now
+# stores it. Older histories lack the column; say so rather than fall back to
+# the raw deviation under a label that implies otherwise.
+HAS <- all(c("shock", "surprise", "k") %in% names(h))
+if (!HAS) cat("
+NOTE: this history predates stored shock/surprise/k, so only the
+",
+              "      RAW deviation (perf - r_pre) can be shown. It is not what
+",
+              "      moved the rating. Re-run the arm to get exact numbers.
+", sep = "")
+e[, `:=`(raw_dev = perf - r_pre,
          mark = secs(perf), rating_before = secs(r_pre))]
 cat(sprintf("\n=== every %s race, oldest first ===\n", EV))
 cat("surprise is (perf - r_pre) on the rating scale: negative = ran worse than\n")
 cat("the rating expected. mark and rating are the same numbers as times.\n\n")
-print(e[, .(date, rc, place, mark = fmt(mark), rating_before = fmt(rating_before),
-            surprise = round(surprise, 4), n_eff = round(n_eff, 1))])
+if (HAS) {
+  # rating_moved is what this race actually did: k x net surprise, on the
+  # rating scale. That is the only column that explains a ranking.
+  e[, rating_moved := k * surprise]
+  print(e[, .(date, rc, place, mark = fmt(mark), rating_before = fmt(rating_before),
+              raw_dev = round(raw_dev, 4), shock = round(shock, 4),
+              surprise = round(surprise, 4), k = round(k, 3),
+              rating_moved = round(rating_moved, 4), n_eff = round(n_eff, 1))])
+} else {
+  print(e[, .(date, rc, place, mark = fmt(mark), rating_before = fmt(rating_before),
+              raw_dev = round(raw_dev, 4), n_eff = round(n_eff, 1))])
+}
 
 cat("\n=== the races that cost him most ===\n")
 print(head(e[order(surprise), .(date, rc, place, mark = fmt(mark),

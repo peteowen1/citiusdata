@@ -411,7 +411,9 @@ XB_NSIB <- max(1L, as.integer(.env_num("SEQ_XB_NSIB", 3)))
 stopifnot("SEQ_XB_PICK must be 'evidence' or 'cor'" = XB_PICK %in% c("evidence", "cor"))
 SIM <- new.env(hash = TRUE, parent = emptyenv())
 if (XB_MINCOR > 0) {
-  sf <- file.path(SC, "event_similarity.parquet")
+  # Overridable so a rebuilt matrix can be tested against the deployed one in
+  # the same batch, rather than by swapping files under a running experiment.
+  sf <- file.path(SC, Sys.getenv("SEQ_SIMFILE", "event_similarity.parquet"))
   # Deliberately a hard stop, not a fallback to the family gate. SEQ_XB_MINCOR
   # is ON BY DEFAULT now, and data files are gitignored, so a fresh clone or a CI
   # runner will land here - and quietly running a DIFFERENT model than the one
@@ -424,15 +426,28 @@ if (XB_MINCOR > 0) {
          " is missing.\n  Build it:  Rscript citiusdata/scripts/build_event_similarity.R",
          "\n  Or ask for the old family gate explicitly:  SEQ_XB_MINCOR=0")
   sm <- setDT(read_parquet(sf))
-  sm <- sm[is.finite(cor)]
+  # Prefer the RELIABILITY-SHRUNK correlation when the matrix carries one. A raw
+  # correlation treats a pair measured on 5 shared athletes the same as one
+  # measured on 2,699: 100m against 3000m steeplechase came out at r = 0.979 on
+  # five athletes, which is significant and meaningless. cor_use shrinks toward
+  # zero on sample size in Fisher-z space, so full coverage costs nothing - a
+  # pair with no real evidence contributes nothing rather than being excluded.
+  simcol <- if ("cor_use" %chin% names(sm)) "cor_use" else "cor"
+  if (simcol == "cor")
+    cat(sprintf("[%s] NOTE: %s carries no cor_use column, so the raw correlation\n",
+                TAG, basename(sf)),
+        "        is used and pairs resting on a handful of athletes are NOT\n",
+        "        down-weighted.\n", sep = "")
+  sm[, corv := as.numeric(get(simcol))]
+  sm <- sm[is.finite(corv)]
   stopifnot("the similarity matrix is empty" = nrow(sm) > 0)
   for (i in seq_len(nrow(sm))) {
     e1 <- as.character(sm$e1[i]); e2 <- as.character(sm$e2[i])
-    assign(if (e1 < e2) paste0(e1, "|", e2) else paste0(e2, "|", e1), sm$cor[i], envir = SIM)
+    assign(if (e1 < e2) paste0(e1, "|", e2) else paste0(e2, "|", e1), sm$corv[i], envir = SIM)
   }
-  XB_PAIRS <- sum(sm$cor >= XB_MINCOR)
-  cat(sprintf("[%s] similarity gate: %d event pairs, %d at or above %.2f\n",
-              TAG, nrow(sm), XB_PAIRS, XB_MINCOR))
+  XB_PAIRS <- sum(sm$corv >= XB_MINCOR)
+  cat(sprintf("[%s] similarity: %s | %d pairs, %d at or above %.2f | column %s\n",
+              TAG, basename(sf), nrow(sm), XB_PAIRS, XB_MINCOR, simcol))
   # A gate that admits NOTHING is not a configuration, it is a broken run. The
   # blend would no-op for every athlete while the results row still recorded
   # xblend=1, so an arm with a stale similarity file is indistinguishable from
@@ -479,7 +494,8 @@ if (nzchar(EVPARAM)) {
   EVP[, event_id := as.character(event_id)]
   ovr <- setdiff(names(EVP), "event_id")
   # a mistyped column would otherwise be silently ignored by .ev_vec()
-  known <- c("k0", "kfloor", "ceil", "huber", "xblend", "seedhl")
+  known <- c("k0", "kfloor", "ceil", "huber", "xblend", "seedhl",
+             "kappa", "cens", "kt1", "atten")
   if (length(setdiff(ovr, known)))
     stop(sprintf("SEQ_EVPARAM has unknown column(s): %s (known: %s)",
                  paste(setdiff(ovr, known), collapse = ", "),
@@ -536,6 +552,16 @@ WINP <- Sys.getenv("SEQ_WINP","") != ""
 # 0.02, so adopting it required no re-tuning.
 MAXPLACE <- as.integer(.env_num("SEQ_MAXPLACE", 12))
 HIST <- Sys.getenv("SEQ_HIST","") != ""
+# Identify the engine that produced a run, so two arms can be PROVED comparable
+# rather than assumed so. Hash the file, not git: this script is routinely run
+# uncommitted, so a commit sha would say nothing about what actually ran.
+ENGINE_SRC <- local({
+  f <- tryCatch(normalizePath(sys.frame(1)$ofile), error = function(e) NA_character_)
+  if (is.na(f) || !nzchar(f)) f <- here::here("citiusdata", "scripts", "form_ratings.R")
+  f
+})
+ENGINE_SHA <- if (file.exists(ENGINE_SRC))
+  digest::digest(file = ENGINE_SRC, algo = "sha256") else "unknown"
 FROM <- as.Date("2020-01-01")
 
 cat0 <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
@@ -649,6 +675,37 @@ if (VPRIOR) {
 KFLOORv <- .ev_vec("kfloor", KFLOOR, names(MUv))
 HUBERv  <- .ev_vec("huber",  HUBER,  names(MUv))
 XBLENDv <- .ev_vec("xblend", XBLEND, names(MUv))
+# Added 2026-08-18 so the family optimiser can actually SHIP what it finds.
+# These three were swept per family and could not be applied, which made the
+# diagnosis useless: kappa controls how fast the learning rate decays with
+# evidence, cens discounts a bad heat or semi, kt1 scales learning from
+# championship races. Globally kt1 1.4 is the largest weighted-sealed gain
+# measured today (+0.054), and it is exactly the kind of thing that should
+# differ between a family where a championship is the season's only real test
+# and one where athletes meet each other fortnightly.
+# ATTENUATION. The engine's surprise is perf - r_pre, which assumes the true
+# slope of performance on rating is exactly 1. Measured over 902,925 athlete-
+# races it is 0.828, and by family it runs from 0.629 (middle) to 0.871
+# (throw). A slope below 1 means every race docks the favourite and credits the
+# outsider BY CONSTRUCTION - which is the favourite penalty, monotone across
+# five rating bands, and why a tactical championship winner loses rating.
+#
+# The correction adds back the part the engine over-attributes:
+#     surprise <- surprise + (1 - b) * (r_pre - field mean)
+# Centring on the field mean matters: a shock shared by the whole field cancels
+# out of every within-race comparison, so only the athlete's rating RELATIVE to
+# the field can reorder anything. Adding an uncentred term would just shift all
+# ratings in the race, which is inert.
+#
+# 1 = off, and off is the default. Note a single GLOBAL b is close to
+# indistinguishable from scaling k0 by b, and k0 is already tuned - so a global
+# value is expected to do little. What k0 cannot express is the per-FAMILY
+# variation, which is where the measured spread is.
+ATTEN  <- .env_num("SEQ_ATTEN", 1)
+ATTENv <- .ev_vec("atten", ATTEN, names(MUv))
+KAPPAv <- .ev_vec("kappa", KAPPA, names(MUv))
+CENSv  <- .ev_vec("cens",  CENS,  names(MUv))
+KT1v   <- .ev_vec("kt1",   KT1,   names(MUv))
 
 # per-event ceiling weight: baseline plus an adjustment by event character
 CEILv <- .ev_vec("ceil", CEIL, names(MUv))
@@ -690,7 +747,35 @@ if (CEILADJ != 0) {
 # road +0.031, sprint +0.022, and exactly 0.000 in all six untouched families.
 # It also lands where the benchmark said the model was weakest: sprint was
 # +0.28 over simply sorting by season best, and hurdles was -1.09.
-FAM_K0 <- c(sprint = 1.1329, hurdles = 1.1116, road = 0.9302)
+# REVERTED 2026-08-18, hours after adopting it. A THIRD window refused it.
+#
+# Fitted on 2025 -> 2026 the keepers were sprint, hurdles and road. Refitted on
+# 2022-23 -> 2024 they are jump, throw and hurdles. Only HURDLES appears in
+# both, and sprint (-0.005 tune) and road (-0.046 tune) fail outright on the
+# earlier window. Different windows, different families, and for `huber` even
+# opposite values - distance wanted 4.5 on the later window and 99 on the
+# earlier one. That is the signature of noise, not structure.
+#
+# The arithmetic I should have done before shipping: under a null of no family
+# effect, a family is positive on two independent windows by chance 25% of the
+# time. With 9 families that is 2.25 expected. k0 produced 3, ceil 1, kfloor 1,
+# huber 4 - so two of the four parameters produced FEWER survivors than chance
+# alone, and the two that beat it did so by about one family. "3 of 9
+# replicated" reads like evidence and is very nearly the null.
+#
+# What survived every check was the machinery, not the values:
+# optimise_family_params.R assembles per-family optima from N global runs, and
+# the end-to-end verification plus by-family scoring (gains only where fitted,
+# exactly 0.000 elsewhere) is a real test. It is the two-window filter that is
+# too weak at 9 families, and the fix is more windows rather than more
+# parameters.
+#
+# HURDLES is the one candidate with three-window support (1.15 chosen on both
+# fits). Not reinstated alone: its measured effect is +0.002 to +0.101, which is
+# inside the noise of a single family, and cherry-picking the one survivor from
+# a filter that is barely better than chance is how a null result becomes a
+# finding.
+FAM_K0 <- c()
 K0v <- setNames(rep(K0, length(VPv)), names(VPv))
 if (K0 == 0.95) {   # only apply where the incumbent they were fitted against holds
   fam_of <- reg$family[match(names(K0v), reg$event_id)]
@@ -923,7 +1008,18 @@ H <- list(race_key = character(NR), date = numeric(NR), event_id = character(NR)
           athlete_id = character(NR), r_pre = numeric(NR), r_use = numeric(NR),
           n_eff = numeric(NR),
           v_pre = numeric(NR), perf = numeric(NR), place = integer(NR),
-          rc = character(NR), seen = logical(NR))
+          rc = character(NR), seen = logical(NR),
+          # shock/surprise/k are what the engine ACTUALLY fed the update, and
+          # none of them were stored. Every athlete trace therefore printed
+          # perf - r_pre, which is the raw deviation BEFORE the shared race
+          # shock, and reading that as the thing that moved a rating produced a
+          # wrong diagnosis of Almgren's 10,000m on 2026-08-18. The shock cannot
+          # be reconstructed afterwards: it is a trimmed mean over ESTABLISHED
+          # athletes only, scaled by their share of the field, and the history
+          # records neither. Three numeric columns is a cheap price for traces
+          # that are exact.
+          shock = rep(NA_real_, NR), surprise = rep(NA_real_, NR),
+          k = rep(NA_real_, NR))
 hi <- 0L
 MAJ <- c("olympics","world_champs","european_champs","commonwealth")
 # WEIGHTED CONCORDANCE. The unweighted metric is 98% ordinary meets, so it tunes
@@ -1100,6 +1196,7 @@ for (r_ in seq_along(starts)) {
     H$v_pre[ix] <- v_pre;            H$perf[ix] <- z$perf
     H$place[ix] <- z$place;          H$rc[ix] <- z$rc
     H$seen[ix] <- seen
+    hix <- ix          # filled again below, once the update is actually known
   }
   slot <- if (yr == 2025L) "y25" else if (yr == 2026L) "y26" else NA
   if (!is.na(slot)) {
@@ -1232,13 +1329,22 @@ for (r_ in seq_along(starts)) {
     }
   }
   surprise <- (z$perf - r_pre) - corr
+  att_e <- ATTENv[[ev]]; if (is.null(att_e) || !is.finite(att_e)) att_e <- ATTEN
+  if (att_e != 1) {
+    fin <- is.finite(r_pre)
+    # a field of one rated athlete has no "relative to the field" to speak of
+    if (sum(fin) >= 3) surprise <- surprise + (1 - att_e) * (r_pre - mean(r_pre[fin]))
+  }
   k0e <- K0v[[ev]]; if (is.null(k0e) || !is.finite(k0e)) k0e <- K0
   kfl_e <- KFLOORv[[ev]]; if (is.null(kfl_e) || !is.finite(kfl_e)) kfl_e <- KFLOOR
-  kv <- pmax(k0e * KAPPA / (n_eff + KAPPA), kfl_e)
-  if (KT1 != 1 && z$meet_tier[1] == "T1_elite") kv <- pmin(kv * KT1, 0.9)
-  if (CENS < 1) {
+  kap_e <- KAPPAv[[ev]]; if (is.null(kap_e) || !is.finite(kap_e)) kap_e <- KAPPA
+  kv <- pmax(k0e * kap_e / (n_eff + kap_e), kfl_e)
+  kt1_e <- KT1v[[ev]]; if (is.null(kt1_e) || !is.finite(kt1_e)) kt1_e <- KT1
+  if (kt1_e != 1 && z$meet_tier[1] == "T1_elite") kv <- pmin(kv * kt1_e, 0.9)
+  cen_e <- CENSv[[ev]]; if (is.null(cen_e) || !is.finite(cen_e)) cen_e <- CENS
+  if (cen_e < 1) {
     neg_heat <- z$rc != "final" & surprise < 0
-    kv[neg_heat] <- kv[neg_heat] * CENS
+    kv[neg_heat] <- kv[neg_heat] * cen_e
   }
   hub_e <- HUBERv[[ev]]; if (is.null(hub_e) || !is.finite(hub_e)) hub_e <- HUBER
   if (hub_e > 0) {
@@ -1246,6 +1352,8 @@ for (r_ in seq_along(starts)) {
     ex <- is.finite(lim) & lim > 0 & abs(surprise) > lim
     if (any(ex)) kv[ex] <- kv[ex] * (lim[ex] / abs(surprise[ex]))
   }
+  # after censoring and Huber clipping, so k is the rate that was really used
+  if (HIST) { H$shock[hix] <- corr; H$surprise[hix] <- surprise; H$k[hix] <- kv }
   for (m in seq_along(a)) {
     if (!seen[m]) {
       p0 <- z$perf[m]
@@ -1414,5 +1522,22 @@ if (HIST) {
   cat(sprintf("[%s] history: %s athlete-races (races with <3 athletes are skipped\n",
               TAG, format(nrow(hd), big.mark = ",")))
   cat("        by the loop entirely, so this is scored racing, not every result)\n")
+  # PROVENANCE. Added 2026-08-18, the day it was needed. A per-family table was
+  # built comparing arms run at 18:32 against a baseline run at 15:02, with this
+  # script edited at 17:20 in between - so every delta in it was the parameter
+  # PLUS the edit, and the three families that seemed to move without being
+  # fitted were exactly the ones whose FAM_K0 override that edit removed. Two
+  # parquets, same schema, same row count, silently incomparable, with nothing
+  # in the output saying so. score_by_event.R reads this stamp and refuses to
+  # difference arms built by different engines.
+  meta <- list(tag = TAG,
+               written = format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+               engine = basename(ENGINE_SRC),
+               engine_sha = ENGINE_SHA,
+               rows = nrow(hd),
+               env = as.list(Sys.getenv(grep("^SEQ_", names(Sys.getenv()), value = TRUE))))
+  writeLines(jsonlite::toJSON(meta, auto_unbox = TRUE, pretty = TRUE),
+             file.path(SC, sprintf("seqv3_meta_%s.json", TAG)))
+  cat(sprintf("[%s] engine sha %s\n", TAG, substr(ENGINE_SHA, 1, 12)))
 }
 write_parquet(st[, !"k"], file.path(SC, sprintf("seqv2_state_%s.parquet", TAG)))

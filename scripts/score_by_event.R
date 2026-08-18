@@ -33,6 +33,48 @@ base <- tags[1]
 cat(sprintf("base arm: %s | comparing: %s | years: %s\n",
             base, paste(tags[-1], collapse = ", "), paste(YEARS, collapse = ", ")))
 
+# --- are these arms even comparable? -----------------------------------------
+# 2026-08-18: a per-family table was built from arms run at 18:32 against a
+# baseline run at 15:02, with form_ratings.R edited at 17:20 in between. Every
+# delta in it was the parameter PLUS the edit, and three families appeared to
+# move without being fitted because their FAM_K0 override had been removed by
+# that edit. Two parquets, same schema, same row count, silently incomparable -
+# the mismatch was only visible in file mtimes, which nothing checks.
+#
+# Arms written by an engine that stamps seqv3_meta_<tag>.json can be checked
+# properly. Arms older than that stamp cannot, so fall back to mtime, which is
+# weak evidence but is exactly the evidence that would have caught this one.
+meta_of <- function(tag) {
+  f <- file.path(D, sprintf("seqv3_meta_%s.json", tag))
+  if (file.exists(f)) jsonlite::fromJSON(f) else NULL
+}
+mt <- vapply(tags, function(tg)
+  as.numeric(file.mtime(file.path(D, sprintf("seqv3_history_%s.parquet", tg)))),
+  numeric(1))
+ms <- lapply(tags, meta_of); names(ms) <- tags
+shas <- vapply(ms, function(m) if (is.null(m$engine_sha)) NA_character_ else m$engine_sha, "")
+if (all(!is.na(shas))) {
+  if (uniqueN(shas) > 1) {
+    print(data.table(arm = tags, engine_sha = substr(shas, 1, 12),
+                     written = vapply(ms, function(m) m$written, "")))
+    stop("these arms were built by DIFFERENT versions of form_ratings.R - the ",
+         "deltas would be the parameter plus the code change. Rebuild the base.")
+  }
+  cat(sprintf("provenance: all %d arms built by engine sha %s\n",
+              length(tags), substr(shas[1], 1, 12)))
+} else {
+  eng <- file.path(here::here("citiusdata", "scripts"), "form_ratings.R")
+  spread_h <- (max(mt) - min(mt)) / 3600
+  crossed <- file.exists(eng) &&
+    as.numeric(file.mtime(eng)) > min(mt) && as.numeric(file.mtime(eng)) < max(mt)
+  cat(sprintf("provenance: %d of %d arms carry no engine stamp; histories span %.1f h\n",
+              sum(is.na(shas)), length(tags), spread_h))
+  if (crossed)
+    cat("  *** WARNING: form_ratings.R was modified BETWEEN the oldest and newest\n",
+        "     arm here. The deltas below include that edit. Rebuild the base arm\n",
+        "     on current code before drawing any conclusion from them.\n", sep = "")
+}
+
 score_arm <- function(tag) {
   f <- file.path(D, sprintf("seqv3_history_%s.parquet", tag))
   if (!file.exists(f))

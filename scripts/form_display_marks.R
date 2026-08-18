@@ -265,6 +265,166 @@ act[, R_rank := fifelse(is.finite(R_ceil), R_ceil, R)]
 cat(sprintf("ranking on R_ceil; %s of %s rows fall back to raw R (no best mark)\n",
             format(sum(!is.finite(act$R_ceil)), big.mark = ","),
             format(nrow(act), big.mark = ",")))
+# --- COMBINED EVENTS: rank on the SIMULATED score ------------------------------
+#
+# A decathlon score is a deterministic function of ten marks, and rating the
+# points total as if it were one event discards that. Simulating the total from
+# ten separately-rated component marks orders the field better on the properly
+# powered referee: Spearman against the World Athletics order over 74 ranked
+# athletes runs 0.873 for the points total and 0.879 for the simulation, and on
+# the decathlon alone 0.871 against 0.899.
+#
+# WHY A BLEND RATHER THAN THE SIMULATION OUTRIGHT. Two reasons, both measured.
+# Coverage: even after filling missing slots from the athlete own combined-event
+# marks, 15-23% of active athletes cannot be simulated, and they would vanish
+# from the table. And an athlete who has actually scored 8,500 twice needs no
+# prior - the measured total is evidence. So the simulation is the PRIOR and the
+# points-total rating updates it, weighted by how many combined events the
+# athlete has contested: w = PW / (perfs + PW).
+#
+# WHY PW = 8. Sweeping it, Spearman rises monotonically with trust in the
+# simulation - 0.871, 0.873, 0.875, 0.878, 0.879, 0.880 - while precision@10
+# holds at 75 up to PW 8 and falls to 70 at PW 20. Eight is two-thirds weight on
+# the simulation at the median, with no measured loss on either metric. The
+# monotone shape is the robust finding; the exact 8 was chosen on this referee.
+CE_ON <- Sys.getenv("FORM_CE_BLEND", "1") != "0"
+CE_PW <- as.numeric(Sys.getenv("FORM_CE_PRIOR_W", "8"))
+CE_EV <- c("AT-Decathlon-M", "AT-Heptathlon-M", "AT-Heptathlon-W", "AT-Pentathlon-W")
+if (CE_ON && any(act$event_id %chin% CE_EV)) {
+  fsim <- file.path(OUT, "combined_simulated.parquet")
+  fcmp <- file.path(OUT, "combined_components.parquet")
+  # a silently skipped blend would publish the old ranking while every log line
+  # said the feature was on - the same failure the cross-event blend guards
+  if (!file.exists(fsim) || !file.exists(fcmp))
+    stop("FORM_CE_BLEND is on but the combined-event artefacts are missing.\n",
+         "  Build them:  Rscript citiusdata/scripts/build_combined_components.R\n",
+         "               Rscript citiusdata/scripts/build_combined_simulation.R\n",
+         "  Or turn it off explicitly:  FORM_CE_BLEND=0")
+  csim <- setDT(read_parquet(fsim))[, .(event_id = ce, athlete_id = as.character(athlete_id),
+                                        sim_mean, sim_sd)]
+  ccmp <- setDT(read_parquet(fcmp))
+  cper <- unique(ccmp[complete == TRUE, .(tid, ce, athlete_id = as.character(athlete_id))])[
+    , .(ce_perfs = .N), by = .(event_id = ce, athlete_id)]
+  act <- merge(act, csim, by = c("event_id", "athlete_id"), all.x = TRUE)
+  act <- merge(act, cper, by = c("event_id", "athlete_id"), all.x = TRUE)
+  act[is.na(ce_perfs), ce_perfs := 0]
+  # blend in z space within event, then map back so R_rank keeps its units
+  act[event_id %chin% CE_EV,
+      `:=`(.mu = mean(R_rank), .sd = stats::sd(R_rank)), by = event_id]
+  act[event_id %chin% CE_EV & is.finite(.sd) & .sd > 0,
+      .zt := (R_rank - .mu) / .sd]
+  act[event_id %chin% CE_EV & is.finite(sim_mean),
+      .zs := (sim_mean - mean(sim_mean)) / stats::sd(sim_mean), by = event_id]
+  act[, .wc := fifelse(event_id %chin% CE_EV & is.finite(.zs) & is.finite(.zt),
+                       CE_PW / (ce_perfs + CE_PW), 0)]
+  moved_ce <- act[.wc > 0]
+  act[.wc > 0, R_rank := .mu + .sd * ((1 - .wc) * .zt + .wc * .zs)]
+  cat(sprintf("combined-event blend: %s of %s combined-event rows re-ranked on the\n",
+              format(nrow(moved_ce), big.mark = ","),
+              format(sum(act$event_id %chin% CE_EV), big.mark = ",")),
+      sprintf("  simulated score (prior weight %.0f, median weight %.2f on the simulation)\n",
+              CE_PW, if (nrow(moved_ce)) stats::median(moved_ce$.wc) else NA_real_), sep = "")
+  stopifnot("the combined-event blend moved no rows at all" = nrow(moved_ce) > 0)
+  act[, c(".mu", ".sd", ".zt", ".zs", ".wc") := NULL]
+}
+
+# --- BORROW FROM CORRELATED EVENTS, for thin records only --------------------
+#
+# WHY HERE AND NOT IN THE ENGINE. form_ratings.R has a cross-event blend, and it
+# CANNOT reach a published ranking: it modifies r_use, which is loop-local and
+# used only to order a field while scoring, while the state table computes
+# R_ceil from R and the best mark alone. Verified 2026-08-18 - Barega's 10,000m
+# rating came out byte-identical at similarity gates 0.80, 0.50 and 0.30. No
+# engine-side setting can move a rank, so the blend has to happen here.
+#
+# WHAT IT FIXES. Almgren won the European 10,000m in 27:23 off slow tactical
+# wins and ranked 16th; Barega sat 2nd on 2.77 races and an 11-month-old result.
+# Both are thin records where a correlated event knows more than the event
+# itself does.
+#
+# WHY THE EVIDENCE CAP MATTERS MOST. Blending everyone costs precision@10
+# (69.1 -> 68.4 at xb 1.0). Blending only athletes with n_eff <= MAXN recovers
+# all of it - every capped configuration beat its uncapped sibling across a
+# 24-point sweep. A deep record has nothing to learn from a sibling event.
+#
+# MEASURED against World Athletics as an outside referee (check_export_blend.R):
+#   precision@10   69.1 -> 69.1     WA #1 shown   97.7 -> 97.7
+#   Barega 10,000m    2nd -> 4th    Almgren 10,000m   16th -> 9th
+# HONEST CAVEAT: the specific settings below tie the baseline and were CHOSEN on
+# that metric across 24 configurations, so 69.1 is an in-sample tie. What is not
+# selected is the shape - capping helped everywhere, and both named athletes
+# move the right way at every setting tested.
+#
+# THE MATRIX MATTERS AS MUCH AS THE SETTINGS. With the old 200-pair matrix, which
+# contained no road or walk events at all, Barega does not move at ALL: his
+# 5000m rating sits outside the 400-day window, so he had no usable sibling. It
+# is the road events in event_similarity_all.parquet that let his half marathon
+# and 10km reach his 10,000m.
+#
+# Ratings are z-scored WITHIN event before blending - a 10,000m rating and a
+# marathon rating are not comparable numbers - then mapped back to the event's
+# own scale, so everything downstream is unchanged in units.
+XB_ON     <- Sys.getenv("FORM_XBLEND", "1") != "0"
+# SPECIALISTS ONLY. Measured 2026-08-18: a pair's correlation is systematically
+# inflated by athletes a combined event forced into both events, and the effect
+# is concentrated in exactly the cross-family transfers this blend exists to use
+# (-0.064 cross-family against -0.020 within). 800m/Heptathlon read 0.631 over
+# 1,569 shared athletes and collapses to 0.002 over 13 specialists; Javelin/Long
+# Jump 0.411 -> 0.000; even Discus/Shot Put runs 0.869 against 0.486 over 1,147
+# actual throwers. 79 pairs disappear entirely - 800m/Shot Put at 0.362 rested on
+# 2,006 shared athletes, every one a heptathlete.
+# Precision@10 is identical on either matrix (69.1), so this buys correctness at
+# no measured cost. event_similarity_all.parquet is kept for comparison.
+XB_SIMF   <- Sys.getenv("FORM_XB_SIMFILE", "event_similarity_spec.parquet")
+XB_MINCOR <- as.numeric(Sys.getenv("FORM_XB_MINCOR", "0.30"))
+XB_STR    <- as.numeric(Sys.getenv("FORM_XB",        "1.0"))
+XB_NSIB   <- as.integer(Sys.getenv("FORM_XB_NSIB",   "6"))
+XB_MAXN   <- as.numeric(Sys.getenv("FORM_XB_MAXN",   "8"))
+if (XB_ON) {
+  simf <- file.path(OUT, XB_SIMF)   # OUT is this script's data dir, not D
+  # Deliberately a hard stop. A silently skipped blend would publish the old
+  # ranking while every log line said the feature was on, which is how a knob
+  # that changes nothing gets read as a null result.
+  if (!file.exists(simf))
+    stop("FORM_XBLEND is on but ", XB_SIMF, " is missing.\n",
+         "  Build it:  Rscript citiusdata/scripts/build_event_similarity.R\n",
+         "  Or turn the blend off explicitly:  FORM_XBLEND=0")
+  sim <- setDT(read_parquet(simf))
+  scol <- if ("cor_use" %chin% names(sim)) "cor_use" else "cor"
+  sim[, corv := as.numeric(get(scol))]
+  sim <- sim[is.finite(corv) & corv >= XB_MINCOR]
+  if (!nrow(sim))
+    stop("no event pair reaches FORM_XB_MINCOR=", XB_MINCOR, " in ", XB_SIMF)
+  sim2 <- rbindlist(list(sim[, .(ev = e1, sv = e2, corv)],
+                         sim[, .(ev = e2, sv = e1, corv)]))
+  act[, .z := (R_rank - mean(R_rank)) / stats::sd(R_rank), by = event_id]
+  act[, `:=`(.mu = mean(R_rank), .sd = stats::sd(R_rank)), by = event_id]
+  jj <- merge(act[is.finite(.z), .(athlete_id, ev = event_id, n_eff, .z)],
+              sim2, by = "ev", allow.cartesian = TRUE)
+  jj <- merge(jj, act[is.finite(.z), .(athlete_id, sv = event_id,
+                                       z_sib = .z, ne_sib = n_eff)],
+              by = c("athlete_id", "sv"))
+  setorder(jj, athlete_id, ev, -corv)
+  jj <- jj[, head(.SD, XB_NSIB), by = .(athlete_id, ev)]
+  jj[, wt := corv^2 * ne_sib]
+  agg <- jj[, .(z_borrow = sum(wt * z_sib) / sum(wt), sibs = .N), by = .(athlete_id, ev)]
+  act <- merge(act, agg, by.x = c("athlete_id", "event_id"),
+               by.y = c("athlete_id", "ev"), all.x = TRUE)
+  act[, .w := fifelse(is.finite(z_borrow) & n_eff <= XB_MAXN & is.finite(.sd) & .sd > 0,
+                      XB_STR / (n_eff + XB_STR), 0)]
+  moved <- act[.w > 0]
+  act[.w > 0, R_rank := .mu + .sd * ((1 - .w) * .z + .w * z_borrow)]
+  cat(sprintf("cross-event blend: %s of %s rows borrowed (n_eff <= %.0f, mincor %.2f,\n",
+              format(nrow(moved), big.mark = ","), format(nrow(act), big.mark = ","),
+              XB_MAXN, XB_MINCOR),
+      sprintf("  xb %.1f, up to %d siblings from %s); median %.1f siblings used\n",
+              XB_STR, XB_NSIB, XB_SIMF,
+              if (nrow(moved)) stats::median(moved$sibs) else NA_real_), sep = "")
+  # A blend that moves nothing is a broken configuration, not a null result.
+  stopifnot("the cross-event blend moved no rows at all" = nrow(moved) > 0)
+  act[, c(".z", ".mu", ".sd", ".w") := NULL]
+}
+
 setorder(act, event_id, -R_rank)
 act[, rk := seq_len(.N), by = event_id]
 

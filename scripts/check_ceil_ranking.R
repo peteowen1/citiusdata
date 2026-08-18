@@ -36,11 +36,31 @@ wa <- wa[event_id %chin% unique(st$event_id)]
 
 # the DEPLOYED filter, copied from form_display_marks.R so this measures what is
 # actually published rather than a convenient approximation
+# READ the deployed filter rather than copy it. Both this script and
+# check_ceil_ranking.R hardcoded `last >= ASOF - 330` while form_display_marks.R
+# had moved to 400 - so the harness scored a different population than the page
+# publishes, and Barega (last 10,000m 336 days back) was missing from the check
+# entirely while sitting 3rd on the live table. A copied guard that drifts is
+# worse than no guard: it reports confidently on the wrong thing.
+.deployed_filter <- function() {
+  f <- here::here("citiusdata", "scripts", "form_display_marks.R")
+  src <- readLines(f, warn = FALSE)
+  g <- function(nm) {
+    ln <- grep(sprintf("^%s\\s*<-", nm), src, value = TRUE)[1]
+    v <- suppressWarnings(as.integer(sub('.*"([0-9]+)".*', "\\1", ln)))
+    stopifnot("could not read the deployed value" = length(ln) == 1 && is.finite(v))
+    v
+  }
+  list(athlete = g("ACT_ATHLETE"), event = g("ACT_EVENT"))
+}
+DEP <- .deployed_filter()
+cat(sprintf("deployed active filter: athlete %d days, event %d days\n",
+            DEP$athlete, DEP$event))
 last_any <- h[, .(last_any = max(date)), by = athlete_id]
 st <- merge(st, last_any, by = "athlete_id", all.x = TRUE)
 ASOF <- max(st$last, na.rm = TRUE)
-act <- st[n_eff >= 1 & !is.na(last_any) & last_any >= ASOF - 210 &
-          !is.na(last) & last >= ASOF - 330]
+act <- st[n_eff >= 1 & !is.na(last_any) & last_any >= ASOF - DEP$athlete &
+          !is.na(last) & last >= ASOF - DEP$event]
 cat(sprintf("as at %s | active %s of %s athlete-events | WA covers %d events\n",
             ASOF, format(nrow(act), big.mark = ","),
             format(nrow(st), big.mark = ","), uniqueN(wa$event_id)))

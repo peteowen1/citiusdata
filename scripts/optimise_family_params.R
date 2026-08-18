@@ -46,8 +46,18 @@ stopifnot("PARAM must be set" = nzchar(PARAM),
           "ARMS must be tag=value pairs, at least two" = length(spec) >= 2)
 arms <- data.table(tag = vapply(spec, `[`, "", 1L),
                    value = as.numeric(vapply(spec, `[`, "", 2L)))
-KNOWN <- c("k0", "kfloor", "ceil", "huber", "xblend", "seedhl")
-stopifnot("PARAM is not one the engine can override per event" = PARAM %chin% KNOWN)
+# Only these can be APPLIED per event via SEQ_EVPARAM. Others can still be
+# scored per family - the diagnosis is valid - but shipping one would need the
+# engine wiring first, so say so rather than writing a file nothing can read.
+KNOWN <- c("k0", "kfloor", "ceil", "huber", "xblend", "seedhl",
+           "kappa", "cens", "kt1")
+APPLICABLE <- PARAM %chin% KNOWN
+if (!APPLICABLE)
+  cat(sprintf("NOTE: %s cannot be overridden per event today (SEQ_EVPARAM accepts %s).
+",
+              PARAM, paste(KNOWN, collapse = ", ")),
+      "     Reporting the per-family picture only; no override file is written.
+")
 cat(sprintf("optimising %s over %d values: %s\n  incumbent: %s = %g\n",
             PARAM, nrow(arms), paste(arms$value, collapse = ", "),
             arms$tag[1], arms$value[1]))
@@ -95,12 +105,35 @@ best[, noise := 100 * sqrt(0.75 * 0.25 / pairs)]   # context, NOT a gate
 chk <- merge(best, se[, .(family, value, d_seal = delta)], by = c("family", "value"))
 chk[, keep := d_tune > 0 & d_seal > 0]
 
+# KEEPALL. Measured 2026-08-18: leaving most families at the global default
+# while moving two or three is not the safe half-measure it looks like. With
+# cross-event blending on, an UNFITTED family moves anyway - road fell 0.094 on
+# the cens arm and hurdles 0.048 on the kappa arm without either carrying an
+# override - and those collateral losses were larger than every fitted family's
+# gain bar one. Fitting every family removes the mismatch; a family with no real
+# signal should then be returned to the global value by shrinkage rather than by
+# a gate. Only honest if shrinkage actually bites - see FAM_SHRINK=effect below.
+if (identical(Sys.getenv("FAM_KEEPALL"), "1")) {
+  cat("\nFAM_KEEPALL=1: fitting every family, shrinkage decides how far each moves.\n")
+  chk[, keep := TRUE]
+}
+
 cat("\n=== best value per family, and whether it replicates ===\n")
 setorder(chk, -d_tune)
 print(chk[, .(family, value, pairs, noise = round(noise, 3),
               tune = round(d_tune, 3), sealed = round(d_seal, 3), keep)])
+# Report the REPLICATION count, not the keep count. Under FAM_KEEPALL those are
+# different and printing keep would say "9 of 9 replicated" for a table whose
+# own sealed column is visibly negative in three rows.
 cat(sprintf("\nfamilies whose best beats the incumbent on BOTH windows: %d of %d\n",
-            sum(chk$keep), nrow(chk)))
+            sum(chk$d_tune > 0 & chk$d_seal > 0), nrow(chk)))
+# A best value sitting at the edge of the swept range is not an optimum, it is
+# a range that was too narrow - the sweep never saw the far side.
+edge <- chk[value %in% range(arms$value)]
+if (nrow(edge))
+  cat(sprintf("RANGE EDGE (sweep was %g-%g, so these are not optima): %s\n",
+              min(arms$value), max(arms$value),
+              paste(sprintf("%s=%g", edge$family, edge$value), collapse = ", ")))
 cat("The noise column is context. A family is kept on sign agreement across two\n")
 cat("independent windows, not on clearing its own floor - gating on the floor is\n")
 cat("what turned a real cross-event effect into \"not supported\" on 2026-08-17.\n")
@@ -108,17 +141,38 @@ cat("what turned a real cross-event effect into \"not supported\" on 2026-08-17.
 # --- shrink toward the incumbent ---------------------------------------------
 # A family with little evidence should barely move. Same shape as the engine's
 # own shrinkage and as pool_event_params.R: w = pairs / (pairs + kappa).
-KAP <- .env_num <- as.numeric(Sys.getenv("FAM_KAPPA", "20000"))
+KAP <- as.numeric(Sys.getenv("FAM_KAPPA", "20000"))
+SHR <- Sys.getenv("FAM_SHRINK", "pairs")
 inc <- arms$value[1]
-chk[, w := pairs / (pairs + KAP)]
+stopifnot("FAM_SHRINK must be 'pairs' or 'effect'" = SHR %chin% c("pairs", "effect"))
+if (SHR == "pairs") {
+  # Shrink on sample size. The flaw, measured 2026-08-18: every family here has
+  # 200k+ pairs, so w runs 0.92-0.99 and this barely moves anything. It asks
+  # "how much data?" when the open question is "how big is the effect?".
+  chk[, w := pairs / (pairs + KAP)]
+} else {
+  # Shrink on the effect relative to its own noise: w = d^2 / (d^2 + noise^2).
+  # A family whose delta sits inside its noise floor goes most of the way back
+  # to the global value; one several floors clear barely moves. This is the
+  # noise floor used as a WEIGHT, never as a gate - gating on it is what turned
+  # a real cross-event effect into "not supported" on 2026-08-17.
+  chk[, w := d_tune^2 / (d_tune^2 + noise^2)]
+}
+chk[!is.finite(w), w := 0]
 chk[, value_shrunk := inc + w * (value - inc)]
-cat(sprintf("\nshrinkage kappa %s pairs: weights %.2f-%.2f\n",
-            format(KAP, big.mark = ","), min(chk$w), max(chk$w)))
+cat(sprintf("\nshrinkage '%s'%s: weights %.2f-%.2f\n", SHR,
+            if (SHR == "pairs") sprintf(" (kappa %s pairs)", format(KAP, big.mark = ",")) else "",
+            min(chk$w), max(chk$w)))
 print(chk[keep == TRUE, .(family, incumbent = inc, best = value,
-                          shrunk = round(value_shrunk, 4), w = round(w, 2))])
+                          shrunk = round(value_shrunk, 4), w = round(w, 2),
+                          tune = round(d_tune, 3), noise = round(noise, 3))])
 
 keepf <- chk[keep == TRUE]
-if (!nrow(keepf)) {
+if (!APPLICABLE) {
+  cat("
+Not written - this parameter has no per-event override in the engine.
+")
+} else if (!nrow(keepf)) {
   cat("\nNOTHING replicates. The honest conclusion is that this parameter does not\n")
   cat("vary by family and the global value should stand.\n")
 } else {
