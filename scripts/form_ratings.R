@@ -518,6 +518,46 @@ for (EV in evs) {
 }
 d <- rbindlist(dl, fill = TRUE); rm(dl); invisible(gc())
 d <- merge(d, cat0, by = "competition_id")
+# SPLIT PERFORMANCES, captured before the place > 0 filter below discards them.
+#
+# A split is a real MARK but not a real RACE. World Athletics records Kerr's
+# 1500m of 3:27.62 (2026-07-18) - taken passing 1500m inside the Mile he won,
+# and faster than his career best - and it reaches us with no finishing
+# position. His whole Mile field is there: 10 rows in the 1500m for that
+# competition, every one place = 0.
+#
+# THE GATE IS is.finite(mark), NOT place == 0. Measured on the corpus since
+# 2020: 115,379 rows have place = 0 and only 18,238 (15.8%) carry a mark - the
+# rest are DNF, DNS or a no-mark attempt. Pole vault alone has 5,867 such rows
+# and 100 marks, because a failed vault records no height. Admitting place = 0
+# wholesale would import abandonments as career bests.
+#
+# Where a mark does exist it is a genuine performance: place=0 1500m rows have a
+# median of 3:45.41 against 3:56.71 for placed rows - faster, as splits inside
+# elite Mile races should be - and long jump 6.85 against 6.89.
+#
+# What they are allowed to do is set out in docs/plans/split-times-2026-08-18.md:
+# raise the best mark and refresh WHEN an athlete last showed that form. They do
+# NOT count as evidence (one effort must not buy two races' worth of confidence)
+# and are NOT scored as races (a full field of splits reproduces the parent
+# race's ordering rather than adding to it).
+# ADOPTED 2026-08-18, on the ground that excluding a real performance is wrong
+# regardless of the metric. Measured anyway: Kerr's 1500m best 3:27.79 ->
+# 3:27.62, his last 1500m 2025-09-17 -> 2026-07-18, and he goes from ABSENT to
+# 14th because the recency filter can finally see him. Ratings are byte-identical
+# (raw 2026 conc 71.541 both arms) since splits are not evidence, and agreement
+# with World Athletics goes 70.2 -> 70.5. 259 bests raised, 214 dates refreshed,
+# 39 extra rows passing the active filter - small and targeted.
+USE_SPLITS <- Sys.getenv("SEQ_SPLITS", "1") != "0"
+SPLITS <- NULL
+if (USE_SPLITS) {
+  SPLITS <- d[is.finite(perf) & is.finite(mark) & !is.na(date) & date >= FROM &
+              (is.na(place) | place == 0),
+              .(split_best = max(perf), split_last = max(date)),
+              by = .(athlete_id, event_id)]
+  cat(sprintf("[%s] splits: %s athlete-events carry a marked performance with no placing\n",
+              TAG, format(nrow(SPLITS), big.mark = ",")))
+}
 d <- d[!is.na(perf) & !is.na(date) & !is.na(race_key) & !is.na(place) & place > 0 & date >= FROM]
 d <- merge(d, reg, by = "event_id", all.x = TRUE)
 d <- merge(d, wb, by = "event_id", all.x = TRUE)
@@ -1227,8 +1267,21 @@ st <- data.table(k = ids, R = vapply(ids, function(i) R[[i]], numeric(1)),
                           .best_k(BEST_K, BKV[[i]], BKD[[i]], LD[[i]])
                         else BC[[i]]
                    if (is.null(b)) NA_real_ else b }, numeric(1)))
-st[, R_ceil := fifelse(is.na(best), R, (1 - CEIL) * R + CEIL * best)]
 st[, c("athlete_id","event_id") := tstrsplit(k, "|", fixed = TRUE)]
+# Fold split performances into the BEST and the LAST-SEEN date only - never into
+# R or n_eff. See the note at the place > 0 filter above for why, and what
+# place = 0 does and does not mean.
+if (!is.null(SPLITS) && nrow(SPLITS)) {
+  st <- merge(st, SPLITS, by = c("athlete_id", "event_id"), all.x = TRUE)
+  nb <- sum(is.finite(st$split_best) & (is.na(st$best) | st$split_best > st$best))
+  nl <- sum(is.finite(st$split_last) & (is.na(st$last) | st$split_last > st$last))
+  st[is.finite(split_best) & (is.na(best) | split_best > best), best := split_best]
+  st[is.finite(split_last) & (is.na(last)  | split_last > last),  last := split_last]
+  st[, c("split_best", "split_last") := NULL]
+  cat(sprintf("[%s] splits raised the best on %s athlete-events and refreshed the last-seen date on %s\n",
+              TAG, format(nb, big.mark = ","), format(nl, big.mark = ",")))
+}
+st[, R_ceil := fifelse(is.na(best), R, (1 - CEIL) * R + CEIL * best)]
 if (HIST) {
   hd <- as.data.table(lapply(H, function(v) v[seq_len(hi)]))
   hd[, date := as.Date(date, origin = "1970-01-01")]
