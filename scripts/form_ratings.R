@@ -177,6 +177,29 @@ stopifnot("SEQ_SHOCK must be 'mean', 'median' or 'trim'" =
             SHOCK %in% c("mean", "median", "trim"))
 # fraction trimmed from EACH end when SHOCK = "trim"
 SHOCK_TRIM <- .env_num("SEQ_SHOCK_TRIM", 0.20)
+# HOW MUCH OF A MEASURED RACE EFFECT ACTUALLY GETS APPLIED. Measured 2026-08-18
+# on 169,571 races: 49.1% of them receive a shock of effectively zero, and
+# 27,262 of those had a measured race effect above 1%. Two causes, both here:
+#
+#   1. a HARD FLOOR of 3 established athletes (n_eff >= 2), below which S is set
+#      to exactly 0. Median field size is 7, so this fails constantly.
+#   2. the estimate is multiplied by the established athletes' SHARE of the
+#      field. That scales the estimate rather than confidence in it: a shock
+#      cleanly measured off 6 known athletes in a field of 30 is cut to a fifth,
+#      and the missing four fifths is charged to every athlete as personal form.
+#
+# Kept fraction of the measured effect, by established share: <10% 0.0%,
+# 10-25% 0.4%, 25-50% 2.4%, 50-75% 12.9%, >75% 55.3%.
+#
+# SEQ_SHOCK_W = "share" reproduces the old behaviour exactly and is the default
+# until the sweep says otherwise. "kappa" weights by how many athletes the
+# estimate rests on, m / (m + SEQ_SHOCK_K), which does not care how many
+# strangers were also in the race - because a shock measured off 6 athletes is
+# equally well measured whether the field is 8 or 80.
+SHOCK_MINN <- .env_num("SEQ_SHOCK_MINN", 3)
+SHOCK_W    <- Sys.getenv("SEQ_SHOCK_W", "share")
+SHOCK_K    <- .env_num("SEQ_SHOCK_K", 2)
+stopifnot("SEQ_SHOCK_W must be 'share' or 'kappa'" = SHOCK_W %chin% c("share", "kappa"))
 # SEQ_SLOPE  fit a per-race SLOPE as well as a shift. 0 = shift only (original).
 #
 # WHY A SHIFT IS NOT ENOUGH. The shock is one number subtracted from everyone,
@@ -1298,11 +1321,13 @@ for (r_ in seq_along(starts)) {
   # information in every ordinary race, and measured it costs 0.08 pp of raw
   # concordance against the mean. Trimming the tails keeps the efficiency of a
   # mean while refusing to let three athletes who stopped define the race.
-  S <- (if (sum(est) >= 3L)
+  m_est <- sum(est)
+  S <- (if (m_est >= SHOCK_MINN)
           (if (SHOCK == "median") stats::median(resid_est)
            else if (SHOCK == "trim") mean(resid_est, trim = SHOCK_TRIM)
            else mean(resid_est))
-        else 0) * (sum(est)/length(a))
+        else 0) * (if (SHOCK_W == "kappa") m_est / (m_est + SHOCK_K)
+                   else m_est / length(a))
   # Per-athlete correction. With slope off this is the constant S for everyone,
   # which is exactly the original behaviour.
   corr <- rep(S, length(a))
