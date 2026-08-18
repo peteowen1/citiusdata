@@ -78,7 +78,11 @@ st[, raw_mark  := exp(orientation * R)]
 # column is not the sort key and the order reads as arbitrary: in the men's 200m
 # Bednarek's 19.67 sat below Lyles' 19.80. Pete could not tell what the table was
 # ranked by, which is a fair complaint about a ranking table.
-if ("R_ceil" %in% names(st)) st[, rank_mark := exp(orientation * (R_ceil + offset))]
+# NOT COMPUTED HERE ANY MORE. This ran from R_ceil, before the cross-event and
+# combined-event blends modify R_rank further down, so it was stale the moment
+# those shipped: the published 1500m read Wanyonyi 3:32.2 first and
+# Ingebrigtsen 3:31.3 third, and rank_mark could not explain it either. It is
+# now derived from R_rank itself, immediately before the sort - see below.
 
 # --- 2b. PEAK: what the athlete runs on a good day --------------------------
 # A quantile of the athlete's own distribution, using an EMPIRICAL quantile of
@@ -436,8 +440,29 @@ if (XB_ON) {
   act[, c(".z", ".mu", ".sd", ".w") := NULL]
 }
 
+# THE MARK THE TABLE IS ACTUALLY SORTED BY, derived from the sort key itself
+# and computed AFTER every adjustment to it. Any column built earlier is stale
+# by construction, which is how a ranking table came to show a slower athlete
+# above a faster one with nothing on the page to explain it.
+act[, rank_mark := exp(orientation * (R_rank + offset))]
 setorder(act, event_id, -R_rank)
 act[, rk := seq_len(.N), by = event_id]
+
+# A ranking table whose displayed key does not move with the rank is unreadable,
+# and no aggregate metric will ever catch it. Assert it instead: within an event,
+# rank_mark must improve monotonically as rk improves. orientation -1 means a
+# lower mark is better (track), +1 means higher is better (field).
+.mono <- act[is.finite(rank_mark), {
+  o <- orientation[1]
+  d <- diff(rank_mark[order(rk)])
+  .(bad = sum(if (o == -1) d < -1e-9 else d > 1e-9))
+}, by = event_id]
+if (sum(.mono$bad) > 0) {
+  print(.mono[bad > 0][order(-bad)])
+  stop("rank_mark is not monotone with rank in ", nrow(.mono[bad > 0]), " event(s). ",
+       "The displayed mark is not derived from the key the table is sorted by.")
+}
+cat(sprintf("rank_mark monotone with rank in all %d events\n", nrow(.mono)))
 
 fmt <- function(m, unit) {
   ifelse(is.na(m), "  -  ",
