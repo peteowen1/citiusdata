@@ -62,7 +62,13 @@ for (ii in idx) {
     expd <- rowSums(p)
     act <- vapply(seq_len(n), function(i) sum(pl[i] < pl[-i]) + 0.5 * sum(pl[i] == pl[-i]),
                   numeric(1))
-    kv <- K0 / (1 + nn / KH)
+    # K IS PER PAIRWISE COMPARISON, not per race. Summing (actual - expected)
+    # over the whole field and applying K once means a 500-finisher marathon
+    # moves a rating by K x 250. The first version did exactly that and produced
+    # ratings from -8,591 to +12,602 after a SINGLE race, all of them marathons.
+    # Caught by scoring the model back and looking for a state where it cannot
+    # legitimately know much - one race - and seeing whether it claimed to.
+    kv <- (K0 / (1 + nn / KH)) / max(1, n - 1)
     new <- cur + kv * (act - expd)
     for (i in seq_len(n)) { R[[kk[i]]] <- new[i]; N[[kk[i]]] <- nn[i] + 1 }
   }
@@ -81,6 +87,18 @@ cat(sprintf("wrote %s\n", basename(f)))
 chk <- h[elo_n > 0]
 cat(sprintf("\nrows with a prior rating: %s of %s\n",
             format(nrow(chk), big.mark = ","), format(nrow(h), big.mark = ",")))
-stopifnot("no athlete ever accumulated a rating" = nrow(chk) > 0,
+cat(sprintf("rating range: %.0f to %.0f (an Elo should stay near 1000-2500)
+",
+            min(h$elo_pre), max(h$elo_pre)))
+# The real failure this guards against is K applied PER RACE rather than per
+# pairwise comparison, which made a 500-finisher marathon move a rating by
+# K x 250 and produced -8,591 to +12,602. An absolute band was the wrong proxy:
+# Elo's scale is arbitrary, a wide spread is not a bug, and the band rejected a
+# legitimate high-K configuration. Test the actual failure instead - a single
+# race must not be able to move a rating further than K itself.
+mv <- h[elo_n > 0, abs(elo_pre - 1500)]
+stopifnot("a single race moved a rating further than K - is K per race not per pair?" =
+            max(h[elo_n == 1, abs(elo_pre - 1500)]) <= K0 * 1.001,
+          "no athlete ever accumulated a rating" = nrow(chk) > 0,
           "debut rows should carry the 1500 default" =
             all(abs(h[elo_n == 0, elo_pre] - 1500) < 1e-9))
