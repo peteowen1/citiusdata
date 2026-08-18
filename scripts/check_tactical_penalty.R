@@ -18,13 +18,26 @@ suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D <- here::here("citiusdata", "data")
 h <- setDT(read_parquet(file.path(D, "seqv3_history_final.parquet")))
-h <- h[seen == TRUE & is.finite(perf) & is.finite(r_pre)]
-h[, resid := perf - r_pre]
+h <- h[is.finite(perf) & is.finite(r_pre)]   # keep UNSEEN rows: they set the scale
 
-# the shock the engine removes: mean residual over the race, which is what
-# `S` approximates. Whatever is LEFT after that is what moves a rating.
-h[, S := mean(resid), by = race_key]
+# THE ENGINE'S ACTUAL SHOCK, not the plain race mean.
+#   S <- (if (sum(est) >= 3) mean(perf[est] - r_pre[est]) else 0) * (sum(est)/length(a))
+# The distinction is the whole measurement. Subtracting the plain mean makes the
+# residual mean-centred BY CONSTRUCTION, so it is identically zero and tests
+# nothing - which is what the first version of this script did. The scaling by
+# the established athletes' share is what leaves a residue: a field that is only
+# half rated absorbs only half the shock.
+h[, resid := perf - r_pre]
+h[, n_all := .N, by = race_key]
+h[, n_est := sum(seen == TRUE), by = race_key]
+h[, S := fifelse(n_est >= 3L,
+                 mean(resid[seen == TRUE], na.rm = TRUE) * (n_est / n_all), 0),
+  by = race_key]
+h <- h[seen == TRUE]
 h[, after_S := resid - S]
+cat(sprintf("median established share of a field: %.2f | races where it is under 0.9: %.1f%%\n",
+            stats::median(h$n_est / h$n_all),
+            100 * mean(unique(h[, .(race_key, sh = n_est / n_all)])$sh < 0.9)))
 cat(sprintf("scored athlete-races: %s\n", format(nrow(h), big.mark = ",")))
 
 cat("\n=== residual by round, before and after the shared shock ===\n")
@@ -62,3 +75,28 @@ if (nrow(maj)) {
 cat("\nIf after_S is near zero the shock is doing its job and a tactical final\n")
 cat("costs nothing. A systematically negative value in the endurance families\n")
 cat("would mean championship racing is being read as decline.\n")
+
+# --- WHO PAYS, THEN? ---------------------------------------------------------
+# The shock removes what the FIELD shared. An athlete rated far above that field
+# is expected to beat it by a distance, so in a slow tactical race their personal
+# shortfall survives the shock - even if they win. Kerr was rated ~3:42 off one
+# Mile and won the Commonwealth final in 3:54.
+#
+# So the question is not "are championships penalised" (they are not) but
+# "are FAVOURITES penalised in slow races".
+h[, fav_gap := r_pre - mean(r_pre), by = race_key]
+maj2 <- h[race_key %chin% maj$race_key]
+if (nrow(maj2)) {
+  maj2[, band := cut(fav_gap, breaks = stats::quantile(fav_gap, 0:5/5, na.rm = TRUE),
+                     labels = c("weakest 20%", "20-40%", "middle", "60-80%",
+                                "strongest 20%"), include.lowest = TRUE)]
+  cat("\n=== in major finals: does the FAVOURITE lose rating? ===\n")
+  cat("fav_gap is how far an athlete's rating sits above the field's mean.\n")
+  print(maj2[!is.na(band), .(rows = .N,
+             mean_gap = round(mean(fav_gap), 4),
+             after_S = round(mean(after_S), 5),
+             pct_negative = round(100 * mean(after_S < 0), 1)), by = band][order(band)])
+  cat("\nA monotone decline down this table means the model docks the strongest\n")
+  cat("athlete for winning a slow race - the shock cannot help them, because it\n")
+  cat("only removes what the whole field shared.\n")
+}
