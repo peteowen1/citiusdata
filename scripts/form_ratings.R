@@ -66,6 +66,45 @@ KT1 <- .env_num("SEQ_KT1", 1); WINDCS <- Sys.getenv("SEQ_WINDCS","") != ""
 # 69.387 -> 69.669 sealed, favourite 52.7% -> 53.2%. SEQ_CEIL=0 is bit-identical
 # to the pre-blend engine (verified: it reproduced 69.127 / 69.387 exactly).
 CEIL <- .env_num("SEQ_CEIL", 0.30)
+# SEQ_BEST_K   how many of an athlete's best marks the ceiling blend averages.
+#              1 keeps the original rule exactly (season best if they raced the
+#              event this year, career best otherwise).
+# SEQ_BEST_HL  half-life in days for down-weighting an old mark inside that
+#              average. Inf (the default) means no decay.
+#
+# WHY MORE THAN ONE MARK. The single best is a maximum, and a maximum cannot
+# tell a repeatable level from one outlier. Measured on the current corpus:
+#   Kerr    1500m   3:27.79, 3:29.05, 3:29.37, 3:29.38, 3:29.64, 3:30.07 ...
+#   Rayner 10,000m  27:09.57, then next best about 28:09
+# A top-3 mean costs Kerr about a second and costs Rayner about fifty. That is
+# the whole discrimination, and it needs no knowledge of who either man is.
+#
+# AGE IS THE WRONG DISCRIMINATOR HERE, which is why K comes before HL. Both of
+# those bests are roughly two years old, so a decay alone penalises them
+# equally. Worse, the obvious proxy fails: Kerr's gap between rating and best is
+# 4.1% of his time and Rayner's is 3.4%, so by that measure Kerr looks like the
+# bigger outlier. Only counting how many races sit NEAR the best gets it right.
+#
+# HL still earns its place, for a different case: an athlete who ran three fast
+# marks years ago and is now declining. K cannot see that; decay can.
+BEST_K  <- max(1L, as.integer(.env_num("SEQ_BEST_K", 1)))
+# Not .env_num: that helper rejects non-finite values, which is right for every
+# other knob and wrong here - Inf is this one's meaningful default, "no decay".
+BEST_HL <- local({
+  v <- Sys.getenv("SEQ_BEST_HL", "")
+  if (!nzchar(v)) return(Inf)
+  x <- suppressWarnings(as.numeric(v))
+  if (is.na(x) || x <= 0) stop(sprintf("SEQ_BEST_HL='%s' must be a positive number of days, or Inf", v))
+  x
+})
+# The top-K average of an athlete's marks, weighted by recency. Returns NULL
+# when there is nothing recorded, so callers keep their existing NULL handling.
+.best_k <- function(K, v, dts, now) {
+  if (is.null(v) || !length(v)) return(NULL)
+  w <- if (is.finite(BEST_HL)) 2^(-(now - dts) / BEST_HL) else rep(1, length(v))
+  if (!sum(w) > 0) return(max(v))
+  sum(w * v) / sum(w)
+}
 # SEQ_SEED  1 = initialise a debut rating from results already held in the
 # careers store (4,978,201 rows against the corpus's 1,225,339 — the corpus is
 # roughly a quarter of what is on disk). 27.9% of 2026 cold-start athlete-events
@@ -568,6 +607,8 @@ BYA <- new.env(parent=emptyenv())
 # Updated AFTER a race is scored, so reads are always strictly lagged.
 BC <- new.env(parent=emptyenv()); BS <- new.env(parent=emptyenv())
 BSY <- new.env(parent=emptyenv())
+# Top-K marks per athlete-event, for the ceiling blend. See SEQ_BEST_K.
+BKV <- new.env(parent=emptyenv()); BKD <- new.env(parent=emptyenv())
 key <- function(a, e) paste0(a, "|", e)
 
 # --- SEQ_SEED: pre-populate state from held results -------------------------
@@ -658,6 +699,10 @@ if (SEEDON) {
     K <- kz[i]
     R[[K]] <- sg$r0[i]; NE[[K]] <- sg$ne0[i]
     LD[[K]] <- as.numeric(sg$last0[i]); BC[[K]] <- sg$best0[i]
+    # seed the top-K buffer too, or an athlete's pre-corpus history would be
+    # invisible to the ceiling blend under BEST_K > 1 while being visible
+    # under BEST_K = 1 - a difference between arms that is nothing to do with K
+    if (BEST_K > 1) { BKV[[K]] <- sg$best0[i]; BKD[[K]] <- as.numeric(sg$last0[i]) }
   }
   n_seeded <- nrow(sg)
   rm(ca, sd0, sg); invisible(gc())
@@ -915,8 +960,12 @@ for (r_ in seq_along(starts)) {
   ceil_e <- CEILv[[ev]]; if (is.null(ceil_e) || !is.finite(ceil_e)) ceil_e <- CEIL
   if (ceil_e > 0) for (m in seq_along(a)) {
     if (!seen[m]) next
-    bsy <- BSY[[kk[m]]]
-    b <- if (!is.null(bsy) && bsy == yr) BS[[kk[m]]] else BC[[kk[m]]]
+    if (BEST_K > 1) {
+      b <- .best_k(BEST_K, BKV[[kk[m]]], BKD[[kk[m]]], dt0n)
+    } else {
+      bsy <- BSY[[kk[m]]]
+      b <- if (!is.null(bsy) && bsy == yr) BS[[kk[m]]] else BC[[kk[m]]]
+    }
     # COMPOSES with whatever r_use already holds - it must not reset to r_pre.
     # It did, and that silently discarded the cross-event blend above for every
     # athlete carrying a best mark, which is nearly all of them: XBLEND 0, 1, 2
@@ -1083,6 +1132,16 @@ for (r_ in seq_along(starts)) {
     if (!is.null(bsy) && bsy == yr) {
       if (z$perf[m] > BS[[kk[m]]]) BS[[kk[m]]] <- z$perf[m]
     } else { BSY[[kk[m]]] <- yr; BS[[kk[m]]] <- z$perf[m] }
+    # keep the K best marks and their dates, so the ceiling blend can average a
+    # level rather than take a maximum. Updated here with the other running
+    # bests, i.e. AFTER every read above, so it stays strictly lagged.
+    if (BEST_K > 1) {
+      vv <- c(BKV[[kk[m]]], z$perf[m]); dd <- c(BKD[[kk[m]]], dt0n)
+      if (length(vv) > BEST_K) {
+        o <- order(-vv)[seq_len(BEST_K)]; vv <- vv[o]; dd <- dd[o]
+      }
+      BKV[[kk[m]]] <- vv; BKD[[kk[m]]] <- dd
+    }
   }
 }
 el <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
@@ -1157,8 +1216,17 @@ st <- data.table(k = ids, R = vapply(ids, function(i) R[[i]], numeric(1)),
                  # the athlete's best mark so far, and the blend that ORDERS a
                  # field. R stays the pure rating so nothing downstream silently
                  # inherits the ceiling without asking for it.
-                 best = vapply(ids, function(i) { b <- BC[[i]]
-                                                  if (is.null(b)) NA_real_ else b }, numeric(1)))
+                 # Must use the SAME rule the in-race blend used, or R_ceil in
+                 # the state table would describe a different model than the one
+                 # that was scored. Ages are measured against the athlete's own
+                 # last race, so someone still racing whose bests are years old
+                 # decays heavily, while a retired athlete does not - the latter
+                 # is handled by the display's recency filter, not here.
+                 best = vapply(ids, function(i) {
+                   b <- if (BEST_K > 1)
+                          .best_k(BEST_K, BKV[[i]], BKD[[i]], LD[[i]])
+                        else BC[[i]]
+                   if (is.null(b)) NA_real_ else b }, numeric(1)))
 st[, R_ceil := fifelse(is.na(best), R, (1 - CEIL) * R + CEIL * best)]
 st[, c("athlete_id","event_id") := tstrsplit(k, "|", fixed = TRUE)]
 if (HIST) {
