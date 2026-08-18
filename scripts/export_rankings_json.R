@@ -170,7 +170,11 @@ if (file.exists(mf)) {
 
 setorder(d, event_id, rk)
 top <- d[rk <= TOPN]
-top[, `:=`(typical_s = fmt(pred_mark, unit), good_s = fmt(peak_mark, unit))]
+top[, `:=`(typical_s = fmt(pred_mark, unit), good_s = fmt(peak_mark, unit),
+           # the mark the table is SORTED by. Without it the page shows `typical`
+           # (from R) beside an order computed from R_ceil, and the two disagree
+           # often enough to look broken - Bednarek's 19.67 below Lyles' 19.80.
+           rank_s = fmt(rank_mark, unit))]
 
 ev <- unique(d[, .(event_id, discipline, sex, family, grp, unit, dist_num)])
 # Coverage flag. Combined events are the worst case: the men's decathlon is
@@ -192,6 +196,7 @@ out <- lapply(seq_len(nrow(ev)), function(i) {
          nat = if (is.na(a$country[j])) NULL else a$country[j],
          flag = if (is.na(a$flag[j]) || !nzchar(a$flag[j])) NULL else a$flag[j],
          age = if (is.na(a$age[j])) NULL else a$age[j],
+         rating = a$rank_s[j],
          typical = a$typical_s[j],
          # NULL, not a number, where the good-day mark is suppressed: the page
          # must show an explicit dash rather than imply a missing value is zero

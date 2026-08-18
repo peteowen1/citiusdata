@@ -73,6 +73,12 @@ if (any(is.na(st$orientation)))
                sum(is.na(st$orientation))))
 st[, pred_mark := exp(orientation * (R + offset))]
 st[, raw_mark  := exp(orientation * R)]
+# THE MARK THE TABLE IS ACTUALLY SORTED BY. Ranking runs on R_ceil (see the
+# setorder below) while `pred_mark` comes from R, so without this the visible
+# column is not the sort key and the order reads as arbitrary: in the men's 200m
+# Bednarek's 19.67 sat below Lyles' 19.80. Pete could not tell what the table was
+# ranked by, which is a fair complaint about a ranking table.
+if ("R_ceil" %in% names(st)) st[, rank_mark := exp(orientation * (R_ceil + offset))]
 
 # --- 2b. PEAK: what the athlete runs on a good day --------------------------
 # A quantile of the athlete's own distribution, using an EMPIRICAL quantile of
@@ -379,8 +385,10 @@ if (nrow(empty)) {
       "T1/T2 only, so the majors are invisible to it. Fix the catalogue tiering,\n",
       "not the filter here.\n", sep = "")
 }
-write_parquet(act[, .(event_id, athlete_id, athlete_name, rk, R, offset,
-                      pred_mark, peak_mark, raw_mark, n_eff, v, last, unit)],
+stopifnot("rank_mark missing - the table would sort by a column it does not show" =
+            "rank_mark" %in% names(act))
+write_parquet(act[, .(event_id, athlete_id, athlete_name, rk, R, R_ceil, offset,
+                      pred_mark, rank_mark, peak_mark, raw_mark, n_eff, v, last, unit)],
               file.path(OUT, sprintf("form_display_%s.parquet", TAG)))
 cat(sprintf("wrote form_display_%s.parquet (%s rows)\n", TAG,
             format(nrow(act), big.mark = ",")))
