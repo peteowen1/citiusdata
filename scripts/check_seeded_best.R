@@ -14,9 +14,12 @@
 # Scored against World Athletics, same harness as check_ceil_ranking.R.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D <- here::here("citiusdata", "data")
-st <- setDT(read_parquet(file.path(D, "seqv2_state_final.parquet")))
+# parameterised 2026-08-19 so it can be run against the CURRENT arm; it was
+# pinned to "final", which is no longer what the display is built from
+TAG <- Sys.getenv("STATE_TAG", "base4")
+st <- setDT(read_parquet(file.path(D, sprintf("seqv2_state_%s.parquet", TAG))))
 st[, athlete_id := as.character(athlete_id)]
-h <- setDT(read_parquet(file.path(D, "seqv3_history_final.parquet"),
+h <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG)),
                         col_select = c("athlete_id","event_id","date","perf")))
 h[, athlete_id := as.character(athlete_id)]
 wa <- setDT(read_parquet(file.path(D, "athlete_wa_rankings.parquet")))
@@ -41,8 +44,21 @@ st <- merge(st, seen, by = c("athlete_id", "event_id"), all.x = TRUE)
 last_any <- h[, .(last_any = max(date)), by = athlete_id]
 st <- merge(st, last_any, by = "athlete_id", all.x = TRUE)
 ASOF <- max(st$last, na.rm = TRUE)
-act <- st[n_eff >= 1 & !is.na(last_any) & last_any >= ASOF - 210 &
-          !is.na(last) & last >= ASOF - 330]
+# READ the deployed filter rather than copy it. This script was pinned to 330
+# days while form_display_marks.R publishes at 400, so it scored 42 events where
+# the page has 44 - the same drift that hid Barega from another harness.
+.deployed_filter <- function() {
+  src <- readLines(here::here("citiusdata", "scripts", "form_display_marks.R"), warn = FALSE)
+  g <- function(nm) {
+    ln <- grep(sprintf("^%s[[:space:]]*<-", nm), src, value = TRUE)[1]
+    v <- suppressWarnings(as.integer(sub('.*"([0-9]+)".*', "\\1", ln)))
+    stopifnot("could not read the deployed value" = is.finite(v)); v
+  }
+  list(athlete = g("ACT_ATHLETE"), event = g("ACT_EVENT"))
+}
+DEP <- .deployed_filter()
+act <- st[n_eff >= 1 & !is.na(last_any) & last_any >= ASOF - DEP$athlete &
+          !is.na(last) & last >= ASOF - DEP$event]
 
 CEIL <- 0.30
 # variant B: the best may not exceed what the athlete has been seen to do in a
@@ -107,3 +123,41 @@ cat(sprintf("\ntop-10 rows whose best is seed-only: %d of %d\n",
             sum(act[, .SD[order(-R_ceil)][seq_len(min(10, .N))], by = event_id][
               , best > best_seen], na.rm = TRUE),
             nrow(act[, .SD[order(-R_ceil)][seq_len(min(10, .N))], by = event_id])))
+
+# --- the test that has power ---------------------------------------------------
+# Top-ten overlap dilutes this change across every athlete, and only 60 of 788
+# published top-10 rows carry a seed-only best. Measure it on the band it
+# targets: among WA-RANKED athletes whose best the corpus never saw, does
+# capping move our rank toward WA's or away from it?
+cat("\n=== AFFECTED ATHLETES ONLY: those whose best is seed-only ===\n")
+hb <- h[, .(hist_best = max(perf)), by = .(athlete_id, event_id)]
+aa <- merge(act, hb, by = c("athlete_id", "event_id"), all.x = TRUE)
+aa[, seed_only := is.finite(best) & (!is.finite(hist_best) | best > hist_best + 1e-9)]
+aa[, R_cap := fifelse(seed_only, (1 - 0.30) * R + 0.30 * pmin(best, hist_best, na.rm = TRUE),
+                      R_ceil)]
+aa[!is.finite(R_cap), R_cap := R_ceil]
+rank_on <- function(col) {
+  x <- copy(aa); x[, .k := get(col)]
+  setorder(x, event_id, -.k); x[, rk := seq_len(.N), by = event_id]
+  x[, .(event_id, athlete_id, rk)]
+}
+r1 <- rank_on("R_ceil"); setnames(r1, "rk", "rk_ship")
+r2 <- rank_on("R_cap");  setnames(r2, "rk", "rk_cap")
+cmp <- merge(merge(r1, r2, by = c("event_id", "athlete_id")),
+             wa[, .(event_id, athlete_id = as.character(athlete_id), wa_place)],
+             by = c("event_id", "athlete_id"))
+cmp <- merge(cmp, aa[, .(event_id, athlete_id, seed_only)],
+             by = c("event_id", "athlete_id"))
+cat(sprintf("WA-ranked athletes matched: %s | of those, seed-only best: %s\n",
+            format(nrow(cmp), big.mark = ","), format(sum(cmp$seed_only), big.mark = ",")))
+print(cmp[, .(athletes = .N,
+              mean_abs_err_shipped = round(mean(abs(rk_ship - wa_place)), 2),
+              mean_abs_err_capped  = round(mean(abs(rk_cap  - wa_place)), 2),
+              # BOTH are ranks where 1 is best, so agreement is a POSITIVE
+              # correlation - negating one flips the sign and reads as -0.93
+              spearman_shipped = round(stats::cor(rk_ship, wa_place, method = "spearman"), 4),
+              spearman_capped  = round(stats::cor(rk_cap,  wa_place, method = "spearman"), 4)),
+          by = seed_only][order(-seed_only)])
+cat("\nThe seed_only = TRUE row is the whole question. A LOWER mean absolute rank\n")
+cat("error under capping means the seeded best is genuinely misplacing athletes;\n")
+cat("no change means the referee cannot see it even where it acts.\n")
