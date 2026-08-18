@@ -666,7 +666,39 @@ if (CEILADJ != 0) {
 }
 
 # per-event k0, derived from that same variance
-K0v <- .ev_vec("k0", K0, names(VPv))
+# PER-FAMILY LEARNING RATE, adopted 2026-08-18 from optimise_family_params.R.
+#
+# How fast a rating should chase a result is not one number for all of
+# athletics. A sprint is contested often and its time is a precise, repeatable
+# measurement, so a single result genuinely says a lot. A marathon is run twice
+# a year on a different course in different weather, so a single result says
+# much less. Measured over four values (0.75 / 0.95 / 1.15 / 1.30), kept only
+# where the winning value beat the incumbent on BOTH the tune and the sealed
+# window, then shrunk toward 0.95 by pairs/(pairs + 20,000):
+#
+#   sprint   214,482 pairs  tune +0.022  sealed +0.039  ->  1.133
+#   hurdles   84,056 pairs  tune +0.002  sealed +0.101  ->  1.112
+#   road       2,193 pairs  tune +0.410  sealed +0.981  ->  0.930
+#
+# The other six families keep 0.95. Road's raw optimum was 0.75 - a large move
+# on very little evidence - and the shrinkage pulls it back to nearly the
+# incumbent, which is the mechanism working rather than a compromise.
+#
+# Verified end to end, not assumed: the assembled configuration scored
+# 71.712 raw 2026 and 73.066 weighted sealed against 71.680 / 73.036, and
+# scored BY FAMILY the gain appears only where it was fitted - hurdles +0.045,
+# road +0.031, sprint +0.022, and exactly 0.000 in all six untouched families.
+# It also lands where the benchmark said the model was weakest: sprint was
+# +0.28 over simply sorting by season best, and hurdles was -1.09.
+FAM_K0 <- c(sprint = 1.1329, hurdles = 1.1116, road = 0.9302)
+K0v <- setNames(rep(K0, length(VPv)), names(VPv))
+if (K0 == 0.95) {   # only apply where the incumbent they were fitted against holds
+  fam_of <- reg$family[match(names(K0v), reg$event_id)]
+  for (f in names(FAM_K0)) K0v[!is.na(fam_of) & fam_of == f] <- FAM_K0[[f]]
+}
+# an explicit SEQ_EVPARAM override still wins over the family default
+.k0_ov <- .ev_vec("k0", NA_real_, names(VPv))
+K0v[is.finite(.k0_ov)] <- .k0_ov[is.finite(.k0_ov)]
 if (KPOW != 0) {
   sd_ev <- sqrt(as.numeric(VPv)); ref <- stats::median(sd_ev)
   k0_raw <- K0 * (ref / sd_ev)^KPOW
