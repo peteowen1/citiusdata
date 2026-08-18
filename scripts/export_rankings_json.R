@@ -168,13 +168,80 @@ if (file.exists(mf)) {
 ")
 }
 
+# --- season best, personal best, and the World Athletics rank ----------------
+# All three are REFERENCE, not model output, and are labelled as such on the
+# page. They are the columns a reader checks the model against.
+#
+# SB and PB come from the scored history, so they are what the ENGINE saw - not
+# what World Athletics list. Two consequences worth stating rather than hiding:
+# the corpus opens in 2020, so a PB set before then is absent unless it came in
+# through the seed; and a mark only counts if its competition is catalogued, so
+# an uncatalogued meet is invisible here exactly as it is to the rating.
+hf <- file.path(D, sprintf("seqv3_history_%s.parquet", TAG))
+if (file.exists(hf)) {
+  hh <- setDT(read_parquet(hf, col_select = c("athlete_id","event_id","date","perf")))
+  hh[, athlete_id := as.character(athlete_id)]
+  hh <- hh[is.finite(perf)]
+  SEASON <- as.integer(format(max(d$last, na.rm = TRUE), "%Y"))
+  pb <- hh[, .(pb_perf = max(perf)), by = .(athlete_id, event_id)]
+  sb <- hh[data.table::year(date) == SEASON,
+           .(sb_perf = max(perf)), by = .(athlete_id, event_id)]
+  d <- merge(d, pb, by = c("athlete_id", "event_id"), all.x = TRUE)
+  d <- merge(d, sb, by = c("athlete_id", "event_id"), all.x = TRUE)
+  # orientation is not in the display table - take it from the registry rather
+  # than assume seconds, or every field mark would come out inverted
+  ori <- as.data.table(citius::citius_events())[, .(event_id, orientation)]
+  d <- merge(d, ori, by = "event_id", all.x = TRUE)
+  stopifnot("orientation missing for some events" = !any(is.na(d$orientation)))
+  d[, `:=`(pb_mark = exp(orientation * pb_perf),
+           sb_mark = exp(orientation * sb_perf))]
+  cat(sprintf("bests from scored history (%d season): PB on %.0f%% of ranked rows, SB on %.0f%%\n",
+      SEASON, 100 * mean(is.finite(d[rk <= TOPN, pb_mark])),
+      100 * mean(is.finite(d[rk <= TOPN, sb_mark]))))
+} else {
+  d[, `:=`(pb_mark = NA_real_, sb_mark = NA_real_)]
+  cat("no history file - SB and PB unavailable\n")
+}
+
+# World Athletics publish their own ranking by event group, built by a different
+# method entirely. It is the outside check this repo already uses to judge the
+# active filter, and worth showing beside our order so a reader can see where
+# the two disagree.
+wf <- file.path(D, "athlete_wa_rankings.parquet")
+if (file.exists(wf)) {
+  wa <- setDT(read_parquet(wf))[is.finite(wa_place) & !grepl("Overall", event_group)]
+  wa[, athlete_id := as.character(athlete_id)]
+  map_group <- function(g) {
+    sex <- fifelse(grepl("^Men", g), "M", "W")
+    ev <- sub("^(Men|Women)'s ", "", g); ev <- gsub(",", "", ev)
+    disc <- fcase(
+      ev == "110mH", "110MetresHurdles", ev == "100mH", "100MetresHurdles",
+      ev == "400mH", "400MetresHurdles", ev == "3000mSC", "3000MetresSteeplechase",
+      ev == "20km Race Walking", "20KilometresRaceWalk",
+      ev == "35km Race Walking", "35KilometresRaceWalk",
+      grepl("^[0-9]+m$", ev), paste0(sub("m$", "", ev), "Metres"),
+      default = gsub(" ", "", ev))
+    paste0("AT-", disc, "-", sex)
+  }
+  wa[, event_id := map_group(event_group)]
+  wa <- unique(wa[, .(athlete_id, event_id, wa_place)], by = c("athlete_id","event_id"))
+  d <- merge(d, wa, by = c("athlete_id", "event_id"), all.x = TRUE)
+  cat(sprintf("World Athletics rank matched on %.0f%% of ranked rows, %d events\n",
+      100 * mean(!is.na(d[rk <= TOPN, wa_place])),
+      uniqueN(wa[event_id %chin% unique(d$event_id), event_id])))
+} else {
+  d[, wa_place := NA_integer_]
+  cat("no World Athletics rankings file\n")
+}
+
 setorder(d, event_id, rk)
 top <- d[rk <= TOPN]
 top[, `:=`(typical_s = fmt(pred_mark, unit), good_s = fmt(peak_mark, unit),
            # the mark the table is SORTED by. Without it the page shows `typical`
            # (from R) beside an order computed from R_ceil, and the two disagree
            # often enough to look broken - Bednarek's 19.67 below Lyles' 19.80.
-           rank_s = fmt(rank_mark, unit))]
+           rank_s = fmt(rank_mark, unit),
+           sb_s = fmt(sb_mark, unit), pb_s = fmt(pb_mark, unit))]
 
 ev <- unique(d[, .(event_id, discipline, sex, family, grp, unit, dist_num)])
 # Coverage flag. Combined events are the worst case: the men's decathlon is
@@ -198,6 +265,9 @@ out <- lapply(seq_len(nrow(ev)), function(i) {
          age = if (is.na(a$age[j])) NULL else a$age[j],
          rating = a$rank_s[j],
          typical = a$typical_s[j],
+         sb = if (is.na(a$sb_s[j])) NULL else a$sb_s[j],
+         pb = if (is.na(a$pb_s[j])) NULL else a$pb_s[j],
+         wa = if (is.na(a$wa_place[j])) NULL else a$wa_place[j],
          # NULL, not a number, where the good-day mark is suppressed: the page
          # must show an explicit dash rather than imply a missing value is zero
          good = if (is.na(a$good_s[j])) NULL else a$good_s[j],
