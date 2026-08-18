@@ -47,6 +47,37 @@ KFLOOR <- .env_num("SEQ_KFLOOR", 0.32); CSHRINK <- .env_num("SEQ_C", 4)
 # to turn them off. (Leaving them opt-in is how 350,401 fitted race effects sat
 # inert on every shipped number — dormant by flag, which no wiring guard sees.)
 CENS <- .env_num("SEQ_CENS", 0.3); AGEF <- Sys.getenv("SEQ_AGE","1") != "0"
+# WINNER CENSORING. SEQ_CENS already says "a slow run you had no reason to win
+# fast should not count fully" - it just asks the wrong question, `is this a
+# heat?`, when the right one is `did the result beat the time?`. A slow tactical
+# WIN is a lower bound on ability, not a measurement of it: the athlete had no
+# reason to run faster.
+#
+# Traced, on the deployed arm: Almgren won the 2025 European 10,000m final in
+# 28:53 and it cost him surprise -0.0397, about 4% of rating and ~51 seconds,
+# with the race shock at exactly 0.0000 for that race - so nothing absorbed it.
+# Two more of his wins carried negative surprise. He ranked 17th having won.
+#
+# 1 = off. Applied as the MINIMUM of the applicable discounts rather than the
+# product, so a heat winner is discounted once, not twice.
+# ADOPTED 2026-08-19 at 0.1. Swept, weighted-sealed: 1.0 (off) 73.039,
+# 0.5 73.117, 0.3 73.148, 0.1 73.178, 0.0 73.176 - so 0.1 is an interior
+# optimum, not a range edge, and the curve is flat below 0.3. Raw sealed rises
+# 71.660 to 71.740. Largest single gain measured in this model.
+#
+# It lands where tactical racing lives: distance +0.177 (7 of 9 events up),
+# middle +0.151 (7 of 10), with 1500m M +0.267 over 73,302 pairs against a 0.160
+# noise floor. It LOSES slightly in sprints, jumps and hurdles - which is
+# mechanistically right, because you cannot coast a 100m, so a slow winning time
+# there really is bad news. Worth a per-family value later.
+#
+# THE RATCHET WORRY, tested and dead: discounting only NEGATIVE surprise for
+# winners keeps good news and drops bad, so ratings could inflate. Athlete-events
+# whose implied mark beats the world record: 1 at every setting from 1.0 to 0.0,
+# p99 as a share of the record moves 94.7 to 94.9 across the whole sweep, median
+# 84.5 unchanged. No inflation.
+CENSWIN   <- .env_num("SEQ_CENSWIN", 0.1)
+CENSWIN_P <- .env_num("SEQ_CENSWIN_PLACE", 1)
 STALE <- Sys.getenv("SEQ_STALE","1") != "0"; XEV <- Sys.getenv("SEQ_XEV","") != ""
 KT1 <- .env_num("SEQ_KT1", 1); WINDCS <- Sys.getenv("SEQ_WINDCS","") != ""
 # SEQ_CEIL  weight on an athlete's BEST MARK SO FAR, blended into the value used
@@ -1382,9 +1413,16 @@ for (r_ in seq_along(starts)) {
   kt1_e <- KT1v[[ev]]; if (is.null(kt1_e) || !is.finite(kt1_e)) kt1_e <- KT1
   if (kt1_e != 1 && z$meet_tier[1] == "T1_elite") kv <- pmin(kv * kt1_e, 0.9)
   cen_e <- CENSv[[ev]]; if (is.null(cen_e) || !is.finite(cen_e)) cen_e <- CENS
-  if (cen_e < 1) {
-    neg_heat <- z$rc != "final" & surprise < 0
-    kv[neg_heat] <- kv[neg_heat] * cen_e
+  if (cen_e < 1 || CENSWIN < 1) {
+    fac <- rep(1, length(a))
+    if (cen_e < 1) fac[z$rc != "final" & surprise < 0] <- cen_e
+    if (CENSWIN < 1) {
+      # place 0 marks a split or an unplaced entry, so require a real placing
+      neg_win <- is.finite(z$place) & z$place >= 1 & z$place <= CENSWIN_P &
+                 surprise < 0
+      fac[neg_win] <- pmin(fac[neg_win], CENSWIN)
+    }
+    kv <- kv * fac
   }
   hub_e <- HUBERv[[ev]]; if (is.null(hub_e) || !is.finite(hub_e)) hub_e <- HUBER
   if (hub_e > 0) {

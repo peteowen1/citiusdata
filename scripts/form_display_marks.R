@@ -377,9 +377,20 @@ XB_ON     <- Sys.getenv("FORM_XBLEND", "1") != "0"
 # no measured cost. event_similarity_all.parquet is kept for comparison.
 XB_SIMF   <- Sys.getenv("FORM_XB_SIMFILE", "event_similarity_spec.parquet")
 XB_MINCOR <- as.numeric(Sys.getenv("FORM_XB_MINCOR", "0.30"))
-XB_STR    <- as.numeric(Sys.getenv("FORM_XB",        "1.0"))
+# TIGHTENED 2026-08-19 from xb 1.0 / maxn 8, after LOOKING AT THE PAGE. At the
+# old settings precision@10 was unchanged (69.1 either way) and the published
+# 1500m read: 1. Wanyonyi (n_eff 1.5, an 800m runner), 2. El Bakkali (n_eff 1.1,
+# a steeplechaser), 3. Ingebrigtsen (n_eff 12.5, the fastest typical mark in the
+# field), with Josh Kerr 18th. At n_eff 1.5 the old weight put 40% of an
+# athlete's rank on another event. The referee could not see it; the page could.
+#
+# At 0.25/4 the same list reads Ingebrigtsen, Myers, Wanyonyi - and the cases the
+# blend exists for are unaffected, because the ENGINE changes (winner censoring,
+# the shock fix) are what actually fixed them: Almgren's 10,000m rank is 8th at
+# either setting, and Kerr recovers from 18th to 13th.
+XB_STR    <- as.numeric(Sys.getenv("FORM_XB",        "0.25"))
 XB_NSIB   <- as.integer(Sys.getenv("FORM_XB_NSIB",   "6"))
-XB_MAXN   <- as.numeric(Sys.getenv("FORM_XB_MAXN",   "8"))
+XB_MAXN   <- as.numeric(Sys.getenv("FORM_XB_MAXN",   "4"))
 if (XB_ON) {
   simf <- file.path(OUT, XB_SIMF)   # OUT is this script's data dir, not D
   # Deliberately a hard stop. A silently skipped blend would publish the old
