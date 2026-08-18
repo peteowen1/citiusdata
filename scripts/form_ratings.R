@@ -177,6 +177,25 @@ stopifnot("SEQ_SHOCK must be 'mean', 'median' or 'trim'" =
             SHOCK %in% c("mean", "median", "trim"))
 # fraction trimmed from EACH end when SHOCK = "trim"
 SHOCK_TRIM <- .env_num("SEQ_SHOCK_TRIM", 0.20)
+# SEQ_SLOPE  fit a per-race SLOPE as well as a shift. 0 = shift only (original).
+#
+# WHY A SHIFT IS NOT ENOUGH. The shock is one number subtracted from everyone,
+# so it can model a race being slow but not the field BUNCHING UP - and a
+# tactical race does exactly that: the spread of finishing times is far smaller
+# than the spread of abilities, because nobody runs to their potential. The
+# favourite, expected to beat the field by their full rating gap, comes up
+# short; the tail-ender exceeds. Measured in major finals, monotone across five
+# bands of rating advantage:
+#   weakest 20%  +0.00994      middle -0.00087      strongest 20% -0.00663
+# About 1.4 seconds of rating on a 3:30 1500m, every major final, for the best
+# athletes. That is why Kerr and Almgren are held down by winning slowly.
+#
+# SEQ_SLOPE_K shrinks the fitted slope toward 1 (i.e. toward shift-only), because
+# a race is a regression with about ten points and the slope is noisy. The
+# estimate uses only the trimmed set, for the same reason the shift does.
+SLOPE      <- Sys.getenv("SEQ_SLOPE", "0") != "0"
+SLOPE_K    <- .env_num("SEQ_SLOPE_K", 8)
+SLOPE_MINN <- .env_num("SEQ_SLOPE_MINN", 5)
 # SEQ_VPRIOR  1 = derive the thin-record variance prior from WITHIN-ATHLETE
 # variation instead of within-race spread. Default off until A/B'd.
 #
@@ -1155,7 +1174,32 @@ for (r_ in seq_along(starts)) {
            else if (SHOCK == "trim") mean(resid_est, trim = SHOCK_TRIM)
            else mean(resid_est))
         else 0) * (sum(est)/length(a))
-  surprise <- (z$perf - r_pre) - S
+  # Per-athlete correction. With slope off this is the constant S for everyone,
+  # which is exactly the original behaviour.
+  corr <- rep(S, length(a))
+  if (SLOPE && sum(est) >= SLOPE_MINN) {
+    xe <- r_pre[est]; ye <- z$perf[est]
+    # fit on the trimmed set: a regression is even more sensitive to an athlete
+    # who stopped than a mean is
+    r0 <- ye - xe
+    q <- stats::quantile(r0, c(SHOCK_TRIM, 1 - SHOCK_TRIM), names = FALSE)
+    kp <- r0 >= q[1] & r0 <= q[2]
+    if (sum(kp) >= SLOPE_MINN) {
+      xk <- xe[kp]; yk <- ye[kp]
+      vx <- stats::var(xk)
+      if (is.finite(vx) && vx > 1e-8) {
+        b_hat <- stats::cov(xk, yk) / vx
+        if (is.finite(b_hat)) {
+          # shrink toward 1: with few points, mostly trust shift-only
+          w <- length(xk) / (length(xk) + SLOPE_K)
+          b <- 1 + w * (b_hat - 1)
+          aa <- mean(yk) - b * mean(xk)
+          corr <- ((aa + b * r_pre) - r_pre) * (sum(est)/length(a))
+        }
+      }
+    }
+  }
+  surprise <- (z$perf - r_pre) - corr
   k0e <- K0v[[ev]]; if (is.null(k0e) || !is.finite(k0e)) k0e <- K0
   kfl_e <- KFLOORv[[ev]]; if (is.null(kfl_e) || !is.finite(kfl_e)) kfl_e <- KFLOOR
   kv <- pmax(k0e * KAPPA / (n_eff + KAPPA), kfl_e)

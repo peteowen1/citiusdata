@@ -17,7 +17,10 @@
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D <- here::here("citiusdata", "data")
-h <- setDT(read_parquet(file.path(D, "seqv3_history_final.parquet")))
+TAG <- Sys.getenv("HIST_TAG", "final")
+h <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG))))
+cat(sprintf("arm: %s
+", TAG))
 h <- h[is.finite(perf) & is.finite(r_pre)]   # keep UNSEEN rows: they set the scale
 
 # THE ENGINE'S ACTUAL SHOCK, not the plain race mean.
