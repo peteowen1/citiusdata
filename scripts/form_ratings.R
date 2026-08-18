@@ -153,6 +153,30 @@ SEEDNE <- .env_num("SEQ_SEEDNE", 5)     # cap on seeded n_eff, so it still learn
 # is the conservative side of the one failure this knob has that the metric
 # cannot see: blunting a genuine collapse. Both clearly beat off (+0.202/+0.155).
 HUBER <- .env_num("SEQ_HUBER", 3)
+# See the note at the shock estimator: "mean" reproduces the original behaviour,
+# "median" makes it robust to athletes who stop racing.
+# ADOPTED 2026-08-18 as a trimmed mean at 0.20. The mean is not robust to
+# athletes who stop racing, and pacemakers dropping out is routine in distance
+# running. Measured, five arms on the same corpus:
+#
+#   shock        raw 2026   weighted sealed   Barega 1500m   ratings > own best
+#   mean          71.711        73.001         3:29.02  (!)       7.64%
+#   median        71.633        72.995         3:38.09            6.41%
+#   trim 0.10     71.716        72.995         3:31.26  (!)       7.51%
+#   trim 0.20     71.680        73.036         3:34.04            6.85%
+#   trim 0.30     71.665        73.031         3:37.51            6.59%
+#
+# Barega's actual 1500m range is 3:32.93-3:37.50, so 3:34.04 is right and
+# 3:29.02 was a rating faster than any 1500m he has run. Across the corpus the
+# share of athlete-events rated faster than the athlete's own best falls from
+# 7.64% to 6.85% - about 2,600 impossible ratings - and the sealed window is
+# the best of the five. The median fixes robustness but discards the
+# information in every ordinary race, which is what costs it 0.08 pp.
+SHOCK <- Sys.getenv("SEQ_SHOCK", "trim")
+stopifnot("SEQ_SHOCK must be 'mean', 'median' or 'trim'" =
+            SHOCK %in% c("mean", "median", "trim"))
+# fraction trimmed from EACH end when SHOCK = "trim"
+SHOCK_TRIM <- .env_num("SEQ_SHOCK_TRIM", 0.20)
 # SEQ_VPRIOR  1 = derive the thin-record variance prior from WITHIN-ATHLETE
 # variation instead of within-race spread. Default off until A/B'd.
 #
@@ -1105,7 +1129,32 @@ for (r_ in seq_along(starts)) {
       winner_rank = which(order(-r_use) == which.min(z$place)))
   }
   est <- n_eff >= 2
-  S <- (if (sum(est) >= 3L) mean(z$perf[est] - r_pre[est]) else 0) * (sum(est)/length(a))
+  # SEQ_SHOCK  "mean" (the original) or "median". The shock is what the whole
+  # field shared, and a MEAN is not robust to athletes who stop racing.
+  #
+  # The case that found it: London 1500m, 2025-07-19. Eleven athletes ran
+  # 3:28.82 to 3:34.03 and every one beat their rating. Three more came in at
+  # 4:18.37, 4:24.03 and 4:27.54 - pacemakers or drop-outs, 45 seconds down. The
+  # mean residual is dragged to -0.0262, so the model reads a FAST race as a slow
+  # one and hands every genuine finisher a 2.6% bonus as personal credit.
+  # Selemon Barega finished 9th, was credited with a +0.0409 surprise on n_eff
+  # 0.60 (learning rate 0.79), and came out of it rated 3:29.02 - four seconds
+  # faster than the quickest 1500m he has ever run. He then topped the rankings.
+  #
+  # The Huber clip protects an athlete's own update from their own catastrophe.
+  # NOTHING protected the shared shock from someone else's, and the shock is
+  # applied to everybody. The median is the same statistic the display offset
+  # already uses, and for the same stated reason.
+  resid_est <- z$perf[est] - r_pre[est]
+  # A TRIMMED mean is the shape this wants. The median is robust but discards the
+  # information in every ordinary race, and measured it costs 0.08 pp of raw
+  # concordance against the mean. Trimming the tails keeps the efficiency of a
+  # mean while refusing to let three athletes who stopped define the race.
+  S <- (if (sum(est) >= 3L)
+          (if (SHOCK == "median") stats::median(resid_est)
+           else if (SHOCK == "trim") mean(resid_est, trim = SHOCK_TRIM)
+           else mean(resid_est))
+        else 0) * (sum(est)/length(a))
   surprise <- (z$perf - r_pre) - S
   k0e <- K0v[[ev]]; if (is.null(k0e) || !is.finite(k0e)) k0e <- K0
   kfl_e <- KFLOORv[[ev]]; if (is.null(kfl_e) || !is.finite(kfl_e)) kfl_e <- KFLOOR
