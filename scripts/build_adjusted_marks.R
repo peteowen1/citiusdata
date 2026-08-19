@@ -26,6 +26,12 @@ suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D      <- here::here("citiusdata", "data")
 VKAP   <- as.numeric(Sys.getenv("ADJ_VENUE_KAPPA", "400"))  # shrinkage on venue n
 MINA   <- as.integer(Sys.getenv("ADJ_MIN_ATH", "3"))
+# Same argument as the wind fit: the venue effect is estimated from marks the
+# engine is scored on, so cap the ESTIMATION window while still applying the
+# result everywhere.
+VMAXY  <- as.integer(Sys.getenv("ADJ_MAX_YEAR", "9999"))
+WCURVE <- Sys.getenv("ADJ_WIND_CURVES", "wind_effect_curves.json")
+AOUT   <- Sys.getenv("ADJ_OUT", "adjusted_marks.parquet")
 reg <- as.data.table(citius::citius_events())[, .(event_id, discipline, sex, family,
                                                   orientation, unit)]
 
@@ -40,7 +46,7 @@ cat(sprintf("scoreable performances: %s over %d events\n",
             format(nrow(c0), big.mark = ","), uniqueN(c0$event_id)))
 
 # --- 1. WIND ------------------------------------------------------------------
-wf <- file.path(D, "wind_effect_curves.json")
+wf <- file.path(D, WCURVE)
 stopifnot("wind curves missing - run check_wind_effect.R first" = file.exists(wf))
 wc <- as.data.table(jsonlite::fromJSON(wf)$curves)
 stopifnot("wind curve file has no rows" = nrow(wc) > 0)
@@ -78,6 +84,10 @@ stopifnot("no performance received a wind correction" = sum(c0$wind_adj != 0) > 
 v <- c0[!is.na(venue_city) & nzchar(venue_city) & (is.na(indoor) | indoor == FALSE)]
 v[, n_ath := .N, by = .(athlete_id, event_id)]
 v <- v[n_ath >= MINA]
+v <- v[as.integer(format(date, "%Y")) <= VMAXY]
+cat(sprintf("venue effects estimated up to %s (%s marks)\n",
+            ifelse(VMAXY > 9000, "all years", as.character(VMAXY)),
+            format(nrow(v), big.mark = ",")))
 v[, y := perf - wind_adj]                                  # wind removed first
 v[, y := y - mean(y), by = .(athlete_id, event_id)]        # then ability
 v[is.na(tier) | !nzchar(tier), tier := "unknown"]
@@ -133,6 +143,6 @@ cat(sprintf("\nOVERALL: %.5f -> %.5f (%+.2f%%)\n", overall$sd_raw, overall$sd_ad
 out <- c0[, .(race_key, athlete_id, event_id, discipline, sex, family, date,
               comp_name, venue_city, place, mark, adj_mark, adj_delta,
               wind, wind_adj, venue_adj, legal, unit)]
-f <- file.path(D, "adjusted_marks.parquet")
+f <- file.path(D, AOUT)
 write_parquet(out, f)
 cat(sprintf("\nwrote %s (%s performances)\n", basename(f), format(nrow(out), big.mark = ",")))

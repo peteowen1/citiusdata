@@ -777,7 +777,9 @@ wrong or mis-parsed, not the corpus" = (n0 - nrow(d)) <= 200)
 # SEQ_ADJ=0 rates on raw marks.
 ADJ <- Sys.getenv("SEQ_ADJ", "1") != "0"
 if (ADJ) {
-  af <- file.path(OUT, "adjusted_marks.parquet")
+  # overridable so a corrections file fitted on a restricted window can be tested
+  # against the full-corpus one without swapping files under a running experiment
+  af <- file.path(OUT, Sys.getenv("SEQ_ADJFILE", "adjusted_marks.parquet"))
   if (!file.exists(af))
     stop("SEQ_ADJ is on but adjusted_marks.parquet is missing.\n",
          "  Build it:  Rscript citiusdata/scripts/build_adjusted_marks.R")
