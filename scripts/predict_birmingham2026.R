@@ -91,7 +91,13 @@ past <- past[!is_comb]
 stopifnot(
   "history must not contain the competition being predicted" =
     !any(past$competition_id == BIRMINGHAM, na.rm = TRUE),
-  "history must not reach the day of competition" = max(past$date, na.rm = TRUE) < MEET_START)
+  # nrow first: max(numeric(0), na.rm = TRUE) is -Inf, so on an empty history
+  # this assertion reads -Inf < MEET_START and passes while verifying nothing.
+  # Found by the CI footgun scan added the same day.
+  "history is empty, so the date guard below would pass without checking" =
+    nrow(past) > 0,
+  "history must not reach the day of competition" =
+    max(past$date, na.rm = TRUE) < MEET_START)
 cli::cli_alert_info(
   "History: {format(nrow(past), big.mark = ',')} row{?s}, {min(past$date)} to {max(past$date)}.")
 
