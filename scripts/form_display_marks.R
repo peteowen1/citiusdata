@@ -865,7 +865,14 @@ if (!"xb_sibs"  %in% names(act)) act[, xb_sibs  := 0L]
 if (!"ce_share" %in% names(act)) act[, ce_share := 0]
 if (!"imputed_slots" %in% names(act)) act[, imputed_slots := NA_integer_]
 act[, ce_imputed := fifelse(is.finite(imputed_slots), as.integer(imputed_slots), 0L)]
+# band_adj IS PUBLISHED, not just used. Without it pred_mark stopped being
+# reconstructible from the published columns the moment the depth correction
+# landed - exp(R + offset) no longer reproduces it - and check_panel_marks.R
+# caught exactly that by failing its reconstruction assertion. A displayed number
+# that cannot be rebuilt from the columns beside it is one nobody can check.
+if (!"band_adj" %chin% names(act)) act[, band_adj := 0]
 write_parquet(act[, .(event_id, athlete_id, athlete_name, rk, R, R_ceil, offset,
+                      band_adj,
                       pred_mark, rank_mark, peak_mark, raw_mark, n_eff, v, last, unit,
                       xb_share, xb_sibs, ce_share, ce_imputed)],
               file.path(OUT, sprintf("form_display_%s.parquet", TAG)))

@@ -17,9 +17,17 @@ d <- setDT(read_parquet(file.path(OUT, "form_display_final.parquet")))
 nm <- unique(d[, .(athlete_id, athlete_name)])
 
 # --- derive orientation per event, and check it ---
+# The centre includes the evidence-depth correction as of 2026-08-20. Rebuilding
+# from R + offset alone stopped reproducing pred_mark when that landed, and this
+# assertion is what caught it - correctly, because a displayed mark that cannot
+# be rebuilt from the columns published beside it is unverifiable. band_adj is
+# now published for exactly this reason; tolerate its absence for older files.
+if (!"band_adj" %chin% names(d)) d[, band_adj := 0]
+d[!is.finite(band_adj), band_adj := 0]
 o <- d[is.finite(pred_mark) & pred_mark > 0 & is.finite(R) & is.finite(offset)]
-o[, e_pos := abs(exp(R + offset) - pred_mark)]
-o[, e_neg := abs(exp(-(R + offset)) - pred_mark)]
+o[, centre := R + offset + band_adj]
+o[, e_pos := abs(exp(centre) - pred_mark)]
+o[, e_neg := abs(exp(-centre) - pred_mark)]
 ori <- o[, .(orient = if (median(e_neg) < median(e_pos)) -1L else 1L,
              err = min(median(e_neg), median(e_pos)),
              unit = unit[1]), by = event_id]
