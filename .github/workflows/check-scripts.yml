@@ -71,6 +71,10 @@ jobs:
       - name: Report patterns that have bitten before
         shell: bash
         run: |
+          # GitHub Actions runs this as: bash --noprofile --norc -e -o pipefail
+          # The -e is what matters below: ANY command evaluating false ends the
+          # step. That is why every conditional here is a full `if`, never a
+          # `[ ... ] && cmd` one-liner, and why scan() returns 0 explicitly.
           set -uo pipefail
           n_files=$(find scripts -name '*.R' -o -name '*.r' | wc -l)
           echo "scanning $n_files R scripts under scripts/ (recursively)"
@@ -93,8 +97,12 @@ jobs:
               echo ""
               echo "$why"
               printf '%s\n' "$hits" | head -15 | sed 's/^/  /'
-              [ "$n" -gt 15 ] && echo "  ... and $((n - 15)) more"
+              if [ "$n" -gt 15 ]; then echo "  ... and $((n - 15)) more"; fi
             fi
+            # An `if` whose condition is false returns 1, and under -e that ends
+            # the step. This job failed in CI on exactly that, having passed
+            # locally under plain bash, which does not set -e.
+            return 0
           }
 
           scan "1:n indexing. On an empty table 1:0 is c(1, 0), so this FABRICATES a row of NA instead of returning nothing - it printed eight fully-formed NA rows once. Use seq_len()." \
