@@ -102,7 +102,6 @@ jobs:
           cat(sprintf("\n%d occurrence(s) of known footgun patterns.\n", total))
           cat("Reported, not failed: each has legitimate uses. The point is that\n")
           cat("they show up in a diff rather than in a wrong published number.\n")
-          cat("\n
-ote: this flags the PATTERN, not a confirmed bug. A line already\n")
+          cat("\nNote: this flags the PATTERN, not a confirmed bug. A line already\n")
           cat("guarded - a sum(na.rm) preceded by an any(!is.na()) check, say - still\n")
           cat("appears here. Read the surrounding lines before changing anything.\n")
