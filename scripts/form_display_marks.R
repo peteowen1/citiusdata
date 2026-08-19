@@ -71,7 +71,64 @@ st[is.na(offset), offset := pooled]
 if (any(is.na(st$orientation)))
   stop(sprintf("%d rows have no orientation in the registry -- refusing to guess a mark",
                sum(is.na(st$orientation))))
-st[, pred_mark := exp(orientation * (R + offset))]
+# --- 2a. DEPTH CORRECTION on the displayed centre -----------------------------
+# The pooled per-event offset is right on average and wrong for everybody. It is
+# beaten 50.3% of the time overall - which looks perfect - while being beaten
+# 53.6% by records with under one effective race and 43.9% by records with 15+.
+# The offset carries the average depth of its fit population and fits nobody at
+# the extremes.
+#
+# Corrected with one median per evidence BAND, shared across events, on top of
+# the per-event offset. Per event AND band would be 86 x 7 cells and far too
+# thin; this is the smallest change that can work, and it keeps the per-event
+# level, which is real and varies in sign.
+#
+# Fitted before 2025, then checked on 2025 and 2026 SEPARATELY. Worst band
+# deviation from 50%: 2025 6.1 pp -> 2.2 pp, 2026 5.3 pp -> 2.5 pp. It has to
+# improve the window that is neither fitted nor sealed, or it was fitted to the
+# sealed data by accident.
+#
+# APPLIED TO THE DISPLAYED CENTRE ONLY, NEVER TO rank_mark. Two athletes on the
+# same rating with different evidence get different depth corrections, so putting
+# this in the sort key WOULD reorder them - and this file guarantees in its header
+# that it changes what is shown and never the rank. What an athlete typically runs
+# and how they are ranked are different questions that never had to share an
+# offset; separating them satisfies the guarantee instead of breaking it.
+DEPTH_ADJ <- Sys.getenv("FORM_DEPTH_ADJ", "1") != "0"
+.band_of <- function(n) cut(n, c(-Inf, 1, 2, 3, 5, 8, 15, Inf),
+                            labels = c("<1", "1-2", "2-3", "3-5", "5-8", "8-15", "15+"))
+if (DEPTH_ADJ) {
+  fitb <- copy(fit)
+  fitb[, band := .band_of(n_eff)]
+  dadj <- fitb[, .(band_adj = stats::median(resid - pooled), n_band = .N), by = band]
+  dadj[n_band < 500, band_adj := 0]      # a band too thin to estimate gets nothing
+  st[, band := .band_of(n_eff)]
+  st <- merge(st, dadj[, .(band, band_adj)], by = "band", all.x = TRUE)
+  st[is.na(band_adj), band_adj := 0]
+  cat(sprintf("depth correction: %d bands, range %+.4f to %+.4f log-perf\n",
+              dadj[band_adj != 0, .N], min(dadj$band_adj), max(dadj$band_adj)))
+  stopifnot("the depth correction is inert - every band came out zero" =
+              any(dadj$band_adj != 0))
+} else {
+  st[, band_adj := 0]
+}
+# the centre every DISPLAYED mark is built from
+# Rebuild the SAME centre on any validation frame. Checking a new spread against
+# an old centre measures neither, which is exactly what happened on the first
+# attempt at this - the good-day column read 7.80% purely because the check line
+# had no depth correction while the spread had been refitted with one.
+# Uses r_pre (the rating carried into that race) rather than R (the end state),
+# because a validation row is a race and not an athlete.
+.add_centre <- function(x) {
+  if (DEPTH_ADJ) {
+    x[, band := .band_of(n_eff)]
+    x <- merge(x, dadj[, .(band, band_adj)], by = "band", all.x = TRUE)
+    x[is.na(band_adj), band_adj := 0]
+  } else x[, band_adj := 0]
+  x[, centre := r_pre + offset + band_adj][]
+}
+st[, centre := R + offset + band_adj]
+st[, pred_mark := exp(orientation * centre)]
 st[, raw_mark  := exp(orientation * R)]
 # THE MARK THE TABLE IS ACTUALLY SORTED BY. Ranking runs on R_ceil (see the
 # setorder below) while `pred_mark` comes from R, so without this the visible
@@ -105,7 +162,15 @@ zf <- h[seen == TRUE & rc == "final" & date < FIT_BEFORE & n_eff >= PEAK_MIN_N &
 # offset with a spread taken around zero double-counted the skew.
 zf <- merge(zf, off[, .(event_id, offset)], by = "event_id", all.x = TRUE)
 zf[is.na(offset), offset := pooled]
-zf[, z := (perf - r_pre - offset) / sqrt(v_pre)]
+# z is measured around the SAME centre the peak mark is built on, depth
+# correction included. Fitting the spread around one centre and applying it
+# around another would reintroduce exactly the bias just removed.
+if (DEPTH_ADJ) {
+  zf[, band := .band_of(n_eff)]
+  zf <- merge(zf, dadj[, .(band, band_adj)], by = "band", all.x = TRUE)
+  zf[is.na(band_adj), band_adj := 0]
+} else zf[, band_adj := 0]
+zf[, z := (perf - r_pre - offset - band_adj) / sqrt(v_pre)]
 q50 <- stats::quantile(zf$z, 0.50); q90 <- stats::quantile(zf$z, 0.90)
 # ZSPREAD IS q90, NOT q90 - q50. The column promises P(beat it) = 10%, the rule
 # applied is `perf > r_pre + offset + ZSPREAD * sqrt(v)`, and z here is ALREADY
@@ -129,7 +194,7 @@ q50 <- stats::quantile(zf$z, 0.50); q90 <- stats::quantile(zf$z, 0.90)
 ZSPREAD <- unname(q90)
 cat(sprintf("peak spread: q90 of z = %.3f sd (normal would be %.3f); q50 %.3f\n",
             ZSPREAD, stats::qnorm(0.9), q50))
-st[, peak_mark := exp(orientation * (R + offset + ZSPREAD * sqrt(v)))]
+st[, peak_mark := exp(orientation * (centre + ZSPREAD * sqrt(v)))]
 st[!is.finite(v) | v <= 0, peak_mark := NA_real_]
 # SUPPRESS the good-day mark on a thin record rather than capping it.
 #
@@ -710,10 +775,11 @@ val <- h[seen == TRUE & rc == "final" & year(date) == 2026 &
          is.finite(perf) & is.finite(r_pre) & is.finite(v_pre) & v_pre > 0]
 val <- merge(val, off[, .(event_id, offset)], by = "event_id", all.x = TRUE)
 val[is.na(offset), offset := pooled]
-val[, peak_perf := r_pre + offset + ZSPREAD * sqrt(v_pre)]
+val <- .add_centre(val)
+val[, peak_perf := centre + ZSPREAD * sqrt(v_pre)]
 val_pk <- val[n_eff >= PEAK_MIN_N]        # the good-day column's own population
 hit <- val_pk[, mean(perf > peak_perf)]
-typ_hit <- val[, mean(perf > r_pre + offset)]
+typ_hit <- val[, mean(perf > centre)]
 # 2025 IS AN INDEPENDENT WINDOW, and it was going spare. The spread is fitted on
 # dates before 2025 and the honest check is 2026, so 2025 belongs to neither -
 # which makes it the right place to confirm a change to this column WITHOUT
@@ -723,11 +789,12 @@ v25 <- h[seen == TRUE & rc == "final" & year(date) == 2025 &
          is.finite(perf) & is.finite(r_pre) & is.finite(v_pre) & v_pre > 0]
 v25 <- merge(v25, off[, .(event_id, offset)], by = "event_id", all.x = TRUE)
 v25[is.na(offset), offset := pooled]
+v25 <- .add_centre(v25)
 v25_pk <- v25[n_eff >= PEAK_MIN_N]
 stopifnot("the 2025 validation window is empty" = nrow(v25_pk) > 1000)
 cat(sprintf("\nVALIDATION (2025, neither fitted nor sealed):\n"))
 cat(sprintf("  'good day' beaten %.2f%% over %s finals with n_eff >= %d (target 10%%)\n",
-            100 * v25_pk[, mean(perf > r_pre + offset + ZSPREAD * sqrt(v_pre))],
+            100 * v25_pk[, mean(perf > centre + ZSPREAD * sqrt(v_pre))],
             format(nrow(v25_pk), big.mark = ","), PEAK_MIN_N))
 
 cat(sprintf("\nCALIBRATION (2026, out of sample):\n"))
@@ -739,7 +806,7 @@ cat(sprintf("  'good day' beaten %.2f%% over %s finals with n_eff >= %d (target 
 # records beat 'typical' LESS often than thin ones do. Reported rather than
 # corrected - it is the known evidence-depth bias, not a fault in this file.
 cat(sprintf("  ...'typical' among those same deep records: %.2f%%\n",
-            100*val_pk[, mean(perf > r_pre + offset)]))
+            100*val_pk[, mean(perf > centre)]))
 # The page must state the MEASURED frequency, not the nominal one. Median
 # centring fixed the skew half of this; the rest is structural. ZSPREAD is ONE
 # pooled quantile of z applied to athletes whose variances differ, so it cannot
