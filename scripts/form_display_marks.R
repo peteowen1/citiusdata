@@ -304,8 +304,13 @@ if (CE_ON && any(act$event_id %chin% CE_EV)) {
          "  Build them:  Rscript citiusdata/scripts/build_combined_components.R\n",
          "               Rscript citiusdata/scripts/build_combined_simulation.R\n",
          "  Or turn it off explicitly:  FORM_CE_BLEND=0")
-  csim <- setDT(read_parquet(fsim))[, .(event_id = ce, athlete_id = as.character(athlete_id),
-                                        sim_mean, sim_sd)]
+  # imputed_slots travels too: a first-time decathlete can have up to 3 of 10
+  # component slots filled rather than observed, and without this the published
+  # rank is partly a guess that looks identical to a fully observed one.
+  .cs <- setDT(read_parquet(fsim))
+  if (!"imputed_slots" %chin% names(.cs)) .cs[, imputed_slots := NA_integer_]
+  csim <- .cs[, .(event_id = ce, athlete_id = as.character(athlete_id),
+                  sim_mean, sim_sd, imputed_slots)]
   ccmp <- setDT(read_parquet(fcmp))
   cper <- unique(ccmp[complete == TRUE, .(tid, ce, athlete_id = as.character(athlete_id))])[
     , .(ce_perfs = .N), by = .(event_id = ce, athlete_id)]
@@ -329,6 +334,7 @@ if (CE_ON && any(act$event_id %chin% CE_EV)) {
       sprintf("  simulated score (prior weight %.0f, median weight %.2f on the simulation)\n",
               CE_PW, if (nrow(moved_ce)) stats::median(moved_ce$.wc) else NA_real_), sep = "")
   stopifnot("the combined-event blend moved no rows at all" = nrow(moved_ce) > 0)
+  act[, ce_share := fifelse(is.finite(.wc), .wc, 0)]   # weight on the simulation
   act[, c(".mu", ".sd", ".zt", ".zs", ".wc") := NULL]
 }
 
@@ -437,6 +443,14 @@ if (XB_ON) {
               if (nrow(moved)) stats::median(moved$sibs) else NA_real_), sep = "")
   # A blend that moves nothing is a broken configuration, not a null result.
   stopifnot("the cross-event blend moved no rows at all" = nrow(moved) > 0)
+  # KEEP the provenance of the rating. n_eff alone cannot tell a reader whether a
+  # rank rests on the athlete's own racing or on what a correlated event implies
+  # about them - and for a thin record those are very different claims. xb_share
+  # is the fraction of the ranking key taken from other events; xb_sibs is how
+  # many events it was taken from.
+  act[, xb_share := .w]
+  act[!is.finite(xb_share), xb_share := 0]
+  act[, xb_sibs := fifelse(xb_share > 0 & is.finite(sibs), as.integer(sibs), 0L)]
   act[, c(".z", ".mu", ".sd", ".w") := NULL]
 }
 
@@ -466,7 +480,10 @@ cat(sprintf("rank_mark monotone with rank in all %d events\n", nrow(.mono)))
 
 fmt <- function(m, unit) {
   ifelse(is.na(m), "  -  ",
-  ifelse(unit != "s", sprintf("%.2f", m),
+  # `unit` is "seconds"/"metres"/"points" from the registry. This tested
+  # `unit != "s"` and so never formatted a time: the 10,000m printed 1625.07
+  # instead of 27:05.07 and the 1500m 209.63 instead of 3:29.63.
+  ifelse(!(unit %chin% c("s", "seconds")), sprintf("%.2f", m),
   ifelse(m < 60, sprintf("%.2f", m),
   ifelse(m < 3600, sprintf("%d:%05.2f", floor(m/60), m %% 60),
          sprintf("%d:%02d:%02.0f", floor(m/3600), floor((m %% 3600)/60), m %% 60)))))
@@ -549,6 +566,13 @@ cat(sprintf("  ...'typical' among those same deep records: %.2f%%\n",
 # over-dispersed and it under-covers. Refitting the spread to force 10% would
 # have to be tuned on 2026, and spending the sealed window on a display label
 # is a bad trade.
+# 1/hit is Inf when no out-of-sample final beat its peak mark, and this string
+# is published in the calibration JSON. Refuse to publish a number that means
+# "never" dressed as a frequency.
+if (!is.finite(hit) || hit <= 0)
+  stop("no out-of-sample final beat its peak mark, so the good-day label would
+publish as 'about 1 race in Inf'. Investigate the peak calibration rather than
+shipping it.")
 PEAK_LABEL <- sprintf("about 1 race in %.0f", 1/hit)
 cat(sprintf("  -> page label: \"%s\"\n", PEAK_LABEL))
 # Tolerance was +/-5pp, which passed a 14.2% rate in silence while the page
@@ -583,8 +607,19 @@ if (nrow(empty)) {
 }
 stopifnot("rank_mark missing - the table would sort by a column it does not show" =
             "rank_mark" %in% names(act))
+# xb_share / xb_sibs / ce_share travel with the table so a reader can see WHERE a
+# rating came from: how much of the ranking key is the athlete's own racing in
+# this event, and how much is inferred from correlated events or, for combined
+# events, from a simulation of their components. Defaulted so the columns exist
+# even when a blend is switched off.
+if (!"xb_share" %in% names(act)) act[, xb_share := 0]
+if (!"xb_sibs"  %in% names(act)) act[, xb_sibs  := 0L]
+if (!"ce_share" %in% names(act)) act[, ce_share := 0]
+if (!"imputed_slots" %in% names(act)) act[, imputed_slots := NA_integer_]
+act[, ce_imputed := fifelse(is.finite(imputed_slots), as.integer(imputed_slots), 0L)]
 write_parquet(act[, .(event_id, athlete_id, athlete_name, rk, R, R_ceil, offset,
-                      pred_mark, rank_mark, peak_mark, raw_mark, n_eff, v, last, unit)],
+                      pred_mark, rank_mark, peak_mark, raw_mark, n_eff, v, last, unit,
+                      xb_share, xb_sibs, ce_share, ce_imputed)],
               file.path(OUT, sprintf("form_display_%s.parquet", TAG)))
 cat(sprintf("wrote form_display_%s.parquet (%s rows)\n", TAG,
             format(nrow(act), big.mark = ",")))

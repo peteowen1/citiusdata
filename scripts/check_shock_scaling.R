@@ -5,7 +5,12 @@
 # race conditions contributing nothing. If a tactical race is not recognised as
 # slow, every athlete in it is charged for the pace.
 #
-# THE SUSPECTED MECHANISM. form_ratings.R scales the shock by the ESTABLISHED
+# HISTORICAL NOTE, 2026-08-19: this script diagnosed the pre-fix behaviour and
+# the fix has since shipped. form_ratings.R now defaults to SEQ_SHOCK_W=kappa,
+# weighting the shock m/(m+K) with K=2 and a floor of 2 established athletes.
+# Run it with SEQ_SHOCK_W=share to reproduce what is described below.
+#
+# THE SUSPECTED MECHANISM (as it was). form_ratings.R scaled the shock by the ESTABLISHED
 # athletes' share of the field:  S = trimmed_mean(surprise | established) *
 # (n_established / n_field). The intent is honest - a shock estimated from two
 # known athletes in a field of thirty should not be trusted at full strength -

@@ -23,9 +23,19 @@ sc <- function(x) { v <- x %||% NA; if (length(v) != 1) NA else v }
 
 meta <- vector("list", length(f)); wr <- list(); pb <- list(); sb <- list(); ho <- list()
 nmiss <- 0L
+# A 404 sentinel is counted in nmiss and reported. A genuine readRDS failure -
+# a truncated file from a harvest killed mid-write, which the harvester's own
+# header says is expected - had NO counter, so N corrupt files silently dropped
+# N athletes and the coverage percentages below still looked healthy, because
+# they are computed only over what parsed.
+nbad <- 0L; badf <- character(0)
 for (i in seq_along(f)) {
   a <- tryCatch(readRDS(f[i]), error = function(e) NULL)
-  if (is.null(a)) next
+  if (is.null(a)) {
+    nbad <- nbad + 1L
+    if (length(badf) < 5) badf <- c(badf, basename(f[i]))
+    next
+  }
   if (isTRUE(a$.missing)) { nmiss <- nmiss + 1L; next }
   id <- as.character(sc(a$id))
   seasons <- unlist(a$activeSeasons %||% list())
@@ -73,6 +83,14 @@ for (i in seq_along(f)) {
       honour = paste(utils::head(unlist(r), 4), collapse = " | "))), fill = TRUE)
   if (i %% 2000L == 0L) cat(sprintf("  parsed %s/%s\n",
       format(i, big.mark = ","), format(length(f), big.mark = ",")))
+}
+
+if (nbad > 0) {
+  cat(sprintf("UNREADABLE cache files: %d of %d (%s%s)\n", nbad, length(f),
+              paste(badf, collapse = ", "), if (nbad > length(badf)) ", ..." else ""))
+  cat("  These athletes are missing from every table below, and the coverage\n")
+  cat("  figures are computed only over what parsed - so they will look fine.\n")
+  cat("  Re-harvest them, or delete the truncated files so they are re-fetched.\n")
 }
 w <- function(l, nm) {
   if (!length(l)) { cat(sprintf("  %-22s EMPTY\n", nm)); return(invisible()) }

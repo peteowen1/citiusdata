@@ -45,9 +45,15 @@ if (!nrow(mapped)) {
   }
 }
 # A guard, so a future registry change that starts mapping these is caught.
-stopifnot("a junior-implement discipline is now SCOREABLE under some event_id - it
-would put 6kg shot marks into the senior rating" =
-            sum(c0[qualified == TRUE, scoreable], na.rm = TRUE) == 0)
+# na.rm = TRUE alone would let an all-NA `scoreable` column pass this: sum of
+# nothing is 0. Assert the column is actually populated first.
+.q <- c0[qualified == TRUE, scoreable]
+stopifnot("no qualified-implement rows found at all - the check has nothing to
+verify, which is itself the thing to investigate" = length(.q) > 0,
+          "the scoreable column is entirely NA for qualified rows, so the guard
+below would pass without checking anything" = any(!is.na(.q)),
+          "a junior-implement discipline is now SCOREABLE under some event_id - it
+would put 6kg shot marks into the senior rating" = sum(.q, na.rm = TRUE) == 0)
 cat("\nguard passes: no qualified-implement row is scoreable\n")
 
 cat("\n=== what is being left on the table ===\n")

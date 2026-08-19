@@ -146,7 +146,15 @@ missing_probe <- character(0)
 for (probe in c("1500 Metres", "100 Metres", "Shot Put", "Marathon")) {
   for (sexi in c("M", "W")) {
     id <- reg[discipline == probe & sex == sexi, event_id]
-    if (!length(id)) next
+    if (!length(id)) {
+      # the "no neighbours" branch below is loud; this one - the probe not
+      # existing in the registry at all - used to be silent, which is the same
+      # bug one step earlier
+      cat(sprintf("\n*** %s (%s): NOT IN THE REGISTRY, so it was never probed.\n",
+                  probe, sexi))
+      missing_probe <- c(missing_probe, sprintf("%s (%s) [absent]", probe, sexi))
+      next
+    }
     nb <- sim[e1 == id | e2 == id]
     # A probe with NO neighbours is the loudest possible result, and this used
     # to `next` past it in silence - exactly how road events sat outside the

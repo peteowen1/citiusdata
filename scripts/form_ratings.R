@@ -222,11 +222,11 @@ SHOCK_TRIM <- .env_num("SEQ_SHOCK_TRIM", 0.20)
 # Kept fraction of the measured effect, by established share: <10% 0.0%,
 # 10-25% 0.4%, 25-50% 2.4%, 50-75% 12.9%, >75% 55.3%.
 #
-# SEQ_SHOCK_W = "share" reproduces the old behaviour exactly and is the default
-# until the sweep says otherwise. "kappa" weights by how many athletes the
-# estimate rests on, m / (m + SEQ_SHOCK_K), which does not care how many
-# strangers were also in the race - because a shock measured off 6 athletes is
-# equally well measured whether the field is 8 or 80.
+# SEQ_SHOCK_W = "kappa" is now the DEFAULT (adopted 2026-08-19, see below): it
+# weights by how many athletes the estimate rests on, m / (m + SEQ_SHOCK_K),
+# which does not care how many strangers were also in the race - a shock measured
+# off 6 athletes is equally well measured whether the field is 8 or 80.
+# SEQ_SHOCK_W = "share" asks for the OLD behaviour explicitly.
 # ADOPTED 2026-08-19 after a five-point sweep. Weighted-sealed by K:
 #   0.5 -> 72.997 | 1 -> 73.025 | 2 -> 73.039 | 4 -> 73.043, against the old
 # share weighting at 73.006 and lowering the floor alone at 73.010. K=4 edges
@@ -697,6 +697,115 @@ if (USE_SPLITS) {
               TAG, format(nrow(SPLITS), big.mark = ",")))
 }
 d <- d[!is.na(perf) & !is.na(date) & !is.na(race_key) & !is.na(place) & place > 0 & date >= FROM]
+
+# ORDER MATTERS. This guard tests RAW marks and must run BEFORE any correction.
+# When the adjustment ran first it flagged 3 marks instead of 1: a headwind-
+# corrected sprint can legitimately project past a world record, because the
+# record itself was set in some wind. The guard exists to catch a result nobody
+# ran, not a projection.
+# IMPOSSIBLE MARKS. A performance better than its event's world record is either
+# a new world record - in which case world_records.csv carries it, and there is a
+# separate job to keep that current - or it is bad data. Found 2026-08-19 by Pete
+# reading a PB column: Noah Lyles carried an 18.90 for 200m against a record of
+# 19.19, dated 2020-07-09 with a 3.7 m/s HEADWIND, no competition and no venue.
+# That is the annulled Inspiration Games run where he started roughly 15m early.
+# It was `scoreable`, so the engine rated it, and at CEIL 0.30 it was setting
+# 30% of his published rank - he was the number one men's 200m runner partly on a
+# race that did not happen.
+#
+# Corpus-wide this catches almost nothing (3 marks in 5.2 million), which is
+# exactly why it needs to be automatic: one bad row in a million is invisible to
+# every aggregate check and lands squarely on a famous athlete at the top of a
+# published table.
+WRF <- file.path(OUT, "world_records.csv")
+if (file.exists(WRF)) {
+  .wr <- setDT(utils::read.csv(WRF, stringsAsFactors = FALSE))
+  .wr[, wr_mark := vapply(strsplit(as.character(mark), ":", fixed = TRUE), function(q) {
+        v <- suppressWarnings(as.numeric(q))
+        if (anyNA(v)) NA_real_ else Reduce(function(a, b) a * 60 + b, v)
+      }, numeric(1))]
+  .wr <- .wr[is.finite(wr_mark), .(event_id, wr_mark)]
+  # This whole guard is an inner join away from being vacuous: if the record
+  # file's event_ids drift, .wr empties, `bad` is empty and the run reports
+  # nothing dropped - exactly the state it is meant to make impossible.
+  stopifnot("world_records.csv parsed to no usable records - the impossible-mark
+guard would silently check nothing" = nrow(.wr) >= 20)
+  # orientation comes from the registry directly - `reg` here carries only
+  # (event_id, family), so reusing it silently produced no orientation column
+  .or <- as.data.table(citius::citius_events())[, .(event_id, orientation)]
+  .wr <- merge(.wr, .or, by = "event_id")
+  .wr[, wr_perf := fifelse(orientation == -1, -log(wr_mark), log(wr_mark))]
+  n0 <- nrow(d)
+  d <- merge(d, .wr[, .(event_id, wr_perf)], by = "event_id", all.x = TRUE)
+  bad <- d[is.finite(wr_perf) & perf > wr_perf]
+  if (nrow(bad)) {
+    cat(sprintf("[%s] IMPOSSIBLE MARKS DROPPED: %d better than their world record\n",
+                TAG, nrow(bad)))
+    print(head(merge(bad[, .(event_id, date, athlete_id, perf)], .or, by = "event_id")[
+      , .(event_id, date, athlete_id,
+          mark = round(exp(fifelse(orientation == -1, -perf, perf)), 3))], 10))
+    d <- d[!(is.finite(wr_perf) & perf > wr_perf)]
+  }
+  d[, wr_perf := NULL]
+  # If this ever fires in bulk the world-record table is stale or mis-parsed,
+  # which is a different problem from a bad result row - do not silently bin
+  # thousands of real performances.
+  stopifnot("more than 200 marks beat their world record - world_records.csv is
+wrong or mis-parsed, not the corpus" = (n0 - nrow(d)) <= 200)
+}
+
+# ADJUSTED MARKS. Correct each performance for wind and venue before rating it,
+# rather than leaving the engine to infer both from the field. Built and
+# validated in build_adjusted_marks.R: within-athlete scatter falls 2.08% overall
+# and in every family - sprint -4.53%, road -3.09%, distance -2.68% - with 58-74%
+# of individual athletes becoming more consistent. The corrections know nothing
+# about which athlete produced which mark, so a tighter athlete cannot be an
+# artefact of fitting.
+#
+# NOT COMBINED WITH SEQ_WINDCS. Only one wind correction should ever be live;
+# this one operates on the mark, that one inside the engine.
+#
+# The race shock still runs afterwards and estimates whatever conditions remain -
+# that is the intended order, correct the mark then measure the day.
+# ADOPTED 2026-08-19. Rating on corrected marks beats rating on raw ones:
+# 71.740 -> 71.810 raw sealed, 73.178 -> 73.280 weighted. 92.5% of performances
+# corrected, median adjustment 0.2%. By family it lands exactly where wind and
+# altitude live - road +0.378 (4 of 4 events up), sprint +0.214, distance +0.164,
+# middle +0.074 (9 of 10 up) - with 100m M +0.637 over 72,838 pairs against a
+# 0.160 noise floor, and the marathons +0.39 to +0.50. Walk is the one loss at
+# -0.226, on small samples, and is the open question.
+# SEQ_ADJ=0 rates on raw marks.
+ADJ <- Sys.getenv("SEQ_ADJ", "1") != "0"
+if (ADJ) {
+  af <- file.path(OUT, "adjusted_marks.parquet")
+  if (!file.exists(af))
+    stop("SEQ_ADJ is on but adjusted_marks.parquet is missing.\n",
+         "  Build it:  Rscript citiusdata/scripts/build_adjusted_marks.R")
+  .adj <- setDT(read_parquet(af, col_select = c("race_key", "athlete_id", "event_id",
+                                                "wind_adj", "venue_adj")))
+  .adj[, athlete_id := as.character(athlete_id)]
+  .adj <- unique(.adj, by = c("race_key", "athlete_id", "event_id"))
+  .adj[, adj_total := fifelse(is.finite(wind_adj), wind_adj, 0) +
+                      fifelse(is.finite(venue_adj), venue_adj, 0)]
+  n0 <- nrow(d)
+  d[, athlete_id := as.character(athlete_id)]
+  d <- merge(d, .adj[, .(race_key, athlete_id, event_id, adj_total)],
+             by = c("race_key", "athlete_id", "event_id"), all.x = TRUE)
+  # a fan-out here would duplicate performances and inflate every rating
+  stopifnot("joining adjusted marks changed the row count - the key is not unique" =
+              nrow(d) == n0)
+  hit <- is.finite(d$adj_total) & d$adj_total != 0
+  cat(sprintf("[%s] adjusted marks: %s of %s performances corrected (%.1f%%), median |adj| %.4f\n",
+              TAG, format(sum(hit), big.mark = ","), format(nrow(d), big.mark = ","),
+              100 * mean(hit), stats::median(abs(d$adj_total[hit]))))
+  # If almost nothing is corrected the join failed and the arm is really a
+  # baseline wearing the wrong label - the most expensive kind of null result.
+  stopifnot("fewer than 10% of performances got an adjustment - the join failed" =
+              mean(hit) > 0.10)
+  d[is.finite(adj_total), perf := perf - adj_total]
+  d[, adj_total := NULL]
+}
+
 d <- merge(d, reg, by = "event_id", all.x = TRUE)
 d <- merge(d, wb, by = "event_id", all.x = TRUE)
 d[, rc := fifelse(grepl("semi", round, ignore.case=TRUE), "semi",
@@ -1394,7 +1503,14 @@ for (r_ in seq_along(starts)) {
           w <- length(xk) / (length(xk) + SLOPE_K)
           b <- 1 + w * (b_hat - 1)
           aa <- mean(yk) - b * mean(xk)
-          corr <- ((aa + b * r_pre) - r_pre) * (sum(est)/length(a))
+          # Use the SAME weighting as S above. This line held sum(est)/length(a)
+          # - the field-share dilution the 2026-08-19 shock fix replaced - so
+          # turning SEQ_SLOPE on would silently reintroduce the bug it was
+          # written to remove. Caught in review; SLOPE is off by default, so
+          # nothing shipped was affected.
+          corr <- ((aa + b * r_pre) - r_pre) *
+                  (if (SHOCK_W == "kappa") m_est / (m_est + SHOCK_K)
+                   else m_est / length(a))
         }
       }
     }

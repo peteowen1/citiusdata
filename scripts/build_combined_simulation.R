@@ -83,14 +83,26 @@ chk[, mk := mark_of(R, orientation)]
 anchor <- chk[, .(n = .N, median_mark = round(stats::median(mk), 2)), by = .(event_id, kind)]
 cat("\n=== anchor: do ratings turn back into plausible marks? ===\n")
 print(anchor[order(event_id)][1:12])
+# The probe must EXIST before its bound means anything. Written first as
+# `anchor[event_id == "AT-100Metres-M", median_mark] %between% c(9, 14)`, which
+# on a missing row yields numeric(0) -> logical(0), and stopifnot(logical(0))
+# PASSES. The comment above calls this the check that catches an orientation
+# flip; it would have caught nothing and written a garbage simulation. Same
+# mechanism as all(logical(0)) being TRUE.
+.anchor_ok <- function(ev, lo, hi) {
+  v <- anchor[event_id == ev, median_mark]
+  if (length(v) != 1L || !is.finite(v))
+    stop(sprintf("anchor event %s is absent from the state - cannot verify orientation", ev))
+  isTRUE(v >= lo && v <= hi)
+}
 stopifnot(
-  "100m ratings do not produce ~9-13 second marks - orientation is wrong" =
-    anchor[event_id == "AT-100Metres-M", median_mark] %between% c(9, 14),
-  "shot put ratings do not produce ~10-22 metre marks" =
-    anchor[event_id == "AT-ShotPut-M", median_mark] %between% c(8, 24),
-  "1500m ratings do not produce ~200-360 second marks" =
-    anchor[event_id == "AT-1500Metres-M", median_mark] %between% c(190, 400))
-cat("all three anchors pass\n")
+  "100m ratings do not produce ~9-14 second marks - orientation is wrong" =
+    .anchor_ok("AT-100Metres-M", 9, 14),
+  "shot put ratings do not produce ~8-24 metre marks" =
+    .anchor_ok("AT-ShotPut-M", 8, 24),
+  "1500m ratings do not produce ~190-400 second marks" =
+    .anchor_ok("AT-1500Metres-M", 190, 400))
+cat("all three anchors pass (each verified present, not merely unfalsified)\n")
 
 # --- a rating for every slot the athlete has ever contested in a combined event
 # perf = orientation * log(mark), time-weighted so recent marks dominate. This is
@@ -202,7 +214,13 @@ if (nzchar(DAYSD)) {
   DAY <- numeric(0)
   for (CE in CE_EVENTS) {
     t_i <- tgt[ce == CE, target_sd]
-    if (!length(t_i) || !is.finite(t_i)) { DAY[CE] <- 0; next }
+    if (!length(t_i) || !is.finite(t_i)) {
+      # every other branch of this loop prints a line; this one used to fall
+      # through in silence, leaving a combined event with no day effect at all
+      cat(sprintf("  %-18s NO TARGET SPREAD (needs athletes with 3+ totals) -\n", CE))
+      cat("                     day_sd forced to 0, so its simulated range is TOO NARROW\n")
+      DAY[CE] <- 0; next
+    }
     grid <- c(0, 0.004, 0.008, 0.012, 0.016, 0.022, 0.030)
     got <- vapply(grid, function(g) {
       x <- sim_one_ce(CE, g); if (is.null(x)) NA_real_ else stats::median(x$sim_sd)

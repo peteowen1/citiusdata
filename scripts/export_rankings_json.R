@@ -92,7 +92,12 @@ if (DROP_ZERO_T1) {
                            col_select = c("race_key", "event_id")))
   hh[, competition_id := tstrsplit(race_key, "[|]", keep = 1L)[[1]]]
   hh <- merge(hh, cg[, .(competition_id, meet_tier)], by = "competition_id", all.x = TRUE)
-  t1 <- hh[, .(t1 = uniqueN(race_key[meet_tier == "T1_elite"])), by = event_id]
+  # uniqueN(c(NA, NA, NA)) is 1, NOT 0. meet_tier is NA for every uncatalogued
+  # competition after the all.x merge, so `race_key[meet_tier == "T1_elite"]`
+  # returns a vector of NAs for an event with no elite races at all - and this
+  # counted that as one elite race, letting the event escape the drop below.
+  t1 <- hh[, .(t1 = uniqueN(race_key[!is.na(meet_tier) & meet_tier == "T1_elite"])),
+           by = event_id]
   zero <- t1[t1 == 0, event_id]
   if (length(zero)) {
     gone <- unique(d[event_id %chin% zero, .(discipline, sex)])
@@ -192,7 +197,10 @@ if (file.exists(hf)) {
   # than assume seconds, or every field mark would come out inverted
   ori <- as.data.table(citius::citius_events())[, .(event_id, orientation)]
   d <- merge(d, ori, by = "event_id", all.x = TRUE)
-  stopifnot("orientation missing for some events" = !any(is.na(d$orientation)))
+  # !any(is.na(x)) is TRUE for a zero-row table, so the row count has to be
+  # asserted too or this validates nothing when an upstream filter empties `d`
+  stopifnot("no rows to export - check FORM_TAG and the upstream filters" = nrow(d) > 0,
+            "orientation missing for some events" = !any(is.na(d$orientation)))
   d[, `:=`(pb_mark = exp(orientation * pb_perf),
            sb_mark = exp(orientation * sb_perf))]
   cat(sprintf("bests from scored history (%d season): PB on %.0f%% of ranked rows, SB on %.0f%%\n",

@@ -30,7 +30,11 @@ dir.create(BLOG, recursive = TRUE, showWarnings = FALSE)
 cal <- fread(file.path(D, "athletics_calendar.csv"))
 cal[, `:=`(date_start = as.Date(date_start), date_end = as.Date(date_end),
            prediction_cutoff = as.Date(prediction_cutoff))]
+# Every check below is an all(...) or an anyDuplicated(), and both are vacuously
+# satisfied by a zero-row table - so an empty or mis-parsed calendar would sail
+# through the entire block. Assert the rows exist first.
 stopifnot(
+  "the calendar parsed to zero rows" = nrow(cal) > 0,
   "meet_id must be unique" = !anyDuplicated(cal$meet_id),
   "dates must be ordered within a meet" = all(cal$date_end >= cal$date_start),
   "a prediction cutoff must precede its meet" = all(cal$prediction_cutoff < cal$date_start),

@@ -39,6 +39,10 @@ two[, rank := seq_len(.N), by = ev]
 # share among the siblings the engine would actually keep
 two[, used := rank <= NSIB & corv >= MINCOR]
 two[, r2 := corv^2]
+# `used` must never be NA: fifelse propagates it, and sum(r2[used]) then returns
+# NA for the WHOLE event, blanking share for every otherwise-valid sibling.
+two[!is.finite(corv), used := FALSE]
+two[is.na(used), used := FALSE]
 two[, share := fifelse(used, 100 * r2 / sum(r2[used]), NA_real_), by = ev]
 
 out <- two[rank <= TOPN, .(
@@ -60,7 +64,10 @@ cat(sprintf("wrote %s\n", basename(jf)))
 
 for (probe in c("AT-10000Metres-M", "AT-1500Metres-M", "AT-Decathlon-M", "AT-ShotPut-W")) {
   x <- out[event_id == probe]
-  if (!nrow(x)) next
+  if (!nrow(x)) {
+    cat(sprintf("\n== %s == NO ROWS - this event produced no siblings at all\n", probe))
+    next
+  }
   cat(sprintf("\n== %s ==\n", probe))
   print(x[, .(neighbour, nb_family, shared, r = r_used, r2, `share%` = share, used)])
 }
