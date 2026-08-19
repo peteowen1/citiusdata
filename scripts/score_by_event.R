@@ -29,6 +29,8 @@ YEARS <- as.integer(trimws(strsplit(Sys.getenv("YEARS", "2025,2026"), ",")[[1]])
 MINP  <- as.integer(Sys.getenv("MIN_PAIRS", "300"))
 stopifnot("ARMS needs at least two tags" = length(tags) >= 2,
           "YEARS parsed to nothing" = length(YEARS) > 0 && all(is.finite(YEARS)))
+SCORE_OUT <- Sys.getenv("SCORE_OUT", "")   # optional JSON of the by-family tables
+.score_json <- list()
 base <- tags[1]
 cat(sprintf("base arm: %s | comparing: %s | years: %s\n",
             base, paste(tags[-1], collapse = ", "), paste(YEARS, collapse = ", ")))
@@ -125,6 +127,10 @@ for (t in tags[-1]) {
   fam <- a[, .(events = .N, up = sum(delta > 0), down = sum(delta < 0),
                pooled = round(weighted.mean(delta, pairs), 3)), by = family]
   setorder(fam, -pooled)
+  # Keep the measured table so a report can quote it, rather than someone
+  # retyping numbers out of a console days later.
+  .score_json[[length(.score_json) + 1L]] <- list(arm = t, base = base,
+                                                 by_family = fam)
   print(fam)
 
   cat("\n-- 10 biggest gains --\n")
@@ -133,4 +139,10 @@ for (t in tags[-1]) {
   cat("\n-- 10 biggest losses --\n")
   print(head(a[order(delta), .(discipline, sex, family, pairs,
                                delta = round(delta, 3), noise = round(noise, 3))], 10))
+}
+
+if (nzchar(SCORE_OUT) && length(.score_json)) {
+  writeLines(jsonlite::toJSON(.score_json, dataframe = "rows", auto_unbox = TRUE,
+                              na = "null"), file.path(D, SCORE_OUT))
+  cat(sprintf("wrote %s (%d comparison(s))\n", SCORE_OUT, length(.score_json)))
 }
