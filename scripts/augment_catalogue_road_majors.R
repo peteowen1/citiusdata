@@ -93,7 +93,7 @@ cat(sprintf("\nadding %s competitions: %s majors (T1), %s label races (T2)\n",
 print(add[, .(competitions = .N, first = min(date), last = max(date)),
           by = .(class, meet_tier)])
 cat("\nnamed competitions being added (top 20 by count):\n")
-print(add[, .N, by = .(competition, meet_tier)][order(-N)][1:min(20, .N)])
+print(add[, .N, by = .(competition, meet_tier)][order(-N)][seq_len(min(20, .N))])
 
 # Carry the NAME across - without it every added row is anonymous in the
 # catalogue (54 of 54 marathon_major rows currently have comp_name NA).

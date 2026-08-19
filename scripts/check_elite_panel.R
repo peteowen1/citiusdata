@@ -32,7 +32,7 @@ cohort <- function(yr, n_panel = 15, min_finals = 6) {
   p <- merge(p, tested, by = c("athlete_id","event_id"))[finals >= min_finals]
   p <- merge(p, nm, by = "athlete_id", all.x = TRUE)
   setorder(p, -gap)
-  p <- p[1:min(n_panel, .N)]
+  p <- p[seq_len(min(n_panel, .N))]
   p[, p_holm := stats::p.adjust(p, method = "holm")]
   p[, cohort := yr][]
 }

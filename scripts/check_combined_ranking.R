@@ -87,7 +87,7 @@ cat(sprintf("WA covers %d combined events, %d ranked athletes\n",
             uniqueN(wa$event_id), nrow(wa)))
 
 cat("\n=== can the simulation even see the WA top ten? ===\n")
-top <- wa[, .SD[order(wa_place)][1:min(10, .N)], by = event_id]
+top <- wa[, .SD[order(wa_place)][seq_len(min(10, .N))], by = event_id]
 top <- merge(top[, .(event_id, athlete_id = as.character(athlete_id), wa_place)],
              act[, .(event_id, athlete_id, simulable = is.finite(sim_mean), perfs)],
              by = c("event_id", "athlete_id"), all.x = TRUE)
@@ -100,7 +100,7 @@ score <- function(col, lab) {
   s[, rk := seq_len(.N), by = event_id]
   ours <- s[rk <= 10, .(event_id, athlete_id)]
   res <- rbindlist(lapply(unique(wa$event_id), function(EV) {
-    w10 <- wa[event_id == EV][order(wa_place)][1:min(10, .N)]
+    w10 <- wa[event_id == EV][order(wa_place)][seq_len(min(10, .N))]
     o10 <- ours[event_id == EV]
     if (!nrow(o10) || !nrow(w10)) return(NULL)
     data.table(event_id = EV, wa_n = nrow(w10),
@@ -163,7 +163,11 @@ d <- setDT(read_parquet(file.path(D, "form_display_final.parquet")))
 nm <- unique(d[, .(athlete_id = as.character(athlete_id), athlete_name)])
 EV <- Sys.getenv("CE_SHOW", "AT-Decathlon-M")
 x <- merge(act[event_id == EV], nm, by = "athlete_id", all.x = TRUE)
-mk <- function(col) { y <- x[is.finite(get(col))][order(-get(col))][1:10]
+# seq_len, not 1:10. With fewer than ten simulable athletes this indexed past
+# the end and the loop below then printed the NA rows as if they were
+# athletes - a fabricated top ten, not a short one.
+mk <- function(col) { y <- x[is.finite(get(col))][order(-get(col))]
+                      y <- y[seq_len(min(10L, nrow(y)))]
                       paste(sprintf("%2d. %s", seq_len(nrow(y)),
                                     substr(y$athlete_name, 1, 22)), collapse = "\n") }
 cat(sprintf("\n-- %s --\nBY POINTS TOTAL%sBY SIMULATION\n", EV, strrep(" ", 12)))

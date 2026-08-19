@@ -52,7 +52,7 @@ cohort <- function(yr, n_panel = 10, min_finals = 6) {
   p <- merge(p, nm, by = "athlete_id", all.x = TRUE)
   p <- merge(p, ori[, .(event_id, orient)], by = "event_id", all.x = TRUE)
   setorder(p, -gap)
-  p[1:min(n_panel, .N)]
+  p[seq_len(min(n_panel, .N))]
 }
 
 show <- function(p, yr) {

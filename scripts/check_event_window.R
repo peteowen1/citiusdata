@@ -41,7 +41,7 @@ score <- function(EVENT_D, ATH_D = 210) {
   setorder(a, event_id, -R_ceil); a[, rk := seq_len(.N), by = event_id]
   ours <- a[rk <= 10, .(event_id, athlete_id)]
   res <- rbindlist(lapply(intersect(unique(wa$event_id), unique(a$event_id)), function(EV) {
-    w10 <- wa[event_id == EV][order(wa_place)][1:min(10, .N)]
+    w10 <- wa[event_id == EV][order(wa_place)][seq_len(min(10, .N))]
     o10 <- ours[event_id == EV]
     if (!nrow(o10) || !nrow(w10)) return(NULL)
     data.table(wa_n = nrow(w10), hits = sum(w10$athlete_id %chin% o10$athlete_id),

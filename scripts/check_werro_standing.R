@@ -18,7 +18,10 @@ first26[, standing := seq_len(.N), by = event_id]
 w <- merge(first26[event_id == "AT-800Metres-W"], nm, by = "athlete_id")
 setorder(w, standing)
 cat("800m W standing as at END-2025 (top 8), before any 2026 result:\n")
-for (i in 1:8) cat(sprintf("  %d. %-24s %s\n", w$standing[i],
+# seq_len, not 1:8. On an empty or short `w` this indexed past the end and
+# printed fully-formed rows of NA - eight of them - which read as real output.
+stopifnot("the 800m W merge produced no rows" = nrow(w) > 0)
+for (i in seq_len(min(8L, nrow(w)))) cat(sprintf("  %d. %-24s %s\n", w$standing[i],
     substr(ifelse(is.na(w$athlete_name[i]),"?",w$athlete_name[i]),1,24),
     sprintf("%d:%05.2f", floor(exp(-w$r_end2025[i])/60), exp(-w$r_end2025[i]) %% 60)))
 ws <- w[grepl("Werro", athlete_name)]$standing

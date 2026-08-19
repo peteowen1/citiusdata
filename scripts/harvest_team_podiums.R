@@ -225,7 +225,7 @@ cat("\nby source:\n"); print(pod[, .N, by = source][order(-N)])
 cat("\nby series:\n"); print(pod[, .(recovered = uniqueN(paste(year, sport))), by = games])
 cat("\nstill missing:\n")
 missing <- gap_dt[!paste(games, year, sport) %in% pod[, paste(games, year, sport)]]
-print(missing[, .N, by = .(games, sport)][order(-N)][1:min(15, .N)])
+print(missing[, .N, by = .(games, sport)][order(-N)][seq_len(min(15, .N))])
 
 # ---------------------------------------------------------------------------
 # Validate against the edition's own medal table before believing any of it

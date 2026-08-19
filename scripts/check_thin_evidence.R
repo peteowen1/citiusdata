@@ -75,7 +75,7 @@ score <- function(k) {
   x[, rk := seq_len(.N), by = event_id]
   prec <- function(N) {
     res <- rbindlist(lapply(unique(wa$event_id), function(EV) {
-      wN <- wa[event_id == EV][order(wa_place)][1:min(N, .N)]
+      wN <- wa[event_id == EV][order(wa_place)][seq_len(min(N, .N))]
       oN <- x[event_id == EV & rk <= N, .(athlete_id)]
       if (!nrow(oN) || !nrow(wN)) return(NULL)
       data.table(wa_n = nrow(wN),
