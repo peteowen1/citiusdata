@@ -1663,6 +1663,29 @@ for (r_ in seq_along(starts)) {
     # which is backwards, and it reached the page as a 10,558-point decathlon
     # and a sub-world-record 100m. Leaving V unset keeps the event prior until
     # there is a real surprise to learn from.
+    # `V` IS A LEARNING VARIANCE, NOT A PREDICTIVE ONE. Read that before using it
+    # to put an interval on anything. It is an EWMA of SURPRISE squared, and
+    # surprise is the residual AFTER the shared race shock has been removed, so
+    # it measures the athlete's own race-to-race variability. That is the right
+    # quantity for the update below and the wrong one for predicting a mark:
+    #
+    #   perf - r_pre = surprise + shock          (verified exactly in the stored
+    #                                             history, max gap 2.8e-17)
+    #
+    # so a predictive variance needs v PLUS the race-conditions variance, which
+    # is stored per event in predictive_variance.json (pooled shock sd 0.926%,
+    # ranging 0.55% in sprints to 1.78% in throws). Standardising a raw residual
+    # by sqrt(v) alone gives sd 2.03 instead of 1; adding the shock term takes it
+    # to 1.58, and the remainder is a genuinely fat tail rather than a scale
+    # error - robustly measured the scale is 1.04-1.09 for any athlete with real
+    # evidence, while |z| > 5 occurs 1.1% of the time against a normal's
+    # 0.00006%. Do not rescale v to chase sd(z) = 1; quote intervals from
+    # empirical quantiles, which is what the peak-mark column already does.
+    #
+    # NOTE the learning rate: kv here has already been reduced by the Huber clip
+    # for large surprises, so an extreme race moves the variance less than its
+    # size warrants. That is deliberate for the RATING and is a known
+    # conservatism in the variance. See check_predictive_variance.R.
     if (seen[m])
       V[[kk[m]]] <- max(v_pre[m] + kv[m] * (surprise[m]^2 - v_pre[m]), 0.04 * vp0)
     NE[[kk[m]]] <- n_eff[m] + 1
