@@ -30,7 +30,11 @@ dir.create(BLOG, recursive = TRUE, showWarnings = FALSE)
 cal <- fread(file.path(D, "athletics_calendar.csv"))
 cal[, `:=`(date_start = as.Date(date_start), date_end = as.Date(date_end),
            prediction_cutoff = as.Date(prediction_cutoff))]
+# Every check below is an all(...) or an anyDuplicated(), and both are vacuously
+# satisfied by a zero-row table - so an empty or mis-parsed calendar would sail
+# through the entire block. Assert the rows exist first.
 stopifnot(
+  "the calendar parsed to zero rows" = nrow(cal) > 0,
   "meet_id must be unique" = !anyDuplicated(cal$meet_id),
   "dates must be ordered within a meet" = all(cal$date_end >= cal$date_start),
   "a prediction cutoff must precede its meet" = all(cal$prediction_cutoff < cal$date_start),
@@ -175,11 +179,29 @@ EVENT_NOTES <- list(
     "evidence the model reads her as unusually consistent, which flatters her",
     "chances. Treat this as our most disputable call of the meet."))
 
+# Mark calibration, read rather than asserted. form_display_marks.R measures how
+# often each displayed mark is actually beaten and writes it beside the parquet;
+# the caveat sentence is built from that number so the page cannot drift from
+# what was measured. A missing file is a hard stop, not a silent default: a page
+# that quietly loses its calibration caveat is worse than one that fails to build.
+CALIB_F <- file.path(D, "form_display_final_calib.json")
+if (!file.exists(CALIB_F))
+  stop("form_display_final_calib.json is missing -- run form_display_marks.R before exporting")
+CALIB <- fromJSON(CALIB_F)
+CAVEAT_PEAK <- sprintf(
+  paste("The \"good day\" mark is beaten in %s (%.1f%% of finals, measured out of sample).",
+        "It is built as a 90th percentile, but one spread is shared across athletes",
+        "whose race-to-race variation differs, so it is optimistic by a few points."),
+  CALIB$peak_label, CALIB$goodday_beaten_pct)
+cat(sprintf("mark calibration: typical beaten %.2f%%, good day %.2f%% (%s)\n",
+            CALIB$typical_beaten_pct, CALIB$goodday_beaten_pct, CALIB$peak_label))
+
 manifest <- list(
   generated_at = format(NOW, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
   config = DEPLOYED$stamp,
   meets = nrow(cal),
   event_notes = EVENT_NOTES,
+  mark_calibration = CALIB,
   birmingham = list(
     events_modelled = uniqueN(card$event_id),
     events_in_programme = 44L,
@@ -192,6 +214,7 @@ manifest <- list(
       "Advancement assumes a seeded draw. The published draw cannot be ingested.",
       "Round-level no-marks and byes are not modelled.",
       "Predicted marks are a typical performance, not a peak: a championship final is closer to an athlete's best day, so they read slightly slow.",
+      CAVEAT_PEAK,
       # This line said the OPPOSITE until 2026-08-06 -- "wider uncertainty,
       # which raises their win probability" -- which was an assumption, and
       # measuring it refuted it. Within an event, sigma correlates -0.245 with

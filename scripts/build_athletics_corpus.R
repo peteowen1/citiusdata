@@ -42,8 +42,15 @@ say("career sweep:        %s rows | %s athletes | %s..%s",
     format(nrow(car), big.mark = ","), format(uniqueN(car$athlete_id), big.mark = ","),
     min(car$date, na.rm = TRUE), max(car$date, na.rm = TRUE))
 
+# `race_key` is on this list because the competition route's key is the ONLY
+# thing that can separate one heat of a round from another -- it carries the
+# race number, which competition|event|round|date cannot reproduce. Dropping it
+# here is what let add_race_key() below merge every heat of a championship round
+# into one pseudo-race (27.6% of races with more than one winner; see
+# ../../docs/incidents/corpus-race-key-merged-heats-2026-08-14.md). The career
+# route has none, and gets NA.
 keep <- c("source", "athlete_id", "event_id", "discipline", "date",
-          "competition_id", "comp_name", "round", "tier",
+          "competition_id", "comp_name", "round", "tier", "race_key",
           "value_raw", "mark_string", "mark", "place", "is_technical",
           "wind", "indoor", "legal", "venue_country", "venue_city",
           "venue_stadium", "age", "sex", "orientation", "perf")
@@ -51,7 +58,8 @@ na_for <- list(source = NA_character_, athlete_id = NA_character_,
                event_id = NA_character_, discipline = NA_character_,
                date = as.Date(NA), competition_id = NA_character_,
                comp_name = NA_character_, round = NA_character_,
-               tier = NA_character_, value_raw = NA_real_,
+               tier = NA_character_, race_key = NA_character_,
+               value_raw = NA_real_,
                mark_string = NA_character_, mark = NA_real_, place = NA_integer_,
                is_technical = NA, wind = NA_real_, indoor = NA, legal = NA,
                venue_country = NA_character_, venue_city = NA_character_,
@@ -81,7 +89,10 @@ all[, mark_r := round(mark, 4)]
 # neither reliably. Sorting only by source would keep whichever sorted first and
 # discard the round label the context offsets depend on.
 all[, richness := (!is.na(round)) + (!is.na(place)) + (!is.na(tier)) +
-                  (!is.na(venue_city)) + (source == "competition")]
+                  (!is.na(venue_city)) + (source == "competition") +
+                  # a row carrying the real race key outranks one without it:
+                  # the key cannot be reconstructed from the columns it loses to
+                  (!is.na(race_key))]
 setorder(all, athlete_id, date, event_id, mark_r, -richness)
 all <- unique(all, by = c("athlete_id", "date", "event_id", "mark_r", "place"))
 say("deduped: %s -> %s rows (%s duplicate performance%s removed)",
@@ -100,8 +111,138 @@ all[, c("mark_r", "richness") := NULL]
 # Fields are PARTIAL: a race is recovered only for the athletes the sweep
 # happened to include. That makes each race effect noisier, not biased, and
 # decompose_races() already de-biases the shared-shock variance for field size.
-all <- add_race_key(all)
+# NEVER OVERWRITE AN AUTHORITATIVE KEY (fixed 2026-08-14).
+#
+# `add_race_key()` derives competition|event|round|date, which cannot separate
+# the SECTIONS of a round -- and at a championship every heat of a round shares
+# all four fields. So calling it on the whole table discarded the competition
+# route's real key (which carries the race number) and merged every heat of a
+# round into one pseudo-race.
+#
+# Measured on AT-800Metres-W before this fix: 27.6% of corpus races had more
+# than one first place, holding 64.9% of all placed rows, the worst a single
+# "final" with 361 athletes and 45 winners. On T1_elite meets it was 45.9% --
+# these are championship heats, not obscure club sections. The competition
+# harvest keyed the same event at 0.1%.
+#
+# This is the defect backtest_athletics.R records as fixed ("16.9% of scored
+# races on more than one winner; keyed by race_key it is 0.4%"). That fix landed
+# on championship_results and never reached the corpus, which is the DEPLOYED
+# history -- so calibration$race, sigma_within, condition_sd and the per-athlete
+# sensitivity have all been fitted on merged fields.
+auth <- !is.na(all$race_key)
+say("\nauthoritative race keys on input: %s of %s rows (%.1f%%)",
+    format(sum(auth), big.mark = ","), format(nrow(all), big.mark = ","), 100*mean(auth))
+# The first run of this fix printed "0 of 6,656,700 (NaN%)" because `race_key`
+# was missing from the `keep` list above -- the preservation logic was in place
+# and had nothing to preserve. Ten seconds to catch with this line, an hour
+# without it.
+if (!any(auth)) {
+  cli::cli_abort(c(
+    "x" = "No authoritative race keys survived the union.",
+    "i" = "The competition route carries {.field race_key}; if none reached here,
+           it is missing from the {.var keep} column list."))
+}
+all[, .auth_key := fifelse(auth, race_key, NA_character_)]
+derived <- add_race_key(all[, !".auth_key"])$race_key
+all[, .derived := derived]
+# A row with no key of its own can only adopt one when the group it belongs to
+# holds exactly ONE authoritative race. Where the group holds several, the
+# section it belongs to is unknowable and a guess would re-create the merge.
+grp <- all[!is.na(.auth_key), .(n_sections = uniqueN(.auth_key), sole = .auth_key[1]),
+           by = .derived]
+all[grp, on = ".derived", `:=`(.n_sections = i.n_sections, .sole = i.sole)]
+# "One authoritative race in this bucket" is NOT the same as "the round had one
+# section" -- it means one section we have authority FOR. Where a round was
+# sectioned and the competition route captured only one of them (partial
+# competition-route coverage is documented at ~1.6% in harvest_partial_races.R),
+# an unkeyed row from the missing section would be adopted into the visible one,
+# recreating the merge in miniature. Caught in review 2026-08-14.
+#
+# The cheap, exact test: a row may only join a race whose finishing position it
+# does not already occupy. Two athletes cannot both be third. A row with no place
+# cannot collide and is allowed -- it contributes to the field, not the ordering.
+.taken <- all[!is.na(.auth_key) & !is.na(place), unique(paste(.auth_key, place))]
+all[, .cand := fifelse(is.na(.auth_key) & !is.na(.n_sections) & .n_sections == 1L &
+                         !is.na(place), paste(.sole, place), NA_character_)]
+all[, .collide := !is.na(.cand) & .cand %chin% .taken]
+all[, race_key := fcase(
+  !is.na(.auth_key),                                    .auth_key,   # keep the real one
+  !is.na(.n_sections) & .n_sections == 1L & !.collide,  .sole,       # unambiguous adopt
+  is.na(.n_sections),                                   .derived,    # no authority anywhere
+  default = NA_character_)]                                          # cannot place it
+say("  refused adoption because the place was already taken in that race: %s rows",
+    format(all[.collide == TRUE, .N], big.mark = ","))
+n_unplaceable <- all[is.na(race_key) & !is.na(.n_sections), .N]
+# Count what was ADOPTED, not what was offered -- the refusals below are a
+# subset of the same condition, and reporting the gross figure would overstate
+# the join by exactly the rows the collision test just rejected.
+say("  adopted into a single known race: %s rows",
+    format(all[is.na(.auth_key) & !is.na(.n_sections) & .n_sections == 1L & !.collide, .N],
+           big.mark = ","))
+say("  left unkeyed because the round was sectioned and the section is unknowable: %s rows",
+    format(n_unplaceable, big.mark = ","))
+all[, c(".auth_key", ".derived", ".n_sections", ".sole", ".cand", ".collide") := NULL]
 all[is.na(competition_id) | is.na(event_id) | is.na(date), race_key := NA_character_]
+
+# THE CHECK THAT CAUGHT THIS. One race has one winner; the sport's genuine tie
+# rate is well under 1%. A high rate here means keys are merging fields again,
+# and every variance estimate downstream is computed on those fields.
+if ("place" %in% names(all)) {
+  pl <- all[!is.na(place) & place > 0 & !is.na(race_key),
+            .(n1 = sum(place == 1L)), by = race_key]
+  # With `place` absent or all-NA, `pl` is empty, mean() is NaN and `if (NaN > 5)`
+  # errors with "missing value where TRUE/FALSE needed" -- a stop, but an
+  # unattributable one. A corpus with no placings is itself a defect, so say which.
+  if (!nrow(pl)) {
+    cli::cli_abort(c(
+      "x" = "No placed rows with a race key, so the multi-winner check cannot run.",
+      "i" = "Either {.field place} is unpopulated or every row lost its key --
+             both are worse than the defect this check exists to catch."))
+  }
+  pct_multi <- 100 * mean(pl$n1 > 1)
+  say("  races with more than one first place: %.2f%% (was 27.6%% on AT-800Metres-W before the fix)",
+      pct_multi)
+  if (pct_multi > 5) {
+    cli::cli_abort(c(
+      "x" = "{round(pct_multi, 1)}% of races have more than one winner; keys are merging fields.",
+      "i" = "The sport's tie rate is under 1%. Do not publish a corpus in this state --
+             decompose_races() would fit a shared shock across several real races."))
+  }
+}
+# A RACE HAPPENS ON ONE DAY. A key spanning two dates is either a mis-dated
+# result or a key collision, and both are worth knowing at build time rather
+# than at read time.
+#
+# Found 2026-08-15 by a contiguity assertion in the form engine, not here:
+# `7174333|10229522||11|4` (100mH W round 1, 2023) has five rows on 2023-08-03
+# and one athlete dated 2023-08-01. Exactly one key in 165,133. Harmless to any
+# code that groups BY KEY, but the corpus race_key carries no date, so anything
+# that assumes a race's rows are adjacent in date order would have folded 186
+# unrelated races into one -- the same shape as the merged-heats defect this
+# file was rewritten to prevent, and just as silent.
+#
+# Reported, not fatal: one stale date should not block a corpus build, and the
+# engine now forces contiguity rather than trusting it. It is here so the count
+# is visible and a REGRESSION would be obvious.
+if ("date" %in% names(all)) {
+  spanning <- all[!is.na(race_key) & !is.na(date),
+                  .(nd = uniqueN(date)), by = race_key][nd > 1L]
+  say("\n  race keys spanning more than one date: %s of %s (%.3f%%)",
+      format(nrow(spanning), big.mark = ","),
+      format(all[!is.na(race_key), uniqueN(race_key)], big.mark = ","),
+      100 * nrow(spanning) / max(1L, all[!is.na(race_key), uniqueN(race_key)]))
+  if (nrow(spanning)) {
+    ex <- utils::head(spanning[order(-nd)], 3)
+    for (i in seq_len(nrow(ex)))
+      say("    %s spans %d dates", ex$race_key[i], ex$nd[i])
+    if (nrow(spanning) > 20L)
+      cli::cli_warn(c(
+        "!" = "{nrow(spanning)} race keys span more than one date.",
+        "i" = "One is a stale source date; twenty is a keying fault. Check
+               before trusting any per-race quantity."))
+  }
+}
 fld <- all[!is.na(race_key), .(k = uniqueN(athlete_id)), by = race_key]
 say("\nraces recovered: %s (was %s in the competition harvest alone)",
     format(nrow(fld), big.mark = ","), format(uniqueN(comp$race_key), big.mark = ","))

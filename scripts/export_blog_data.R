@@ -387,7 +387,11 @@ who <- unique(c(as.character(results$athlete_id), as.character(pred$athlete_id))
 who <- who[!is.na(who)]
 # DELIBERATELY championship_results, NOT the corpus -- do not "align" this with
 # the ratings source below. This read is for DISPLAY and needs `athlete_name`,
-# `mark_string`, `comp_name` and `venue_city`; the corpus carries none of them.
+# which the corpus does not carry at all. (An earlier version of this comment
+# also claimed `mark_string`, `comp_name` and `venue_city` were missing; the
+# corpus does carry those three. Corrected 2026-08-14 -- the reason to keep this
+# read is `athlete_name`, and overstating it invites someone to disprove the
+# stated reason and then make the swap.)
 # Line 390 fills any missing column with NA rather than erroring, so swapping
 # this would blank every athlete's name on every per-athlete page and nothing
 # would fail. The ratings table is model-facing and joins on athlete_id, which
@@ -543,10 +547,49 @@ RATING_TOP_N <- 150L
 setorder(ratings, event_id, -ability)
 ratings <- ratings[, head(.SD, RATING_TOP_N), by = event_id]
 
-names_lk <- unique(clean_all[!is.na(athlete_name),
+# NAMES COME FROM A SOURCE THAT HAS THEM.
+#
+# This read `clean_all` directly, which was right while the page was built on
+# championship_results.rds. The ratings source moved to athletics_corpus.rds
+# (the block above), and the corpus carries NO `athlete_name` -- 27 columns, all
+# keyed on athlete_id. So every run since that switch died here with
+#   Object 'athlete_name' not found amongst [source, athlete_id, event_id, ...]
+# and exit=1, which is why the published table froze on 2026-08-12 and never
+# picked up the 2026-08-13 coasting deploy. The Werro fix broke the page it was
+# meant to fix, and the only trace was a FAIL line in blog/refresh.log.
+names_src <- if ("athlete_name" %in% names(clean_all)) clean_all else {
+  cli::cli_alert_info(
+    "{.file {CITIUS_RATINGS_SOURCE}} carries no {.field athlete_name}; taking names from championship_results.rds.")
+  # A SECOND, DELIBERATE full read. `hist` at line ~395 is the same file but is
+  # immediately narrowed to the Glasgow athletes and to HIST_COLS, while the name
+  # lookup needs every athlete who can reach a rating. Do not "simplify" this
+  # into a reuse of `hist` -- it would blank the name of anyone outside that meet.
+  data.table::setDT(readRDS(file.path(OUT, "championship_results.rds")))
+}
+names_lk <- unique(names_src[!is.na(athlete_name),
                              .(athlete_id = as.character(athlete_id), athlete_name)]
                    )[, .(athlete_name = athlete_name[1]), by = athlete_id]
 ratings <- merge(ratings, names_lk, by = "athlete_id", all.x = TRUE)
+# A ratings table with blank names is worse than no table: it reads as missing
+# data about the athlete rather than a broken join.
+#
+# NOTE WHAT THIS MEASURES: `ratings` is already the top-150-per-event slice, so
+# the floor is coverage of the rows that will PUBLISH, not of the corpus. The
+# separate 2026-08-14 measurement that put the two sources at 100% overlap was
+# over all 354,247 corpus athletes and is not what this line checks -- keeping
+# the two claims distinct, because one is a guard and the other is a fact about
+# the namespaces.
+if (!nrow(ratings)) {
+  cli::cli_abort(c("x" = "No rating rows survived to the name join.",
+                   "i" = "The coverage check below would compare against nothing."))
+}
+.name_cov <- mean(!is.na(ratings$athlete_name))
+if (.name_cov < 0.99) {
+  cli::cli_abort(c(
+    "x" = "Only {round(100 * .name_cov, 1)}% of published rating rows resolved to a name.",
+    "i" = "{.file {CITIUS_RATINGS_SOURCE}} and the name source must share an
+           athlete_id namespace."))
+}
 ratings <- merge(ratings, citius_events()[, .(event_id, sport, discipline, sex, orientation)],
                  by = "event_id", all.x = TRUE)
 

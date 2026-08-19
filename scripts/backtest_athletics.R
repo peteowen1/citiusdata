@@ -196,6 +196,20 @@ if (!length(SIGMA_PARTS) ||
 # ability estimate correlates with the truth WORSE than a plain last-five mean
 # (0.595 vs 0.648 and 0.694 vs 0.726). Set CITIUS_BT_CONTEXT=off for that arm.
 ADJUST_CONTEXT <- !identical(tolower(Sys.getenv("CITIUS_BT_CONTEXT", "on")), "off")
+# The fitted RACE EFFECT, `calibration$race`. estimate_ability() has read it
+# behind `adjust_race` since 2026-08-13 and this harness never passed the
+# parameter, so 350k-560k fitted effects have never been measured as an arm --
+# dormant by flag rather than by absence, which no wiring guard can see.
+#
+# Measure it against a control on the SAME calibration. And note what the
+# 2026-08-14 rebuild showed: unfiltered, the switch promotes athletes with one
+# race to the top, because 30% of corpus races are career-route fragments
+# holding a median of two athletes. To test a minimum field size, filter
+# `calibration$race` into its own calibration file rather than adding a knob
+# here -- that keeps the arm a single variable and the file self-describing.
+ADJUST_RACE <- nzchar(Sys.getenv("CITIUS_BT_ADJUST_RACE", ""))
+if (ADJUST_RACE) cli::cli_alert_info(
+  "Race effect ON: applying {.field calibration$race} at prediction time.")
 # Use the catalogue's meet_tier for the context adjustment instead of the feed's
 # per-result `tier`, which varies within a single meet and labels the Diamond
 # League "low". Off by default so it is measured as its own arm.
@@ -396,7 +410,8 @@ arm_fingerprint <- list(
     paste(names(hl_map), hl_map, sep = "=", collapse = ","),
   prior_weight = PRIOR_WEIGHT, sigma_mode = SIGMA_MODE,
   sigma_parts = paste(SIGMA_PARTS, collapse = ","),
-  adjust_context = ADJUST_CONTEXT, use_meet_tier = USE_MEET_TIER,
+  adjust_context = ADJUST_CONTEXT, adjust_race = ADJUST_RACE,
+  use_meet_tier = USE_MEET_TIER,
   tier_filter = TIER_FILTER, elite_history = ELITE_HISTORY,
   history_days = HISTORY_DAYS, n_sims = N_SIMS, cohort = COHORT,
   athletes = ATHLETES, peak_gamma = PEAK_GAMMA,
@@ -491,9 +506,20 @@ pool <- unique(finals[, .(competition_id, comp_start)])[!is.na(comp_start) &
                                                           comp_start >= as.Date("2016-01-01")]
 setorder(pool, comp_start)
 # All meets with finals, not a sample. The old 250 cap dated from when each
-# refit took 17s; restricting history to the meet's own events made it 2.5s, so
-# the full set is ~35 minutes rather than four hours. At 250 meets the backtest
-# used only 13% of the 13,108 available finals.
+# refit took 17s; restricting history to the meet's own events made it 2.5s. At
+# 250 meets the backtest used only 13% of the 13,108 available finals.
+#
+# BUDGET A RUN AT ~30s PER MEET, NOT 2.5s (measured 2026-08-15: 4 meets in two
+# minutes). The 2.5s is the ability refit alone; a meet also runs N_SIMS =
+# 10,000 simulations, and that dominates. So the 900-meet default is about
+# **7.5 hours**, not the ~35 minutes an earlier version of this comment
+# promised — and an A/B is two of those. Set CITIUS_BT_TARGET deliberately:
+# 120 meets is ~60 minutes and ~1,500 finals.
+#
+# Both arms of an A/B MUST share a target. The pool is an evenly spaced sample
+# of the meet list, so a different target selects DIFFERENT MEETS and the arms
+# quietly stop being comparable — which score_arm.R's vintage guard does not
+# check, because the history is identical either way.
 TARGET <- as.integer(Sys.getenv("CITIUS_BT_TARGET", "900"))
 if (nrow(pool) > TARGET) pool <- pool[round(seq(1, .N, length.out = TARGET))]
 
@@ -584,6 +610,7 @@ for (i in seq_len(n)) {
                                      half_life = half_life,
                                      calibration = calibration,
                                      adjust_context = ADJUST_CONTEXT,
+                                     adjust_race = ADJUST_RACE,
                                      sigma_mode = SIGMA_MODE,
                                      sigma_parts = SIGMA_PARTS,
                                      only = unique(as.character(block$athlete_id)),
@@ -612,7 +639,7 @@ for (i in seq_len(n)) {
         hl_map[[g$family[1]]] else half_life
       estimate_ability(g[, !"family"], as_of = cut_date, half_life = hl,
                        calibration = calibration, adjust_context = ADJUST_CONTEXT,
-                       sigma_mode = SIGMA_MODE, sigma_parts = SIGMA_PARTS,
+                       adjust_race = ADJUST_RACE, sigma_mode = SIGMA_MODE, sigma_parts = SIGMA_PARTS,
                        peak_gamma = PEAK_GAMMA,
                        robust_location = ROBUST_LOCATION,
                        decouple_peak = DECOUPLE_PEAK)
@@ -816,6 +843,7 @@ saveRDS(list(gold = gold, medal = medal, predictions = pred, outcomes = outc,
                store_md5 = arm_fingerprint$store_md5,
                half_life = half_life, prior_weight = PRIOR_WEIGHT,
                sigma_mode = SIGMA_MODE, adjust_context = ADJUST_CONTEXT,
+               adjust_race = ADJUST_RACE,
                # Without this, an arm differing ONLY by the sigma bundle records
                # metadata identical to its reference, and quick_compare cannot
                # tell them apart -- the exact failure that let six arms share a
