@@ -1,0 +1,104 @@
+# Minimal CI for a repo that had none.
+#
+# 187 R scripts reached `main` with nothing automated checking them. A syntax
+# error in form_ratings.R - the engine every rating comes from - would have been
+# found by a human running it, days later. Parsing needs no packages installed,
+# so there is no excuse for not doing it on every push.
+#
+# The second job scans for the specific mistakes this repo has actually made,
+# not generic lint. Each pattern below cost real time or produced a wrong
+# published number at least once. It reports and does not fail, because every
+# one of them has legitimate uses - the point is that they appear in a diff
+# rather than in a ranking.
+#
+# NOTE ON THE REGEXES: they deliberately contain no backslashes, using [[] for a
+# literal bracket and [[:space:]] for whitespace. An earlier version used \\[ and
+# \\s, lost a level of escaping on the way into this file, and would have failed
+# on its first run with "unrecognized escape in character string".
+name: check-scripts
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+
+jobs:
+  parse:
+    name: Every R script parses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - name: Parse all R scripts
+        shell: Rscript {0}
+        run: |
+          files <- list.files(c("scripts", "R"), pattern = "[.][Rr]$",
+                              full.names = TRUE, recursive = TRUE)
+          # A run that parses zero files is a pass proving nothing - the exact
+          # vacuous-guard failure this repo keeps hitting. 188 scripts today.
+          stopifnot("fewer than 50 R scripts found - check the paths" =
+                      length(files) >= 50)
+          cat(sprintf("parsing %d R scripts\n", length(files)))
+          bad <- character(0)
+          for (f in files) {
+            e <- tryCatch({ parse(f); NULL }, error = function(e) conditionMessage(e))
+            if (!is.null(e)) bad <- c(bad, sprintf("%s\n    %s", f, e))
+          }
+          if (length(bad)) {
+            cat(sprintf("\n%d script(s) FAILED to parse:\n\n", length(bad)))
+            cat(paste(bad, collapse = "\n\n"), "\n")
+            quit(status = 1)
+          }
+          cat(sprintf("all %d scripts parse\n", length(files)))
+
+  footguns:
+    name: Scan for this repo's known footguns
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - name: Report patterns that have bitten before
+        shell: Rscript {0}
+        run: |
+          files <- list.files("scripts", pattern = "[.][Rr]$", full.names = TRUE)
+          stopifnot("no scripts found" = length(files) > 0)
+          checks <- list(
+            list(re = "[[]1:[A-Za-z0-9]",
+                 why = paste("1:n indexing. On an empty table 1:0 is c(1, 0), so this",
+                             "FABRICATES a row of NA instead of returning nothing -",
+                             "it printed eight fully-formed NA rows once. Use seq_len().")),
+            list(re = "na[.]rm[[:space:]]*=[[:space:]]*TRUE[^)]*[)][[:space:]]*==[[:space:]]*0",
+                 why = paste("sum(x, na.rm = TRUE) == 0 is satisfied when x is entirely",
+                             "NA. Assert the column is populated before trusting it.")),
+            list(re = "max[(][^)]*[)][[:space:]]*<=",
+                 why = paste("max(numeric(0)) is -Inf, which satisfies any upper bound.",
+                             "Assert length() first or the guard cannot fail.")),
+            list(re = "uniqueN[(][^)]*[)][[:space:]]*==[[:space:]]*0",
+                 why = paste("uniqueN(c(NA, NA)) is 1, not 0 - a filter written this way",
+                             "never fired, and events with zero elite races escaped it."))
+          )
+          total <- 0
+          for (ch in checks) {
+            hits <- character(0)
+            for (f in files) {
+              ln <- readLines(f, warn = FALSE)
+              i <- grep(ch$re, ln)
+              i <- i[!grepl("^[[:space:]]*#", ln[i])]   # ignore commented-out code
+              if (length(i)) hits <- c(hits, sprintf("  %s:%d", f, i))
+            }
+            if (length(hits)) {
+              total <- total + length(hits)
+              cat(sprintf("\n%s\n%s\n", ch$why,
+                          paste(utils::head(hits, 15), collapse = "\n")))
+              if (length(hits) > 15)
+                cat(sprintf("  ... and %d more\n", length(hits) - 15))
+            }
+          }
+          cat(sprintf("\n%d occurrence(s) of known footgun patterns.\n", total))
+          cat("Reported, not failed: each has legitimate uses. The point is that\n")
+          cat("they show up in a diff rather than in a wrong published number.\n")
