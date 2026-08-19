@@ -556,14 +556,37 @@ if (XB_ON) {
 #   1.0   71.6   72.7   71.9   0.9342    0.7722     284
 #   2.0   70.9   72.9   71.5   0.9304    0.7438     257
 #
-# precision@10 alone would pick 0.5 or 1.0; the deeper precision cuts and the
-# overall Spearman prefer 1.0. But sp_top30 - the ordering restricted to WA's top
-# 30, which is both top-focused and better powered than a 440-slot membership
-# test - is 0.7722 at k = 1, BELOW the 0.7754 baseline. The deeper metrics reward
-# tidying 11th to 20th; among the athletes who actually contend, k = 1 is slightly
-# worse than doing nothing. k = 0.5 is positive on all five and still removes 41
-# thin rows. FORM_EVID_K=0 disables it.
-EVID_K <- as.numeric(Sys.getenv("FORM_EVID_K", "0.5"))
+# RETIRED 2026-08-19: DEFAULT 0.5 -> 0. Everything above is agreement with the
+# World Athletics ranking, and that is a REFERENCE, not the referee. The metric
+# this model is judged on is out-of-sample tier-weighted concordance - given the
+# athletes who actually lined up, did the rating order them the way the race did.
+# Measured on that (check_shrinkage_concordance.R), shrinkage is not a small win,
+# it is a large loss:
+#
+#   k      sealed 2026 weighted   vs none      tune 2025 vs none
+#   0      76.429                  -           -
+#   0.25   75.838                 -0.591       -0.531
+#   0.5    75.399                 -1.030       -0.929
+#   1.0    74.688                 -1.741       -1.609
+#   4.0    72.776                 -3.653       -3.805
+#
+# The noise floor on that window is 0.159 pp, so -1.030 is 6.5x the floor. It is
+# monotone in k, and the independent 2025 window agrees in sign at every step.
+# There is no reading of this on which shrinkage helps.
+#
+# WHY THE TWO REFEREES DISAGREED, which is the lesson worth keeping. Pulling thin
+# athletes toward the event mean makes our list resemble WA's more closely -
+# their ranking has its own recency and quality rules that penalise exactly those
+# athletes - while making it WORSE at ordering actual races. Agreeing with another
+# system is not the same as being right, and when the reference and the ground
+# truth point opposite ways, the ground truth decides.
+#
+# WHAT IS LOST. Thin evidence returns to the published top tens: 312 rows with
+# under three effective races, against 276 with shrinkage at 0.5. That problem is
+# real and remains open - but the fix cannot be a transformation that measurably
+# worsens the ordering, and the honest position is that this attempt was refuted
+# rather than that the problem is solved. Set FORM_EVID_K to re-enable.
+EVID_K <- as.numeric(Sys.getenv("FORM_EVID_K", "0"))
 if (EVID_K > 0) {
   act[, .mu_r := mean(R_rank), by = event_id]
   act[, .w_ev := n_eff / (n_eff + EVID_K)]
