@@ -19,7 +19,25 @@ FROM <- as.Date(Sys.getenv("RACE_FROM", "2023-01-01"))
 am <- setDT(read_parquet(file.path(D, "adjusted_marks.parquet")))
 am[, athlete_id := as.character(athlete_id)]
 d  <- setDT(read_parquet(file.path(D, "form_display_final.parquet")))
+# NAMES COME FROM THE NAME TABLE, NOT THE RANKINGS. This used to read names out
+# of form_display_final, which holds only currently-ranked athletes - so anyone
+# outside the rankings rendered as "unnamed" on a results page that has nothing
+# to do with rankings. The Paris 2024 women's marathon showed its winner as
+# "unnamed"; we knew perfectly well she was Sifan Hassan. athlete_name_lookup
+# carries 87,119 athletes against the display table's 71,485.
 nm <- unique(d[, .(athlete_id = as.character(athlete_id), athlete_name)])
+nm <- nm[!is.na(athlete_name)]
+.lk <- file.path(D, "athlete_name_lookup.rds")
+if (file.exists(.lk)) {
+  L <- as.data.table(readRDS(.lk))
+  L[, athlete_id := as.character(athlete_id)]
+  L <- unique(L[!is.na(athlete_name) & nzchar(athlete_name), .(athlete_id, athlete_name)],
+              by = "athlete_id")
+  nm <- unique(rbind(nm, L[!athlete_id %chin% nm$athlete_id]), by = "athlete_id")
+}
+stopifnot("the name table is smaller than the rankings it was meant to widen" =
+            nrow(nm) >= uniqueN(d$athlete_id))
+cat(sprintf("names available for %s athletes\n", format(nrow(nm), big.mark = ",")))
 am <- merge(am, nm, by = "athlete_id", all.x = TRUE)
 am <- am[date >= FROM & is.finite(place) & place > 0]
 cat(sprintf("adjusted performances since %s: %s\n", FROM, format(nrow(am), big.mark = ",")))

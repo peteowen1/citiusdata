@@ -188,7 +188,39 @@ st <- merge(st, nm, by = "athlete_id", all.x = TRUE)
 # Expressed in months back from the DATA date, not as fixed dates: hardcoding
 # them would silently tighten the window every time the corpus is extended.
 ASOF        <- max(st$last, na.rm = TRUE)
-ACT_ATHLETE <- as.integer(Sys.getenv("FORM_ACT_ATHLETE_D", "210"))  # ~7 months
+# WIDENED 210 -> 730 on 2026-08-19 (Pete). The 210-day athlete window was
+# calibrated on track athletes and quietly deleted the people who race least
+# often, which in athletics means the marathoners and the walkers.
+#
+# It cost us the Olympic champion. Sifan Hassan won the Paris 2024 marathon and
+# had NO ranking in any event - not unnamed on the race page, absent from the
+# rankings entirely - despite 129 scoreable marks, 40 rated races and n_eff 6.41
+# in the 5000m. Her last race was 2025-11-02, which is 287 days before the data
+# date. A marathoner runs two a year by design; the rule asked her to be a track
+# athlete. Across Paris 2024, 152 of 991 medal-round performances (15.3%)
+# belonged to athletes the rankings did not contain.
+#
+# The measurement that settles it - share of athlete-events passing the EVENT
+# test that the 210-day ATHLETE test then killed, against how long that family
+# actually goes between races:
+#
+#   family     killed by 210d    median gap    p90 gap
+#   road            31.5%           196 d       567 d
+#   walk            22.6%           175 d       455 d
+#   jump             9.5%            23 d       265 d
+#   sprint           8.1%            16 d       265 d
+#
+# Road athletes have a p90 racing gap of 567 days. A 210-day window asks them to
+# race nearly three times more often than the sport does, so it removes a third
+# of them at any moment - and a filtered-out athlete leaves no trace, which is
+# why this ran for months without anyone seeing it.
+#
+# At 730 the ATHLETE test stops binding at all: the EVENT test (400 d) is
+# strictly tighter, so the composite rule becomes "contested THIS event within
+# 400 days", which is the condition that was doing the work anyway. That is the
+# honest description of what this now is - not a wider athlete window, but the
+# retirement of a rule that was fighting the calendar of half the sport.
+ACT_ATHLETE <- as.integer(Sys.getenv("FORM_ACT_ATHLETE_D", "730"))  # 2 years; see above
 # WIDENED 330 -> 365 on 2026-08-18. Pete asked whether 330 was too strict. It
 # was, though not for the reason offered: staleness decays `n_eff`, never `R`,
 # so a rating sits at full strength indefinitely and the window is the ONLY
