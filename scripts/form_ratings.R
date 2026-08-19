@@ -781,8 +781,20 @@ wrong or mis-parsed, not the corpus" = (n0 - nrow(d)) <= 200)
 # corrections saw the sealed window. Refitted on <=2025 only: 71.803 raw
 # (+0.063, so 93% of the raw gain survives) and 73.206 weighted (+0.028, about a
 # quarter of it). The weighted metric leans on majors and T1 meets, which is
-# exactly where a venue effect fitted partly on 2026 flatters itself. Quote
-# +0.063 raw / +0.028 weighted.
+# exactly where a venue effect fitted partly on 2026 flatters itself.
+#
+# AND NEITHER FIGURE CLEARS ITS NOISE FLOOR (measured 2026-08-19). Kish
+# effective sample on the sealed window: raw 644,735 pairs, floor 0.054 pp, so
+# +0.063 is 1.17x - marginal. Tier-weighted 74,037 effective pairs, floor 0.159
+# pp, so +0.028 is 0.18x - inside the noise. The 40/12/1 weighting costs 8.7x in
+# effective sample; the note at W_MAJ below already said the floor rises to
+# 0.118 pp and nobody joined it up to the gains reported against it.
+#
+# That is a limit of the referee, not a verdict on this correction. The evidence
+# that carries it is independent of this metric: the within-athlete scatter test,
+# where corrected marks made athletes measurably more self-consistent, and which
+# is what caught the wind sign error when sprints got 6.7% WORSE. Quote the
+# sealed figures WITH their floors, or quote the scatter test instead.
 #
 # The DEPLOYED corrections still use the full corpus: for predicting 2027 more
 # data is better, and the restriction exists to make the EVALUATION honest, not

@@ -129,8 +129,15 @@ for (t in tags[-1]) {
   setorder(fam, -pooled)
   # Keep the measured table so a report can quote it, rather than someone
   # retyping numbers out of a console days later.
-  .score_json[[length(.score_json) + 1L]] <- list(arm = t, base = base,
-                                                 by_family = fam)
+  # Store the PER-EVENT deltas too, not only the family totals. Storing the
+  # summary alone made "do the same walk events lose on both changes, or
+  # different ones?" unanswerable without re-running every arm - which is the
+  # difference between a family property and noise. pairs and noise travel with
+  # each row so the sample behind a delta is never lost.
+  .score_json[[length(.score_json) + 1L]] <- list(
+    arm = t, base = base, by_family = fam,
+    by_event = a[, .(event_id, discipline, sex, family, pairs,
+                     delta = round(delta, 4), noise = round(noise, 4))])
   print(fam)
 
   cat("\n-- 10 biggest gains --\n")
