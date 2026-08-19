@@ -107,9 +107,28 @@ zf <- merge(zf, off[, .(event_id, offset)], by = "event_id", all.x = TRUE)
 zf[is.na(offset), offset := pooled]
 zf[, z := (perf - r_pre - offset) / sqrt(v_pre)]
 q50 <- stats::quantile(zf$z, 0.50); q90 <- stats::quantile(zf$z, 0.90)
-ZSPREAD <- unname(q90 - q50)
-cat(sprintf("peak spread: empirical q90 %.3f - q50 %.3f = %.3f sd (normal would be %.3f)\n",
-            q90, q50, ZSPREAD, stats::qnorm(0.9)))
+# ZSPREAD IS q90, NOT q90 - q50. The column promises P(beat it) = 10%, the rule
+# applied is `perf > r_pre + offset + ZSPREAD * sqrt(v)`, and z here is ALREADY
+# (perf - r_pre - offset)/sqrt(v_pre) - so the value delivering that promise is
+# the 90th percentile of z, full stop.
+#
+# Subtracting q50 was double-centring. The comment above argued that only the
+# spread above typical should be taken "because the level is already handled by
+# the per-event offset" - which is exactly why q50 must NOT be subtracted again:
+# the offset is already inside z. It reads as harmless because q50 looks like
+# zero, and it is not: on the deep population it is -0.131, because deep records
+# run slightly below their rating (the known evidence-depth bias). Subtracting a
+# negative made ZSPREAD 1.544 instead of 1.413, pushed the good-day mark further
+# out, and left it beaten 8.05% of the time against the 10% it advertises - a
+# 1-in-12.4 event labelled 1 in 10.
+#
+# This needed no tuning on the sealed window, which is why the earlier decision
+# not to "refit the spread to force 10%" was right and still left a bug: it is
+# arithmetic, not calibration. 2025 sits unused between the fit (< 2025) and the
+# sealed check (2026), and is reported below as an independent validation.
+ZSPREAD <- unname(q90)
+cat(sprintf("peak spread: q90 of z = %.3f sd (normal would be %.3f); q50 %.3f\n",
+            ZSPREAD, stats::qnorm(0.9), q50))
 st[, peak_mark := exp(orientation * (R + offset + ZSPREAD * sqrt(v)))]
 st[!is.finite(v) | v <= 0, peak_mark := NA_real_]
 # SUPPRESS the good-day mark on a thin record rather than capping it.
@@ -695,6 +714,22 @@ val[, peak_perf := r_pre + offset + ZSPREAD * sqrt(v_pre)]
 val_pk <- val[n_eff >= PEAK_MIN_N]        # the good-day column's own population
 hit <- val_pk[, mean(perf > peak_perf)]
 typ_hit <- val[, mean(perf > r_pre + offset)]
+# 2025 IS AN INDEPENDENT WINDOW, and it was going spare. The spread is fitted on
+# dates before 2025 and the honest check is 2026, so 2025 belongs to neither -
+# which makes it the right place to confirm a change to this column WITHOUT
+# reading the sealed window first. If 2025 and 2026 disagree the fix is
+# overfitted to one of them and should not ship.
+v25 <- h[seen == TRUE & rc == "final" & year(date) == 2025 &
+         is.finite(perf) & is.finite(r_pre) & is.finite(v_pre) & v_pre > 0]
+v25 <- merge(v25, off[, .(event_id, offset)], by = "event_id", all.x = TRUE)
+v25[is.na(offset), offset := pooled]
+v25_pk <- v25[n_eff >= PEAK_MIN_N]
+stopifnot("the 2025 validation window is empty" = nrow(v25_pk) > 1000)
+cat(sprintf("\nVALIDATION (2025, neither fitted nor sealed):\n"))
+cat(sprintf("  'good day' beaten %.2f%% over %s finals with n_eff >= %d (target 10%%)\n",
+            100 * v25_pk[, mean(perf > r_pre + offset + ZSPREAD * sqrt(v_pre))],
+            format(nrow(v25_pk), big.mark = ","), PEAK_MIN_N))
+
 cat(sprintf("\nCALIBRATION (2026, out of sample):\n"))
 cat(sprintf("  'typical'  beaten %.2f%% over %s finals (target 50%%)\n",
             100*typ_hit, format(nrow(val), big.mark=",")))
