@@ -60,29 +60,45 @@ am[, athlete_id := as.character(athlete_id)]
 med <- am[grepl("XXXIII Olympic", comp_name) & is.finite(place) & place <= 3]
 stopifnot("no Paris 2024 medal rows found" = nrow(med) > 100)
 
+# THE REFEREE SET, and why p@10 is not it. precision@10 is 440 slots across 44
+# events - one athlete moves it 0.2 pp - so it cannot resolve the differences
+# being argued about here. Same referees as check_thin_evidence.R, most powerful
+# last: p@16 widens the sample without leaving the top of the table, spearman
+# uses every matched athlete, and sp_top30 is restricted to World Athletics' top
+# 30, which is top-focused AND better powered than p@10. Believe sp_top30 when
+# they disagree.
 score <- function(evt_d) {
   sel <- st[n_eff >= 1 & last_any >= ASOF - ATH & last >= ASOF - evt_d]
   if (!nrow(sel)) return(NULL)
   setorder(sel, event_id, -R)
   sel[, rk := seq_len(.N), by = event_id]
-  ours <- sel[rk <= 10, .(event_id, athlete_id)]
-  res <- rbindlist(lapply(unique(wa$event_id), function(EV) {
+  prec <- function(N) {
+    res <- rbindlist(lapply(unique(wa$event_id), function(EV) {
+      wN <- wa[event_id == EV][order(wa_place)][seq_len(min(N, .N))]
+      oN <- sel[event_id == EV & rk <= N, .(athlete_id)]
+      if (!nrow(oN) || !nrow(wN)) return(NULL)
+      data.table(wa_n = nrow(wN), hits = sum(wN$athlete_id %chin% oN$athlete_id))
+    }))
+    if (!nrow(res)) return(NA_real_)
+    round(100 * sum(res$hits) / sum(res$wa_n), 1)
+  }
+  # "shown at all" is checked against the WHOLE selection, not the top ten: the
+  # question is whether the page contains the world number one, not where.
+  t1 <- rbindlist(lapply(unique(wa$event_id), function(EV) {
     w <- wa[event_id == EV][order(wa_place)]
-    w10 <- w[seq_len(min(10L, .N))]
-    o10 <- ours[event_id == EV]
-    if (!nrow(o10) || !nrow(w10)) return(NULL)
-    data.table(wa_n = nrow(w10),
-               hits = sum(w10$athlete_id %chin% o10$athlete_id),
-               # "shown at all" is deliberately checked against the WHOLE
-               # selection, not the top ten: the question is whether the page
-               # contains the world number one, not where it ranks them.
-               top1 = as.integer(w$athlete_id[1] %chin% sel[event_id == EV, athlete_id]))
+    if (!nrow(w)) return(NULL)
+    data.table(top1 = as.integer(w$athlete_id[1] %chin% sel[event_id == EV, athlete_id]))
   }))
-  if (!nrow(res)) return(NULL)
+  m  <- merge(wa[, .(event_id, athlete_id, wa_place)],
+              sel[, .(event_id, athlete_id, rk)], by = c("event_id", "athlete_id"))
+  mt <- m[wa_place <= 30]
   data.table(event_d = evt_d,
              shown = nrow(sel),
-             `p@10` = round(100 * sum(res$hits) / sum(res$wa_n), 1),
-             `WA#1 shown` = round(100 * mean(res$top1), 1),
+             `p@10` = prec(10), `p@16` = prec(16),
+             spearman = round(stats::cor(m$rk, m$wa_place, method = "spearman"), 4),
+             sp_top30 = round(stats::cor(mt$rk, mt$wa_place, method = "spearman"), 4),
+             n_matched = nrow(m), n_top30 = nrow(mt),
+             `WA#1` = round(100 * mean(t1$top1), 1),
              medallists = round(100 * mean(med$athlete_id %chin% sel$athlete_id), 1))
 }
 out <- rbindlist(lapply(c(300, 365, 400, 450, 550, 730, 900, 1100), score))
@@ -93,15 +109,18 @@ cat("p@10       = of World Athletics' top ten, how many are in ours\n")
 cat("WA#1 shown = is the world number one on the page at all\n")
 cat("medallists = share of Paris 2024 medal-round performers with a ranking\n")
 
-best_p <- out[which.max(`p@10`)]
-cat(sprintf("\nbest precision at %d d (%.1f). At 730 d it is %.1f, costing %.1f pp",
-            best_p$event_d, best_p$`p@10`, out[event_d == 730, `p@10`],
-            best_p$`p@10` - out[event_d == 730, `p@10`]))
-cat(sprintf(" and buying %+.1f pp of medallist coverage.\n",
-            out[event_d == 730, medallists] - out[event_d == best_p$event_d, medallists]))
-cat("Judge the trade directly: a missing world number one or Olympic champion is\n")
-cat("a worse failure than one extra wrong name in a top ten, but only if the\n")
-cat("wider window is actually recovering those people rather than adding tails.\n")
+best_p <- out[which.max(sp_top30)]
+cat(sprintf("
+best top-30 Spearman at %d d (%.4f, n = %d ranked athletes).
+",
+            best_p$event_d, best_p$sp_top30, best_p$n_top30))
+cat(sprintf("At 730 d it is %.4f. p@10 would have picked %d d instead - it is 440
+",
+            out[event_d == 730, sp_top30], out[which.max(`p@10`), event_d]))
+cat("slots across 44 events, so one athlete moves it 0.2 pp and it cannot
+")
+cat("resolve a difference this size. Judge on sp_top30.
+")
 
 f <- file.path(D, "event_window_sweep.json")
 writeLines(jsonlite::toJSON(list(athlete_window_d = ATH, asof = as.character(ASOF),
