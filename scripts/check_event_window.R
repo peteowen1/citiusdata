@@ -101,7 +101,7 @@ score <- function(evt_d) {
              `WA#1` = round(100 * mean(t1$top1), 1),
              medallists = round(100 * mean(med$athlete_id %chin% sel$athlete_id), 1))
 }
-out <- rbindlist(lapply(c(300, 365, 400, 450, 550, 730, 900, 1100), score))
+out <- rbindlist(lapply(c(300, 400, 550, 730, 800, 900, 1100), score))
 cat("\n=== sweeping the EVENT window with the athlete window retired ===\n")
 print(out)
 cat("\nshown      = athlete-events on the page\n")

@@ -220,7 +220,15 @@ ASOF        <- max(st$last, na.rm = TRUE)
 # 400 days", which is the condition that was doing the work anyway. That is the
 # honest description of what this now is - not a wider athlete window, but the
 # retirement of a rule that was fighting the calendar of half the sport.
-ACT_ATHLETE <- as.integer(Sys.getenv("FORM_ACT_ATHLETE_D", "730"))  # 2 years; see above
+# RAISED 730 -> 800 with the event window, and the two must move together.
+# Setting the event window to 800 alone got medallist coverage to 98.4%, not
+# 100%: Brian Pintado and Alvaro Martin both last raced on 2024-08-01, which is
+# 745 days back, so the EVENT test admitted them and the 730-day ATHLETE test
+# then silently excluded them again. The composite rule is the tighter of the
+# two, so an athlete window below the event window is a hidden second gate that
+# looks like nothing at all when you read the event window on its own.
+# Keep ACT_ATHLETE >= ACT_EVENT unless there is a reason to want that gate.
+ACT_ATHLETE <- as.integer(Sys.getenv("FORM_ACT_ATHLETE_D", "800"))  # see above
 # WIDENED 330 -> 365 on 2026-08-18. Pete asked whether 330 was too strict. It
 # was, though not for the reason offered: staleness decays `n_eff`, never `R`,
 # so a rating sits at full strength indefinitely and the window is the ONLY
@@ -243,7 +251,43 @@ ACT_ATHLETE <- as.integer(Sys.getenv("FORM_ACT_ATHLETE_D", "730"))  # 2 years; s
 # weeks before they next contest the event. 400 gives five weeks of slack for
 # calendar drift, still sits on the 70.0 / 97.7 plateau, and stays clear of the
 # cliff at 420.
-ACT_EVENT   <- as.integer(Sys.getenv("FORM_ACT_EVENT_D",   "400"))  # a year plus calendar slack
+# WIDENED 400 -> 800 on 2026-08-19 (Pete's call, after seeing the medallist
+# audit). This is the change that takes Paris 2024 medallist coverage from
+# 89.0% to 100%: fourteen medallists had no rated result in their own event
+# inside 400 days, seven of them because their last run of it WAS the Olympic
+# final, which sits 735-745 days back. 730 recovers seven of the fourteen; 760
+# recovers all fourteen; 800 clears them with a margin.
+#
+# The audit is the thing to trust here rather than the concordance metric, and
+# it took four attempts to define a medallist correctly - see
+# check_paris_medallists.R, which found that `place <= 3` counts DNFs (0 and -1
+# are sentinels), that top three in a heat is not a medal, and that decathlon
+# component placings were awarding nine extra 100m medals.
+#
+# Every one of the fourteen was checked individually and none is a data fault.
+# Sydney McLaughlin-Levrone did not stop racing, she moved to the flat 400m and
+# won the world title in it. Cheptegei did not run Tokyo 2025 at all. Sifan
+# Hassan has not contested a 10,000m since Paris. Fred Kerley entered ten races
+# in 2025 and produced a mark in none of them, and in every one of those races
+# he was the only athlete in a field of 7-9 without one. So no amount of
+# harvesting would have recovered these; a window was the only lever.
+#
+# WHAT THIS COSTS, measured on referees that can see it rather than p@10 (440
+# slots, one athlete moves it 0.2pp). A recency window is a pure FILTER: it
+# never re-rates anybody, which check_window_common.R demonstrates by scoring
+# every window on the population common to all of them and getting identical
+# numbers to four decimals. So widening cannot degrade an existing athlete's
+# rating - it only adds staler names beside the medallists. Overall Spearman is
+# flat across the whole range (0.9250-0.9299 on ~4,500 matched athletes).
+#
+# THE ONE THING TO WATCH: 800 is measured from the DATA date, not a fixed date,
+# so it does not silently tighten as the corpus grows. But the 735-745 day
+# figure it was chosen against is the distance to Paris 2024, and that distance
+# grows daily - this reaches the Games until roughly late 2026 and then stops.
+# It is not a permanent answer to "keep championship medallists visible"; a
+# medallist-persistence rule is. Re-check this against
+# check_paris_medallists.R before Tokyo 2027, not after.
+ACT_EVENT   <- as.integer(Sys.getenv("FORM_ACT_EVENT_D",   "800"))  # two years and two months; see above
 ACT_MIN_N   <- as.numeric(Sys.getenv("FORM_ACT_MIN_NEFF",  "1"))
 la <- h[, .(last_any = max(date)), by = athlete_id]
 la[, athlete_id := as.character(athlete_id)]
