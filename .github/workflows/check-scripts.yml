@@ -65,7 +65,11 @@ jobs:
       - name: Report patterns that have bitten before
         shell: Rscript {0}
         run: |
-          files <- list.files("scripts", pattern = "[.][Rr]$", full.names = TRUE)
+          # recursive = TRUE, matching the parse job. Without it this scan skipped
+          # scripts/lib/ entirely, so the two jobs silently disagreed about what
+          # "every script" meant - which is the same shape of gap they exist to find.
+          files <- list.files("scripts", pattern = "[.][Rr]$", full.names = TRUE,
+                              recursive = TRUE)
           stopifnot("no scripts found" = length(files) > 0)
           checks <- list(
             list(re = "[[]1:[A-Za-z0-9]",
@@ -75,9 +79,10 @@ jobs:
             list(re = "na[.]rm[[:space:]]*=[[:space:]]*TRUE[^)]*[)][[:space:]]*==[[:space:]]*0",
                  why = paste("sum(x, na.rm = TRUE) == 0 is satisfied when x is entirely",
                              "NA. Assert the column is populated before trusting it.")),
-            list(re = "max[(][^)]*[)][[:space:]]*<=",
-                 why = paste("max(numeric(0)) is -Inf, which satisfies any upper bound.",
-                             "Assert length() first or the guard cannot fail.")),
+            list(re = "max[(][^)]*[)][[:space:]]*<=?",
+                 why = paste("max(numeric(0)) is -Inf, which satisfies any upper bound -",
+                             "for < just as much as <=, so both operators are matched.",
+                             "Assert nrow/length first or the guard cannot fail.")),
             list(re = "uniqueN[(][^)]*[)][[:space:]]*==[[:space:]]*0",
                  why = paste("uniqueN(c(NA, NA)) is 1, not 0 - a filter written this way",
                              "never fired, and events with zero elite races escaped it."))
