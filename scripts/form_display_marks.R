@@ -458,6 +458,53 @@ if (XB_ON) {
 # and computed AFTER every adjustment to it. Any column built earlier is stale
 # by construction, which is how a ranking table came to show a slower athlete
 # above a faster one with nothing on the page to explain it.
+# --- SHRINK THE RANKING KEY BY EVIDENCE ---------------------------------------
+#
+# A rank resting on one race is not the same claim as one resting on twelve, and
+# until now the table presented them identically: 352 of 819 published top-ten
+# rows had fewer than three effective races, the men's 10,000m top ten contained
+# three athletes with exactly 1.0, and Barega led the 1500m on 1.60 races.
+#
+# A hard cutoff would discard a genuinely fast athlete who has raced twice and
+# pick a threshold with nothing behind it. Shrinking toward the event mean in
+# proportion to evidence is the same empirical-Bayes shape the ratings already
+# use: w = n_eff / (n_eff + k). A deep record barely moves, a single race is
+# pulled most of the way back.
+#
+# k = 0.5, chosen on FIVE referees rather than one, because they disagree and the
+# disagreement is the finding. Against the World Athletics order:
+#
+#   k     p@10   p@16   p@20   spearman  sp_top30   thin top-ten rows
+#   none  70.2   69.0   68.1   0.9256    0.7754     352
+#   0.5   71.6   71.9   70.8   0.9337    0.7851     311
+#   1.0   71.6   72.7   71.9   0.9342    0.7722     284
+#   2.0   70.9   72.9   71.5   0.9304    0.7438     257
+#
+# precision@10 alone would pick 0.5 or 1.0; the deeper precision cuts and the
+# overall Spearman prefer 1.0. But sp_top30 - the ordering restricted to WA's top
+# 30, which is both top-focused and better powered than a 440-slot membership
+# test - is 0.7722 at k = 1, BELOW the 0.7754 baseline. The deeper metrics reward
+# tidying 11th to 20th; among the athletes who actually contend, k = 1 is slightly
+# worse than doing nothing. k = 0.5 is positive on all five and still removes 41
+# thin rows. FORM_EVID_K=0 disables it.
+EVID_K <- as.numeric(Sys.getenv("FORM_EVID_K", "0.5"))
+if (EVID_K > 0) {
+  act[, .mu_r := mean(R_rank), by = event_id]
+  act[, .w_ev := n_eff / (n_eff + EVID_K)]
+  .thin_before <- act[, {setorder(.SD, -R_rank); sum(n_eff[seq_len(min(10, .N))] < 3)},
+                      by = event_id][, sum(V1)]
+  act[, R_rank := .mu_r + .w_ev * (R_rank - .mu_r)]
+  .thin_after <- act[, {setorder(.SD, -R_rank); sum(n_eff[seq_len(min(10, .N))] < 3)},
+                     by = event_id][, sum(V1)]
+  cat(sprintf("evidence shrinkage k=%.1f: median weight %.2f | thin top-ten rows %d -> %d\n",
+              EVID_K, stats::median(act$.w_ev), .thin_before, .thin_after))
+  # If it removes nothing it is not doing its job, and a silently inert transform
+  # is exactly what this repo keeps producing.
+  stopifnot("evidence shrinkage removed no thin rows at all - it is inert" =
+              .thin_after < .thin_before)
+  act[, c(".mu_r", ".w_ev") := NULL]
+}
+
 act[, rank_mark := exp(orientation * (R_rank + offset))]
 setorder(act, event_id, -R_rank)
 act[, rk := seq_len(.N), by = event_id]
