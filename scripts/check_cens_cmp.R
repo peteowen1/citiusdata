@@ -2,7 +2,13 @@
 # That is the question the ladder never asked, and the one a displayed mark
 # depends on.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
-S <- "C:/Users/peteo/AppData/Local/Temp/claude/C--dev-citiusverse/5a095d02-ce82-4b96-a703-6b96c0eb9c26/scratchpad/opt"
+# Where the A/B arms were written. A session scratchpad path was hardcoded here,
+# which broke the moment that session ended - the directory no longer exists, so
+# this was dead for everyone including its author. check_script_hygiene.R already
+# flags this pattern; it was simply not enforced.
+S <- Sys.getenv("CENS_ARM_DIR", "")
+if (!nzchar(S)) stop("set CENS_ARM_DIR to the directory holding the A/B arm outputs")
+stopifnot("CENS_ARM_DIR does not exist" = dir.exists(S))
 load1 <- function(tag) {
   h <- setDT(read_parquet(file.path(S, tag, sprintf("seqv3_history_%s.parquet", tag))))
   h <- h[seen == TRUE & rc == "final" & is.finite(perf) & is.finite(r_pre)]

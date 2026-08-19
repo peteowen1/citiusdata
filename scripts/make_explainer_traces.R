@@ -9,10 +9,11 @@
 # Emits a JS array ready to paste into the artifact, so the page's numbers and
 # the engine's numbers cannot drift apart by hand-transcription.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
-D   <- "C:/dev/citiusverse/citiusdata/data"
+D   <- Sys.getenv("FORM_OUT", here::here("citiusdata", "data"))
 TAG <- Sys.getenv("TRACE_TAG", "final")
-OUT <- Sys.getenv("TRACE_OUT",
-  "C:/Users/peteo/AppData/Local/Temp/claude/C--dev-citiusverse/5a095d02-ce82-4b96-a703-6b96c0eb9c26/scratchpad/traces.js")
+# Defaults to a tempfile rather than a session scratchpad path. The hardcoded one
+# stopped existing when that session ended, so the default was dead for everyone.
+OUT <- Sys.getenv("TRACE_OUT", file.path(tempdir(), "traces.js"))
 
 # knobs, mirroring the engine defaults
 K0 <- 0.95; KAPPA <- 3; KFLOOR <- 0.32; CENS <- 0.3; HUBER <- 3

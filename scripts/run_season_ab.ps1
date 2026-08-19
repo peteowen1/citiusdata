@@ -27,7 +27,7 @@ Set-Location C:\dev\citiusverse
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 # Refuse to run alongside a heavy foreign R job. Three attempts at this A/B were
-# OOM-killed by a concurrent torpverse build holding 5+ GB on a box with 31.5 GB
+# OOM-killed by a concurrent build from another project holding 5+ GB on a box
 # total; the kill is silent and looks exactly like a crash in this script.
 $free = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB, 1)
 Write-Host "Free physical memory: $free GB"
