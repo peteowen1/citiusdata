@@ -288,7 +288,42 @@ SLOPE_MINN <- .env_num("SEQ_SLOPE_MINN", 5)
 # from being beaten 12.19% of the time to 10.06%, i.e. it becomes a genuine 90th
 # percentile rather than one in name. Set SEQ_VPRIOR=0 to revert.
 VPRIOR <- Sys.getenv("SEQ_VPRIOR","1") != "0"
-VPADJ  <- .env_num("SEQ_VPADJ", 1.63)
+# RETUNED 1.63 -> 0.5 on 2026-08-20, on a bracketed sweep against the CALIBRATION
+# of the stated uncertainty rather than against the ordering.
+#
+# The 1.63 above is the ratio by which var(diff) exceeds the learned variance,
+# because var(diff) retains the race shock and v_pre is the shock-adjusted
+# surprise. Dividing by it puts the prior on the scale the model LEARNS on. That
+# reasoning is right for a steady-state athlete and wrong for a debutant, and the
+# prior is only ever used for debutants: a first-timer's uncertainty is not just
+# their race-to-race variation, it is that PLUS not knowing their level at all.
+# Removing the shock and then also charging nothing for unknown level made the
+# starting variance far too tight.
+#
+# Measured as the robust (MAD) scale of z = (perf - r_pre) / sqrt(v_pre + v_shock)
+# by evidence band, where 1.000 is honest. Six arms, one engine sha:
+#
+#   VPADJ   prior sd   cold <1   thin 1-3   mid 3-8   deep 8+   sealed wtd
+#   0.35     3.61%      0.912     0.920      1.018     1.065     73.422
+#   0.50     3.01%      1.044     0.968      1.037     1.067     73.414
+#   0.75     2.45%      1.207     1.020      1.056     1.069     73.403
+#   1.00     2.12%      1.329     1.055      1.067     1.069     73.405
+#   1.63     1.66%      1.547     1.109      1.082     1.070     73.393
+#   2.50     1.34%      1.741     1.153      1.093     1.071     73.388
+#
+# INTERIOR, not an edge: cold crosses 1.000 between 0.35 and 0.50, thin crosses
+# between 0.50 and 0.75, so 0.5 is bracketed on both sides rather than being the
+# lowest value anyone tried. The first sweep stopped at 1.0 and would have picked
+# it purely for being the end of the range.
+#
+# The deep band moves 1.071 -> 1.067 across the whole sweep, which is the control:
+# a prior that shifted well-evidenced records would be reaching somewhere it has
+# no business. It does not.
+#
+# COSTS NOTHING ON THE ORDERING. Sealed weighted concordance rises 73.393 ->
+# 73.414, which is inside its 0.159 pp floor and is therefore reported as "no
+# harm" rather than claimed as a gain.
+VPADJ  <- .env_num("SEQ_VPADJ", 0.5)
 VPMINA <- .env_num("SEQ_VPMINA", 20)   # min athletes before an event is trusted
 # SEQ_KPOW  scale the initial learning rate by how NOISY the event is:
 #   k0_event = k0 * (median_sd / event_sd) ^ KPOW
