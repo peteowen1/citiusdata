@@ -7,14 +7,23 @@
 #
 # The second job scans for the specific mistakes this repo has actually made,
 # not generic lint. Each pattern below cost real time or produced a wrong
-# published number at least once. It reports and does not fail, because every
-# one of them has legitimate uses - the point is that they appear in a diff
-# rather than in a ranking.
+# published number at least once. It reports and does not fail, because every one
+# of them has legitimate uses - the point is that they appear in a diff rather
+# than in a ranking. It found a live one the day it landed: a Birmingham forecast
+# asserted `max(past$date, na.rm = TRUE) < MEET_START` to prove it had not seen
+# the competition it predicts, which on an empty history is -Inf < MEET_START and
+# passes while verifying nothing.
 #
-# NOTE ON THE REGEXES: they deliberately contain no backslashes, using [[] for a
-# literal bracket and [[:space:]] for whitespace. An earlier version used \\[ and
-# \\s, lost a level of escaping on the way into this file, and would have failed
-# on its first run with "unrecognized escape in character string".
+# WHY THE SCAN USES grep AND NOT R. It was written as an Rscript step first, and
+# r-lib/actions/setup-r hung for over 40 minutes on that job across three
+# consecutive runs while completing in seconds on the parse job beside it. The
+# scan is pure text matching and the patterns are already POSIX extended regex,
+# which grep -E speaks natively - so the R dependency bought nothing and cost the
+# job. Removing it also makes this job finish in about a second.
+#
+# NOTE ON THE PATTERNS: they deliberately contain no backslashes, using [[] for a
+# literal bracket and [[:space:]] for whitespace. An earlier version used escapes
+# that lost a level on the way into this file and would have failed on first run.
 name: check-scripts
 
 on:
@@ -59,54 +68,49 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: r-lib/actions/setup-r@v2
-        with:
-          use-public-rspm: true
       - name: Report patterns that have bitten before
-        shell: Rscript {0}
+        shell: bash
         run: |
-          # recursive = TRUE, matching the parse job. Without it this scan skipped
-          # scripts/lib/ entirely, so the two jobs silently disagreed about what
-          # "every script" meant - which is the same shape of gap they exist to find.
-          files <- list.files("scripts", pattern = "[.][Rr]$", full.names = TRUE,
-                              recursive = TRUE)
-          stopifnot("no scripts found" = length(files) > 0)
-          checks <- list(
-            list(re = "[[]1:[A-Za-z0-9]",
-                 why = paste("1:n indexing. On an empty table 1:0 is c(1, 0), so this",
-                             "FABRICATES a row of NA instead of returning nothing -",
-                             "it printed eight fully-formed NA rows once. Use seq_len().")),
-            list(re = "na[.]rm[[:space:]]*=[[:space:]]*TRUE[^)]*[)][[:space:]]*==[[:space:]]*0",
-                 why = paste("sum(x, na.rm = TRUE) == 0 is satisfied when x is entirely",
-                             "NA. Assert the column is populated before trusting it.")),
-            list(re = "max[(][^)]*[)][[:space:]]*<=?",
-                 why = paste("max(numeric(0)) is -Inf, which satisfies any upper bound -",
-                             "for < just as much as <=, so both operators are matched.",
-                             "Assert nrow/length first or the guard cannot fail.")),
-            list(re = "uniqueN[(][^)]*[)][[:space:]]*==[[:space:]]*0",
-                 why = paste("uniqueN(c(NA, NA)) is 1, not 0 - a filter written this way",
-                             "never fired, and events with zero elite races escaped it."))
-          )
-          total <- 0
-          for (ch in checks) {
-            hits <- character(0)
-            for (f in files) {
-              ln <- readLines(f, warn = FALSE)
-              i <- grep(ch$re, ln)
-              i <- i[!grepl("^[[:space:]]*#", ln[i])]   # ignore commented-out code
-              if (length(i)) hits <- c(hits, sprintf("  %s:%d", f, i))
-            }
-            if (length(hits)) {
-              total <- total + length(hits)
-              cat(sprintf("\n%s\n%s\n", ch$why,
-                          paste(utils::head(hits, 15), collapse = "\n")))
-              if (length(hits) > 15)
-                cat(sprintf("  ... and %d more\n", length(hits) - 15))
-            }
+          set -uo pipefail
+          n_files=$(find scripts -name '*.R' -o -name '*.r' | wc -l)
+          echo "scanning $n_files R scripts under scripts/ (recursively)"
+          # A scan of zero files is a pass proving nothing.
+          if [ "$n_files" -lt 50 ]; then
+            echo "FAIL: only $n_files scripts found - check the path"; exit 1
+          fi
+
+          total=0
+          scan() {
+            local why="$1" re="$2"
+            # -v on the comment filter drops commented-out code; the || true keeps
+            # a no-match (grep exit 1) from ending the step under pipefail.
+            local hits
+            hits=$(grep -rEn --include='*.R' --include='*.r' -- "$re" scripts \
+                   | grep -vE ':[[:space:]]*#' || true)
+            if [ -n "$hits" ]; then
+              local n; n=$(printf '%s\n' "$hits" | wc -l)
+              total=$((total + n))
+              echo ""
+              echo "$why"
+              printf '%s\n' "$hits" | head -15 | sed 's/^/  /'
+              [ "$n" -gt 15 ] && echo "  ... and $((n - 15)) more"
+            fi
           }
-          cat(sprintf("\n%d occurrence(s) of known footgun patterns.\n", total))
-          cat("Reported, not failed: each has legitimate uses. The point is that\n")
-          cat("they show up in a diff rather than in a wrong published number.\n")
-          cat("\nNote: this flags the PATTERN, not a confirmed bug. A line already\n")
-          cat("guarded - a sum(na.rm) preceded by an any(!is.na()) check, say - still\n")
-          cat("appears here. Read the surrounding lines before changing anything.\n")
+
+          scan "1:n indexing. On an empty table 1:0 is c(1, 0), so this FABRICATES a row of NA instead of returning nothing - it printed eight fully-formed NA rows once. Use seq_len()." \
+               '[[]1:[A-Za-z0-9]'
+          scan "sum(x, na.rm = TRUE) == 0 is satisfied when x is entirely NA. Assert the column is populated before trusting it." \
+               'na[.]rm[[:space:]]*=[[:space:]]*TRUE[^)]*[)][[:space:]]*==[[:space:]]*0'
+          scan "max(numeric(0)) is -Inf, which satisfies any upper bound - for < just as much as <=. Assert nrow/length first or the guard cannot fail." \
+               'max[(][^)]*[)][[:space:]]*<=?'
+          scan "uniqueN(c(NA, NA)) is 1, not 0 - a filter written this way never fired, and events with zero elite races escaped it." \
+               'uniqueN[(][^)]*[)][[:space:]]*==[[:space:]]*0'
+
+          echo ""
+          echo "$total occurrence(s) of known footgun patterns."
+          echo "Reported, not failed: each has legitimate uses. The point is that"
+          echo "they show up in a diff rather than in a wrong published number."
+          echo ""
+          echo "Note: this flags the PATTERN, not a confirmed bug. A line already"
+          echo "guarded - a max() preceded by an nrow() check, say - still appears"
+          echo "here. Read the surrounding lines before changing anything."
