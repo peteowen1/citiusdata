@@ -767,8 +767,21 @@ wrong or mis-parsed, not the corpus" = (n0 - nrow(d)) <= 200)
 #
 # The race shock still runs afterwards and estimates whatever conditions remain -
 # that is the intended order, correct the mark then measure the day.
-# ADOPTED 2026-08-19. Rating on corrected marks beats rating on raw ones:
-# 71.740 -> 71.810 raw sealed, 73.178 -> 73.280 weighted. 92.5% of performances
+# ADOPTED 2026-08-19. Rating on corrected marks beats rating on raw ones.
+#
+# THE HONEST NUMBER IS THE SMALLER ONE. Fitted over the whole corpus the gain
+# reads 71.740 -> 71.810 raw and 73.178 -> 73.282 weighted - but those
+# corrections saw the sealed window. Refitted on <=2025 only: 71.803 raw
+# (+0.063, so 93% of the raw gain survives) and 73.206 weighted (+0.028, about a
+# quarter of it). The weighted metric leans on majors and T1 meets, which is
+# exactly where a venue effect fitted partly on 2026 flatters itself. Quote
+# +0.063 raw / +0.028 weighted.
+#
+# The DEPLOYED corrections still use the full corpus: for predicting 2027 more
+# data is better, and the restriction exists to make the EVALUATION honest, not
+# to make the model worse. SEQ_ADJFILE selects either.
+#
+# 92.5% of performances
 # corrected, median adjustment 0.2%. By family it lands exactly where wind and
 # altitude live - road +0.378 (4 of 4 events up), sprint +0.214, distance +0.164,
 # middle +0.074 (9 of 10 up) - with 100m M +0.637 over 72,838 pairs against a
