@@ -108,7 +108,13 @@ for (EV in EVENTS) {
     wind = at,
     per_ms_mark = ref * (exp(if (o == -1) -slope_perf else slope_perf) - 1))
 }
-stopifnot("no event produced a fit" = length(curves) > 0)
+# "> 0" passes with one event fitted of ten - and the other nine would then
+# carry wind_adj = 0, indistinguishable from "no wind effect", all the way into
+# the ratings. Require most of them.
+cat(sprintf("fitted %d of %d events\n", length(curves), length(EVENTS)))
+stopifnot("fewer than 80% of the wind events produced a fit - the rest would
+silently receive no wind correction at all" =
+            length(curves) >= 0.8 * length(EVENTS))
 cv <- rbindlist(curves); sm <- rbindlist(summ)
 
 cat("\n=== how much does +1 m/s buy, at different wind levels? ===\n")

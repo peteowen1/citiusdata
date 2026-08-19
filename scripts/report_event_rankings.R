@@ -55,6 +55,12 @@ if (file.exists(.wrf)) {
   # carry orientation from the record table under its own name: `c0` has not
   # been joined to the registry yet at this point, and reusing `orientation`
   # would collide with that later merge
+  # The same guard as the engine's, and it needs the same assertion: without one
+  # a failed parse or a key drift empties .w, .imp is empty, the block does
+  # nothing, and an annulled mark reappears as somebody's published personal best
+  # with no signal that the check ever ran.
+  stopifnot("no world record matched the registry - the SB/PB guard would check
+nothing, and an impossible mark would publish as a personal best" = nrow(.w) >= 20)
   c0 <- merge(c0, .w[, .(event_id, wr_mark, wr_or = orientation)],
               by = "event_id", all.x = TRUE)
   .imp <- c0[is.finite(wr_mark) & fifelse(wr_or == -1, mark < wr_mark, mark > wr_mark)]

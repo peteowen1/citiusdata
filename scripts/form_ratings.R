@@ -728,12 +728,19 @@ if (file.exists(WRF)) {
   # This whole guard is an inner join away from being vacuous: if the record
   # file's event_ids drift, .wr empties, `bad` is empty and the run reports
   # nothing dropped - exactly the state it is meant to make impossible.
-  stopifnot("world_records.csv parsed to no usable records - the impossible-mark
-guard would silently check nothing" = nrow(.wr) >= 20)
   # orientation comes from the registry directly - `reg` here carries only
   # (event_id, family), so reusing it silently produced no orientation column
   .or <- as.data.table(citius::citius_events())[, .(event_id, orientation)]
+  .n_wr <- nrow(.wr)
   .wr <- merge(.wr, .or, by = "event_id")
+  # AFTER the join, not before. This check used to sit above the merge - so if
+  # the record file's event_ids ever stopped matching the registry, .wr would
+  # empty HERE, `bad` would always be empty, the bulk check below would pass at
+  # 0 <= 200, and nothing would print. The comment above names precisely that
+  # failure mode and the check was on the wrong side of it.
+  stopifnot("world_records.csv parsed to no usable records" = .n_wr >= 20,
+            "no world record matched the event registry - the impossible-mark
+guard would silently check nothing" = nrow(.wr) >= 20)
   .wr[, wr_perf := fifelse(orientation == -1, -log(wr_mark), log(wr_mark))]
   n0 <- nrow(d)
   d <- merge(d, .wr[, .(event_id, wr_perf)], by = "event_id", all.x = TRUE)
@@ -789,6 +796,13 @@ wrong or mis-parsed, not the corpus" = (n0 - nrow(d)) <= 200)
 # -0.226, on small samples, and is the open question.
 # SEQ_ADJ=0 rates on raw marks.
 ADJ <- Sys.getenv("SEQ_ADJ", "1") != "0"
+# The "only one wind correction" rule above was a comment and nothing else. This
+# file guards far smaller landmines with stopifnot, so leaving a documented,
+# known-dangerous combination unenforced is inconsistent: SEQ_WINDCS defaults off
+# today, but a future experiment turning it on without knowing to set SEQ_ADJ=0
+# would remove wind twice - once corpus-wide, once inside the cold-start prior.
+stopifnot("SEQ_ADJ and SEQ_WINDCS are both on - wind would be removed twice, once
+on the mark and once inside the engine. Pick one." = !(ADJ && WINDCS))
 if (ADJ) {
   # overridable so a corrections file fitted on a restricted window can be tested
   # against the full-corpus one without swapping files under a running experiment
@@ -799,7 +813,35 @@ if (ADJ) {
   .adj <- setDT(read_parquet(af, col_select = c("race_key", "athlete_id", "event_id",
                                                 "wind_adj", "venue_adj")))
   .adj[, athlete_id := as.character(athlete_id)]
-  .adj <- unique(.adj, by = c("race_key", "athlete_id", "event_id"))
+  # SURFACE duplicates rather than absorbing them. This used to call unique()
+  # straight away, which made the row-count assertion below UNFALSIFIABLE: with
+  # .adj deduped first, the merge can never fan out, so nrow(d) == n0 always held
+  # - including in the one case it claimed to guard, an athlete with two marks in
+  # one race. Both rows would then take the same adj_total, from whichever mark
+  # happened to survive the dedup.
+  .key <- c("race_key", "athlete_id", "event_id")
+  .dupe_adj <- nrow(.adj) - nrow(unique(.adj, by = .key))
+  if (.dupe_adj > 0)
+    cat(sprintf("[%s] adjusted marks: %s duplicate key(s) collapsed\n",
+                TAG, format(.dupe_adj, big.mark = ",")))
+  .adj <- unique(.adj, by = .key)
+  # And check the side that actually matters: if `d` carries two performances
+  # under one key, they cannot be told apart and both would take the same
+  # correction. d is not deduplicated until ~400 lines below this point.
+  .dupe_d <- nrow(d) - nrow(unique(d, by = .key))
+  if (.dupe_d > 0) {
+    # REAL, and found the moment this check was added: 41 of ~1.3M performances
+    # share a key, so the pair cannot be told apart and both take the same
+    # correction - taken from whichever mark survived the dedup above. At 0.003%
+    # that is not worth blocking a pipeline over, but it must be VISIBLE rather
+    # than absorbed, which is what the previous row-count assertion did.
+    cat(sprintf("[%s] WARNING: %s performance(s) share a (race_key, athlete_id,\n",
+                TAG, format(.dupe_d, big.mark = ",")))
+    cat("        event_id) key. Each pair takes a single shared correction, which\n")
+    cat("        may belong to the other mark. Logged as a data-quality item.\n")
+  }
+  stopifnot("more than 0.1% of performances share a key - corrections cannot be
+matched to the right mark at that rate" = .dupe_d <= 0.001 * nrow(d))
   .adj[, adj_total := fifelse(is.finite(wind_adj), wind_adj, 0) +
                       fifelse(is.finite(venue_adj), venue_adj, 0)]
   n0 <- nrow(d)
@@ -815,8 +857,14 @@ if (ADJ) {
               100 * mean(hit), stats::median(abs(d$adj_total[hit]))))
   # If almost nothing is corrected the join failed and the arm is really a
   # baseline wearing the wrong label - the most expensive kind of null result.
-  stopifnot("fewer than 10% of performances got an adjustment - the join failed" =
-              mean(hit) > 0.10)
+  # A SINGLE combined floor could not see either correction failing alone: wind
+  # covers 27.6% of performances and venue 92.8%, so if venue matching broke
+  # entirely `hit` would fall to 27.6% and still clear a 10% bar - silently
+  # discarding the correction worth most of the gain.
+  .cov <- mean(hit)
+  cat(sprintf("[%s] adjustment coverage: %.1f%% of performances\n", TAG, 100 * .cov))
+  stopifnot("fewer than 60% of performances got an adjustment - the join failed" =
+              .cov > 0.60)
   d[is.finite(adj_total), perf := perf - adj_total]
   d[, adj_total := NULL]
 }

@@ -41,7 +41,14 @@ c0 <- setDT(read_parquet(file.path(D, "athletics_corpus.parquet"),
                                         "venue_city","tier","place","comp_name")))
 c0[, athlete_id := as.character(athlete_id)]
 c0 <- c0[scoreable == TRUE & is.finite(perf) & is.finite(mark) & mark > 0]
+# An inner join drops any corpus event_id absent from the registry, silently and
+# partially. This verse has lost whole events that way before - the 20km walk and
+# the half marathon. Count it.
+.n_pre <- nrow(c0)
 c0 <- merge(c0, reg, by = "event_id")
+if (nrow(c0) < .n_pre)
+  stop(sprintf("%s performance(s) carry an event_id the registry does not have",
+               format(.n_pre - nrow(c0), big.mark = ",")))
 cat(sprintf("scoreable performances: %s over %d events\n",
             format(nrow(c0), big.mark = ","), uniqueN(c0$event_id)))
 
@@ -50,9 +57,14 @@ wf <- file.path(D, WCURVE)
 stopifnot("wind curves missing - run check_wind_effect.R first" = file.exists(wf))
 wc <- as.data.table(jsonlite::fromJSON(wf)$curves)
 stopifnot("wind curve file has no rows" = nrow(wc) > 0)
-# delta_pct is the % change in the MARK at that wind relative to no wind. Convert
-# back to perf space: a mark change of (1+p) is a perf change of -log(1+p) for
-# track and +log(1+p) for field. Store as the perf the wind ADDED.
+# delta_pct IS A PERF QUANTITY, NOT A MARK QUANTITY. check_wind_effect.R computes
+# it as 100 * (exp(eff) - 1) directly from `eff`, the oriented perf effect, so it
+# is always positive when the wind helped. It is NOT the % change in the reported
+# `mark` column: for track a helping wind LOWERS the time, so the mark change runs
+# the opposite sign. Read it as perf and the inversion below needs no orientation;
+# read it as a mark and orientation looks necessary - which is precisely the flip
+# described next.
+#
 # SIGN, and it was wrong first time. check_wind_effect.R computes
 #     delta_pct = 100 * (exp(eff) - 1),  eff = the PERF the wind added
 # with no orientation applied, because perf is already oriented so that higher is
@@ -91,7 +103,21 @@ cat(sprintf("venue effects estimated up to %s (%s marks)\n",
 v[, y := perf - wind_adj]                                  # wind removed first
 v[, y := y - mean(y), by = .(athlete_id, event_id)]        # then ability
 v[is.na(tier) | !nzchar(tier), tier := "unknown"]
-v[, y := y - mean(y), by = .(tier, family)]                # then meet occasion
+# then meet occasion - but LEAVE THE VENUE ITSELF OUT of the tier mean. A plain
+# `y - mean(y), by = .(tier, family)` lets a venue that dominates a tier demean
+# away its own effect: Zurich is 50-56% of every family's Diamond League Final
+# rows, so roughly half its true venue effect was being absorbed into the
+# "occasion" term before venue_adj was ever estimated. Measured, not hypothetical.
+v[, `:=`(t_sum = sum(y), t_n = .N), by = .(tier, family)]
+v[, `:=`(vt_sum = sum(y), vt_n = .N), by = .(tier, family, venue_city)]
+v[, others_n := t_n - vt_n]
+# with too few other venues in the tier the leave-one-out mean is noisier than
+# the plain one, so fall back rather than trade bias for variance
+v[, t_mean := fifelse(others_n >= 30, (t_sum - vt_sum) / pmax(others_n, 1), t_sum / t_n)]
+cat(sprintf("tier demeaning: %.1f%% of rows use a leave-one-out tier mean\n",
+            100 * mean(v$others_n >= 30)))
+v[, y := y - t_mean]
+v[, c("t_sum", "t_n", "vt_sum", "vt_n", "others_n", "t_mean") := NULL]
 ve <- v[, .(n_v = .N, raw_eff = mean(y)), by = .(venue_city, family)]
 ve[, venue_adj := raw_eff * n_v / (n_v + VKAP)]            # shrink small venues
 cat(sprintf("venue effects: %s venue-family cells, shrinkage kappa %.0f\n",
