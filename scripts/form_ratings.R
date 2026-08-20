@@ -184,6 +184,7 @@ SEEDNE <- .env_num("SEQ_SEEDNE", 5)     # cap on seeded n_eff, so it still learn
 # is the conservative side of the one failure this knob has that the metric
 # cannot see: blunting a genuine collapse. Both clearly beat off (+0.202/+0.155).
 HUBER <- .env_num("SEQ_HUBER", 3)
+SCORE_MERGED <- Sys.getenv("SEQ_SCORE_MERGED", "0") != "0"
 # See the note at the shock estimator: "mean" reproduces the original behaviour,
 # "median" makes it robust to athletes who stop racing.
 # ADOPTED 2026-08-18 as a trimmed mean at 0.20. The mean is not robust to
@@ -1494,6 +1495,23 @@ for (r_ in seq_along(starts)) {
     hix <- ix          # filled again below, once the update is actually known
   }
   slot <- if (yr == 2025L) "y25" else if (yr == 2026L) "y26" else NA
+  # DO NOT SCORE A MERGED RACE. race_key is competition|event|round|date and
+  # carries no section identifier, so parallel sections of one round collapse
+  # into a single race - one 60m "final" holds eight athletes all placed 1st.
+  # A duplicated finishing position proves it: two athletes cannot both be third.
+  #
+  # .pairs() already drops pairs with EQUAL places, which is why this went
+  # unnoticed - the damage is the pairs that look legitimate, first in section A
+  # against second in section B, comparing athletes who never met. Measured on
+  # the deployed history: 8,994 of 168,006 scored races, carrying 9.97% of all
+  # concordance pairs.
+  #
+  # The race still updates ratings. A blended shock across sections is noisier
+  # but not biased, which is the same argument the corpus builder makes for
+  # partial fields - whereas scoring it is simply wrong. Set SEQ_SCORE_MERGED=1
+  # to restore the old behaviour for comparison.
+  if (!is.na(slot) && !SCORE_MERGED && anyDuplicated(z$place[is.finite(z$place)]))
+    slot <- NA
   if (!is.na(slot)) {
     # All i<j pairs as plain integer vectors. CJ() cost ~0.4ms per call in fixed
     # data.table dispatch overhead regardless of field size (measured: 79x at
