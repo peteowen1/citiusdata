@@ -44,6 +44,23 @@ c0 <- setDT(read_parquet(file.path(D, "athletics_corpus.parquet"),
                                         "date","wind","legal","indoor","scoreable",
                                         "venue_city","venue_stadium","tier","place","comp_name")))
 c0[, athlete_id := as.character(athlete_id)]
+
+# BACKFILL THE VENUE WITHIN A RACE. Everyone in a race is at the same venue by
+# definition, but venue_city is missing on 0.18% of marks and that missingness
+# CLUSTERS: 3,234 races had some rows naming the venue and others blank, so the
+# blank rows fell back to venue_adj = 0 while their own competitors received the
+# city effect. A correction that differs between two athletes in the same race is
+# wrong on its face - it cannot be a property of the place.
+# Spotted by Pete reading the within-race constancy table and asking how venue
+# could possibly vary inside a race.
+.fill <- function(x) { u <- unique(x[!is.na(x) & nzchar(x)]); if (length(u) == 1L) u else x }
+c0[, venue_city    := .fill(venue_city),    by = race_key]
+c0[, venue_stadium := .fill(venue_stadium), by = race_key]
+.still <- c0[, .(k = uniqueN(fifelse(is.na(venue_city) | !nzchar(venue_city),
+                                     "(none)", venue_city))), by = race_key][k > 1, .N]
+cat(sprintf("venue backfilled within race; %d race(s) still disagree about the venue
+",
+            .still))
 c0 <- c0[scoreable == TRUE & is.finite(perf) & is.finite(mark) & mark > 0]
 # An inner join drops any corpus event_id absent from the registry, silently and
 # partially. This verse has lost whole events that way before - the 20km walk and
