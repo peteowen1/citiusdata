@@ -58,7 +58,10 @@ cached <- sub("[.]rds$", "", list.files(COMP_CACHE, pattern = "[.]rds$"))
 # fetched it and it held nothing" and "we could not fetch it" are different facts.
 FAILFILE <- file.path(D, "reharvest_failed.csv")
 failed <- if (file.exists(FAILFILE)) as.character(fread(FAILFILE)$competition_id) else character(0)
-todo <- t[!competition_id %chin% cached & !competition_id %chin% failed]
+DISPUTED0 <- file.path(D, "reharvest_disputed_empty.csv")
+disputed <- if (file.exists(DISPUTED0)) as.character(fread(DISPUTED0)$competition_id) else character(0)
+todo <- t[!competition_id %chin% cached & !competition_id %chin% failed &
+          !competition_id %chin% disputed]
 cat(sprintf("targets %s | already cached %s | remaining %s | this run %s\n",
             format(nrow(t), big.mark = ","),
             format(nrow(t) - nrow(todo), big.mark = ","),
@@ -85,7 +88,9 @@ if (!nrow(todo)) { cat("nothing to do\n"); quit(status = 0) }
 # and saying otherwise here would be the same overclaiming the fix exists to
 # undo.
 cgs <- setDT(read_parquet(file.path(D, "competition_catalogue.parquet"),
-                          col_select = c("competition_id", "first_date", "last_date")))
+                          col_select = c("competition_id", "first_date", "last_date",
+                                         "results")))
+setnames(cgs, "results", "expect")   # rows the corpus already holds for this meet
 cgs[, competition_id := as.character(competition_id)]
 cgs[, dur := as.integer(last_date - first_date) + 1L]
 # A day of slack past the catalogue span: the catalogue dates come from results
@@ -103,7 +108,8 @@ if (.capped > 0L)
   cat(sprintf("NOTE: %s competition(s) span more than the %d-day cap and will be\n",
               format(.capped, big.mark = ","), DURCAP),
       "  fetched incompletely - raise REHARVEST_DAYCAP if that matters\n", sep = "")
-todo <- merge(todo, cgs[, .(competition_id, dur)], by = "competition_id", all.x = TRUE)
+todo <- merge(todo, cgs[, .(competition_id, dur, expect)], by = "competition_id",
+              all.x = TRUE)
 todo[is.na(dur) | dur < 1L, dur := 3L]
 cat(sprintf("day-pages to request: %s across %s competitions (a blanket 3 would be %s)
 ",
@@ -112,6 +118,11 @@ cat(sprintf("day-pages to request: %s across %s competitions (a blanket 3 would 
 setorderv(todo, .rank, -1L)
 
 n_ok <- 0L; n_empty <- 0L; n_err <- 0L; got <- 0L; new_fail <- character(0)
+# EMPTY-BUT-DISPUTED IS ITS OWN OUTCOME, not an error. Counting it as one made
+# a batch containing nothing else look like total failure, which tripped the
+# endpoint-liveness guard below and aborted the whole chain - so the T1/T2 list
+# it was queued ahead of never ran. The endpoint was healthy throughout.
+n_fault <- 0L; new_fault <- character(0)
 for (i in seq_len(min(MAXN, nrow(todo)))) {
   cid <- todo$competition_id[i]
   r <- tryCatch(athletics_competition_results(cid, days = seq_len(todo$dur[i])),
@@ -128,19 +139,71 @@ for (i in seq_len(min(MAXN, nrow(todo)))) {
     cat(sprintf("  [%d/%s] %s ERROR %s\n", i, format(min(MAXN, nrow(todo))), cid,
                 substr(attr(r, "msg"), 1, 60)))
   } else if (is.null(r) || !NROW(r)) {
+    # AN EMPTY RESPONSE IS ONLY A FACT IF THE CORPUS AGREES. Caching empty is
+    # meant to record "we fetched it and it held nothing" so it is not retried
+    # forever - but the endpoint also returns empty transiently, and then the
+    # cache preserves the fault as the fact, permanently and silently. On
+    # 2026-08-20 a re-fetch of 7196499 (Jamaican Championships 2023) returned
+    # nothing and overwrote 473 good rows, and a scan then found 47 competitions
+    # cached as empty while the corpus holds 20,201 rows for them - among them
+    # the 2025 World Indoor Championships and the Kenyan and South African
+    # nationals. The catalogue knows how many rows we already hold, so it can
+    # tell the two apart: empty from a competition the corpus credits with
+    # results is a FAULT, and a fault must not be written down as an answer.
+    .expect <- todo$expect[i]
+    if (!is.na(.expect) && .expect > 0) {
+      n_fault <- n_fault + 1L
+      new_fault <- c(new_fault, cid)
+      cat(sprintf("  [%d] %s EMPTY but the corpus holds %s rows - treating as a fault, not caching\n",
+                  i, cid, format(.expect, big.mark = ",")))
+      Sys.sleep(PAUSE)
+      next
+    }
     n_empty <- n_empty + 1L
-    # cache the empty result too, so the next run does not retry it forever
     saveRDS(data.table(), file.path(COMP_CACHE, paste0(cid, ".rds")))
   } else {
-    saveRDS(r, file.path(COMP_CACHE, paste0(cid, ".rds")))
+    # A RE-FETCH MUST NEVER SHRINK A CACHE ENTRY. Not by half, not by one row.
+    #
+    # The first version of this guard compared against the CORPUS count and
+    # allowed anything above 50% of it, which was a guess dressed as a rule: it
+    # would have let a response carrying 51% of the rows overwrite a complete
+    # one. Two different comparisons were being conflated.
+    #
+    #   endpoint vs CORPUS   - different sources, legitimately different. The
+    #                          endpoint usually returns MORE (median 1.86x, which
+    #                          is the whole premise of the big-competition list),
+    #                          but 1.5% of competitions come in below the corpus
+    #                          count for honest reasons. Cannot be a hard gate.
+    #   endpoint vs ENDPOINT - the same source twice, and measured over 128
+    #                          re-fetched competitions it is deterministic:
+    #                          102 identical, 26 grew, ZERO shrank.
+    #
+    # So the like-for-like comparison needs no threshold at all. Keep the larger
+    # of old and new; a shrink is a transport fault every time.
+    .old <- file.path(COMP_CACHE, paste0(cid, ".rds"))
+    .have <- if (file.exists(.old)) NROW(readRDS(.old)) else 0L
+    if (NROW(r) < .have) {
+      n_err <- n_err + 1L
+      cat(sprintf("  [%d] %s returned %s rows but the cache already holds %s - keeping the cached copy\n",
+                  i, cid, format(NROW(r), big.mark = ","), format(.have, big.mark = ",")))
+      Sys.sleep(PAUSE)
+      next
+    }
+    # A FIRST fetch well below the corpus count is worth saying out loud, but it
+    # is still the only copy we have, so it is cached rather than refused.
+    .expect <- todo$expect[i]
+    if (.have == 0L && !is.na(.expect) && .expect > 0 && NROW(r) < .expect)
+      cat(sprintf("  [%d] %s: %s rows against %s in the corpus - caching anyway, nothing to compare\n",
+                  i, cid, format(NROW(r), big.mark = ","), format(.expect, big.mark = ",")))
+    saveRDS(r, .old)
     n_ok <- n_ok + 1L; got <- got + NROW(r)
     if (i %% 10 == 0 || i <= 3)
       cat(sprintf("  [%d] %s -> %s rows\n", i, cid, format(NROW(r), big.mark = ",")))
   }
   Sys.sleep(PAUSE)
 }
-cat(sprintf("\nfetched %d competition(s), %s rows | empty %d | errors %d\n",
-            n_ok, format(got, big.mark = ","), n_empty, n_err))
+cat(sprintf("\nfetched %d competition(s), %s rows | empty %d | disputed-empty %d | errors %d\n",
+            n_ok, format(got, big.mark = ","), n_empty, n_fault, n_err))
 # RECORDED BEFORE THE GUARD BELOW, deliberately. A run that hits only broken
 # competitions would otherwise abort at the guard without recording them, and
 # the next run would lead with exactly the same ids.
@@ -161,7 +224,37 @@ if (length(new_fail) && n_ok > 0) {
 
 # An all-error run means the endpoint changed or we are blocked, and silently
 # caching nothing would look like success on the next run.
-stopifnot("every request failed - check the endpoint before re-running" =
-            n_ok > 0 || n_empty > 0)
+# LIVENESS IS ABOUT WHETHER THE ENDPOINT ANSWERED, not whether we kept the
+# answer. An empty-but-disputed response is still a response, and a run whose
+# remaining work happens to be all disputed is not evidence the endpoint is
+# down. Reading it that way aborted the chain on 2026-08-20 with the endpoint
+# perfectly healthy, and cost the T1/T2 pass its whole overnight window.
+# AND IT MUST BE PROPORTIONATE TO THE BATCH. "Nothing succeeded" is evidence
+# about the endpoint only when enough was attempted for it to mean something.
+# With one competition left, and that one a known-bad 500, this fired and
+# aborted the chain - twice - while the endpoint was healthy. Worse, it is a
+# deadlock: the 500 blacklist below only records when something ELSE succeeded,
+# so a final stuck item can never be retired and never stops blocking.
+.attempted <- min(MAXN, nrow(todo))
+LIVE_MIN <- .env_int("REHARVEST_LIVENESS_MIN", "5")
+if (.attempted < LIVE_MIN && n_ok == 0L && n_empty == 0L && n_fault == 0L) {
+  cat(sprintf("all %d attempted failed, but that is too few to judge the endpoint on\n",
+              .attempted))
+} else {
+  stopifnot("every request failed - check the endpoint before re-running" =
+              n_ok > 0 || n_empty > 0 || n_fault > 0)
+}
+# A DISPUTED EMPTY MUST BE REMEMBERED, for the same reason a 500 is: otherwise
+# a ranked list leads with it on every single run. Recorded in its own file
+# rather than as an empty cache entry, because "the endpoint says empty and the
+# corpus disagrees" is a different fact from "it holds nothing", and writing
+# the second one down is what this whole change set exists to stop.
+DISPUTED <- file.path(D, "reharvest_disputed_empty.csv")
+if (length(new_fault)) {
+  .prev <- if (file.exists(DISPUTED)) as.character(fread(DISPUTED)$competition_id) else character(0)
+  fwrite(data.table(competition_id = unique(c(.prev, new_fault))), DISPUTED)
+  cat(sprintf("recorded %d competition(s) as disputed-empty; delete %s to retry them\n",
+              length(new_fault), basename(DISPUTED)))
+}
 cat("Re-run to continue; already-cached competitions are skipped.\n")
 cat("Rebuild the corpus afterwards for the new keys to take effect.\n")
