@@ -77,6 +77,13 @@ h[, mu := mean(r_use), by = event_id]
 score_k <- function(kv, yr_keep) {
   x <- h[yr %in% yr_keep]
   x[, r_k := if (kv <= 0) r_use else mu + (n_eff / (n_eff + kv)) * (r_use - mu)]
+  # EXCLUDE MERGED RACES, for the same reason the engine now does. race_key
+  # carries no section identifier, so parallel sections collapse into one race
+  # and a duplicated finishing place proves it. Pairs across sections compare
+  # athletes who never met - about a tenth of them - and every figure this file
+  # produced before 2026-08-20 was computed with them in.
+  .dup <- x[, .(bad = anyDuplicated(place) > 0), by = race_key][bad == TRUE, race_key]
+  x <- x[!race_key %chin% .dup]
   x[, rid := .GRP, by = race_key]
   a <- x[, .(rid, event_id, i = seq_len(.N), place, r = r_k, wt)]
   m <- merge(a, a, by = c("rid", "event_id"), allow.cartesian = TRUE,

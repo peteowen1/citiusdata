@@ -87,6 +87,12 @@ score_arm <- function(tag) {
   h <- h[seen == TRUE & is.finite(r_use) & is.finite(place) & place <= 12 &
          year(date) %in% YEARS]
   stopifnot("no rows survived the year filter" = nrow(h) > 0)
+  # Merged races excluded: race_key has no section identifier, so parallel
+  # sections collapse into one and pairs across them compare athletes who never
+  # raced. A duplicated finishing place is the proof. 9.97% of pairs on the
+  # deployed history.
+  .dup <- h[, .(bad = anyDuplicated(place) > 0), by = race_key][bad == TRUE, race_key]
+  h <- h[!race_key %chin% .dup]
   h[, rid := .GRP, by = race_key]
   a <- h[, .(rid, event_id, yr = year(date), i = seq_len(.N), place, r = r_use)]
   m <- merge(a, a, by = c("rid", "event_id", "yr"), allow.cartesian = TRUE,
