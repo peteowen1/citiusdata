@@ -202,6 +202,14 @@ ve[, city_adj := raw_eff * n_v / (n_v + VKAP)]
 cat(sprintf("venue effects: %s city-family cells, kappa %.0f
 ",
             format(nrow(ve), big.mark = ","), VKAP))
+# UNCONDITIONAL. The only assertion on the venue fit lived inside the
+# if (STAD_ON) branch, so with ADJ_STADIUM=0 and a degenerate fit - an
+# aggressive ADJ_MAX_YEAR or ADJ_MIN_ATH during a sweep - every row fell through
+# stadium NA, then city NA, then := 0, and the venue term was silently switched
+# off for the whole corpus with only a cheerful "venue applied: 0.0%" to show
+# for it.
+stopifnot("no venue-family cells were built - the venue term would be inert" =
+            nrow(ve) > 100)
 
 STAD_ON <- Sys.getenv("ADJ_STADIUM", "1") != "0"
 if (STAD_ON) {

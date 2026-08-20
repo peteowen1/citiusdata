@@ -788,7 +788,16 @@ if (file.exists(WRF)) {
 guard would silently check nothing" = nrow(.wr) >= 20)
   .wr[, wr_perf := fifelse(orientation == -1, -log(wr_mark), log(wr_mark))]
   n0 <- nrow(d)
+  # DE-DUPLICATED FIRST. A repeated event_id in world_records.csv - an auto and
+  # a hand-timed row, or an appending scraper - fans this merge out and every
+  # performance in that event is counted twice in its own rating history. The
+  # drop-count check below only looks for row LOSS, so n0 - nrow(d) would go
+  # negative and satisfy "<= 200" trivially. Hand-maintained reference data is
+  # exactly where a duplicate row appears unnoticed.
+  .wr <- unique(.wr, by = "event_id")
   d <- merge(d, .wr[, .(event_id, wr_perf)], by = "event_id", all.x = TRUE)
+  stopifnot("the world-record merge changed the row count - duplicate event_id" =
+              nrow(d) == n0)
   bad <- d[is.finite(wr_perf) & perf > wr_perf]
   if (nrow(bad)) {
     cat(sprintf("[%s] IMPOSSIBLE MARKS DROPPED: %d better than their world record\n",
@@ -915,6 +924,20 @@ matched to the right mark at that rate" = .dupe_d <= 0.001 * nrow(d))
   # a fan-out here would duplicate performances and inflate every rating
   stopifnot("joining adjusted marks changed the row count - the key is not unique" =
               nrow(d) == n0)
+  # EACH TERM SEPARATELY, not just the sum. The floor below was asserted on
+  # adj_total alone, and venue covers ~93% of performances on its own - so a
+  # TOTAL wind failure (a stale curve file, a broken join) would leave coverage
+  # comfortably above the floor while every sprint quietly lost the correction
+  # the file credits with its largest single gains. The comment beside the floor
+  # already named this failure mode for venue and never checked the mirror case.
+  for (.term in intersect(c("wind_adj", "venue_adj", "indoor_adj"), names(.adj))) {
+    .c <- .adj[[.term]]
+    cat(sprintf("[%s]   %-11s non-zero on %.1f%% of adjusted rows
+", TAG, .term,
+                100 * mean(is.finite(.c) & .c != 0)))
+    if (!any(is.finite(.c) & .c != 0))
+      stop(sprintf("%s is zero for EVERY row - that correction is not reaching the engine", .term))
+  }
   hit <- is.finite(d$adj_total) & d$adj_total != 0
   cat(sprintf("[%s] adjusted marks: %s of %s performances corrected (%.1f%%), median |adj| %.4f\n",
               TAG, format(sum(hit), big.mark = ","), format(nrow(d), big.mark = ","),
