@@ -40,7 +40,16 @@ stopifnot("target list is empty" = nrow(t) > 0,
 setorder(t, -rows_in_merged_races)
 
 cached <- sub("[.]rds$", "", list.files(COMP_CACHE, pattern = "[.]rds$"))
-todo <- t[!competition_id %chin% cached]
+# A PERSISTENT FAILURE MUST BE REMEMBERED, or the ranked list guarantees we lead
+# with it on every run. Some competitions make the upstream API return a 500 -
+# 7065893, 7065899 and 7065902 are adjacent ids, so it is one broken meet series
+# rather than a transient fault. Empty results were already cached for exactly
+# this reason; errors were not, so a restart walked straight back into them.
+# Recorded in a separate file rather than as an empty cache entry, because "we
+# fetched it and it held nothing" and "we could not fetch it" are different facts.
+FAILFILE <- file.path(D, "reharvest_failed.csv")
+failed <- if (file.exists(FAILFILE)) as.character(fread(FAILFILE)$competition_id) else character(0)
+todo <- t[!competition_id %chin% cached & !competition_id %chin% failed]
 cat(sprintf("targets %s | already cached %s | remaining %s | this run %s\n",
             format(nrow(t), big.mark = ","),
             format(nrow(t) - nrow(todo), big.mark = ","),
@@ -57,7 +66,7 @@ todo <- merge(todo, span, by = "competition_id", all.x = TRUE)
 todo[is.na(dur) | dur < 1L, dur := 3L]
 setorder(todo, -rows_in_merged_races)
 
-n_ok <- 0L; n_empty <- 0L; n_err <- 0L; got <- 0L
+n_ok <- 0L; n_empty <- 0L; n_err <- 0L; got <- 0L; new_fail <- character(0)
 for (i in seq_len(min(MAXN, nrow(todo)))) {
   cid <- todo$competition_id[i]
   r <- tryCatch(athletics_competition_results(cid, days = seq_len(todo$dur[i])),
@@ -68,6 +77,9 @@ for (i in seq_len(min(MAXN, nrow(todo)))) {
                   structure(list(), class = "reharvest_error", msg = msg) })
   if (inherits(r, "reharvest_error")) {
     n_err <- n_err + 1L
+    # a 500 is the upstream failing to build THAT competition; it will not fix
+    # itself, so record it rather than retrying it forever
+    if (grepl("500|Internal Server", attr(r, "msg"))) new_fail <- c(new_fail, cid)
     cat(sprintf("  [%d/%s] %s ERROR %s\n", i, format(min(MAXN, nrow(todo))), cid,
                 substr(attr(r, "msg"), 1, 60)))
   } else if (is.null(r) || !NROW(r)) {
@@ -84,6 +96,24 @@ for (i in seq_len(min(MAXN, nrow(todo)))) {
 }
 cat(sprintf("\nfetched %d competition(s), %s rows | empty %d | errors %d\n",
             n_ok, format(got, big.mark = ","), n_empty, n_err))
+# RECORDED BEFORE THE GUARD BELOW, deliberately. A run that hits only broken
+# competitions would otherwise abort at the guard without recording them, and
+# the next run would lead with exactly the same ids.
+#
+# And only when something ELSE succeeded: a 500 while other competitions are
+# fetching fine means that competition is broken upstream, while a 500 on
+# everything means the endpoint is down and blacklisting the list would be
+# self-inflicted damage.
+if (length(new_fail) && n_ok > 0) {
+  fwrite(data.table(competition_id = unique(c(failed, new_fail))), FAILFILE)
+  cat(sprintf("recorded %d competition(s) as persistently failing
+", length(new_fail)))
+} else if (length(new_fail)) {
+  cat(sprintf("%d error(s) but nothing succeeded - NOT recording them; the endpoint may be down
+",
+              length(new_fail)))
+}
+
 # An all-error run means the endpoint changed or we are blocked, and silently
 # caching nothing would look like success on the next run.
 stopifnot("every request failed - check the endpoint before re-running" =
