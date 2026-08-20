@@ -182,6 +182,41 @@ say("  adopted into a single known race: %s rows",
            big.mark = ","))
 say("  left unkeyed because the round was sectioned and the section is unknowable: %s rows",
     format(n_unplaceable, big.mark = ","))
+# ---- REPAIR: a race where every athlete is recorded in the same position ------
+# The feed sometimes returns a whole heat with place = 1 for everyone. Ypsilanti
+# 2024-02-23, women's Mile, raceId 11 raceNumber 1: seven athletes, marks 4:58.69
+# through 5:04.57, all "1st" - while raceNumber 2 of the same round comes back
+# perfectly numbered 1 to 8. Confirmed upstream by querying the API directly, so
+# this is the source being wrong and not our parsing.
+#
+# In a timed race the finishing order IS the mark order, so the positions can be
+# recovered by ranking. Two conditions before touching anything:
+#
+#   AUTHORITATIVE KEY ONLY. The API supplies raceId and raceNumber, so an
+#   authoritative key proves these athletes were one race. A DERIVED key
+#   (competition|event|round|date) cannot rule out several sections sharing it,
+#   and ranking across sections would invent an order between athletes who never
+#   met - the exact fault this corpus already suffers from elsewhere. 2,148
+#   derived races look like this and are deliberately left alone; their median
+#   field size is 2, which is the signature of partial section capture.
+#
+#   ONLY WHERE THE MARKS DIFFER. If everyone shares a place AND a mark it is a
+#   genuine tie, which is routine in the vertical jumps and must not be reranked.
+#
+# Worth 74 rows today. It is here because it will keep catching them as the
+# corpus grows, not because 74 rows matter.
+.rep <- all[!is.na(.auth_key) & !is.na(place) & place > 0 & !is.na(perf),
+            .(n = .N, places = uniqueN(place), marks = uniqueN(round(perf, 9))),
+            by = race_key][n > 1 & places == 1L & marks > 1L, race_key]
+if (length(.rep)) {
+  # rank within the race, best performance first. perf is oriented so higher is
+  # better in every family, which is why one rule serves times and distances.
+  all[race_key %chin% .rep & !is.na(perf),
+      place := frank(-perf, ties.method = "min"), by = race_key]
+  say("  repaired flat finishing positions in %s race(s), %s rows",
+      format(length(.rep), big.mark = ","),
+      format(all[race_key %chin% .rep, .N], big.mark = ","))
+} else say("  no races needed a finishing-position repair")
 all[, c(".auth_key", ".derived", ".n_sections", ".sole", ".cand", ".collide") := NULL]
 all[is.na(competition_id) | is.na(event_id) | is.na(date), race_key := NA_character_]
 
