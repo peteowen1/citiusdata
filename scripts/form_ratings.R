@@ -1510,8 +1510,24 @@ for (r_ in seq_along(starts)) {
   # but not biased, which is the same argument the corpus builder makes for
   # partial fields - whereas scoring it is simply wrong. Set SEQ_SCORE_MERGED=1
   # to restore the old behaviour for comparison.
-  if (!is.na(slot) && !SCORE_MERGED && anyDuplicated(z$place[is.finite(z$place)]))
-    slot <- NA
+  # A DUPLICATED PLACE IS NOT PROOF OF A MERGE - it is usually a TIE. In the
+  # vertical jumps two athletes clearing 2.04 share second and there is no third;
+  # they really did compete. The first version of this test flagged any repeated
+  # place and threw away 8,076 legitimate races, 25.4% of all jump races, cutting
+  # 9.97% of pairs when the real figure is 1.10%.
+  #
+  # What proves a merge is a place shared by DIFFERENT MARKS: two athletes cannot
+  # both win the same race with different times. Sort by (place, perf) once and
+  # look for adjacent rows on the same place with different performances.
+  if (!is.na(slot) && !SCORE_MERGED) {
+    .ok <- is.finite(z$place) & is.finite(z$perf)
+    if (sum(.ok) > 1L) {
+      .o  <- order(z$place[.ok], z$perf[.ok])
+      .pl <- z$place[.ok][.o]; .pf <- z$perf[.ok][.o]
+      .n  <- length(.pl)
+      if (any(.pl[-1L] == .pl[-.n] & .pf[-1L] != .pf[-.n])) slot <- NA
+    }
+  }
   if (!is.na(slot)) {
     # All i<j pairs as plain integer vectors. CJ() cost ~0.4ms per call in fixed
     # data.table dispatch overhead regardless of field size (measured: 79x at

@@ -82,7 +82,10 @@ score_k <- function(kv, yr_keep) {
   # and a duplicated finishing place proves it. Pairs across sections compare
   # athletes who never met - about a tenth of them - and every figure this file
   # produced before 2026-08-20 was computed with them in.
-  .dup <- x[, .(bad = anyDuplicated(place) > 0), by = race_key][bad == TRUE, race_key]
+  # A shared place with DIFFERENT marks proves a merge; a shared place with the
+# SAME mark is an ordinary tie and the athletes really did compete.
+.dup <- x[, .(ath = .N, marks = uniqueN(round(perf, 9))), by = .(race_key, place)][
+          ath > 1 & marks > 1, unique(race_key)]
   x <- x[!race_key %chin% .dup]
   x[, rid := .GRP, by = race_key]
   a <- x[, .(rid, event_id, i = seq_len(.N), place, r = r_k, wt)]
