@@ -31,6 +31,8 @@ MINA   <- .env_int("ADJ_MIN_ATH", "3")
 # engine is scored on, so cap the ESTIMATION window while still applying the
 # result everywhere.
 VMAXY  <- .env_int("ADJ_MAX_YEAR", "9999")
+IKAP   <- .env_num("ADJ_INDOOR_KAPPA", "200")  # shrinkage on indoor n
+INDOOR_ON <- Sys.getenv("ADJ_INDOOR", "1") != "0"
 WCURVE <- Sys.getenv("ADJ_WIND_CURVES", "wind_effect_curves.json")
 AOUT   <- Sys.getenv("ADJ_OUT", "adjusted_marks.parquet")
 reg <- as.data.table(citius::citius_events())[, .(event_id, discipline, sex, family,
@@ -130,8 +132,55 @@ c0 <- merge(c0, ve[, .(venue_city, family, venue_adj)],
             by = c("venue_city", "family"), all.x = TRUE)
 c0[!is.finite(venue_adj), venue_adj := 0]
 
+# --- 2b. INDOOR ---------------------------------------------------------------
+# An 800m on a 200m banked oval is not an 800m on a 400m outdoor track, and until
+# now the model treated them as the same event with no conversion. World
+# Athletics does not: it ranks them separately as "800 Metres Short Track".
+#
+# Note this is the FIRST correction that touches indoor marks at all - both the
+# wind and venue blocks above filter to outdoor, so an indoor mark previously
+# passed through completely uncorrected.
+#
+# Estimated within athlete AND restricted to athletes who raced both surfaces in
+# the same event. Someone who only ever races indoors contributes no contrast and
+# would otherwise just add their own level to one side of the comparison.
+c0[, indoor_adj := 0]
+if (INDOOR_ON) {
+  ix <- c0[!is.na(indoor) & is.finite(perf)]
+  ix[, n_ath := .N, by = .(athlete_id, event_id)]
+  ix <- ix[n_ath >= MINA]
+  ix <- ix[as.integer(format(date, "%Y")) <= VMAXY]
+  ix[, has_both := uniqueN(indoor) == 2, by = .(athlete_id, event_id)]
+  ix <- ix[has_both == TRUE]
+  ix[, y := perf - mean(perf), by = .(athlete_id, event_id)]
+  ie <- ix[, .(n_in = sum(indoor), n_out = sum(!indoor),
+               gap = mean(y[indoor == TRUE]) - mean(y[!indoor])), by = event_id]
+  # An event needs both sides before its gap means anything. 60m is indoor-only
+  # and correctly gets nothing rather than a number built from noise.
+  ie <- ie[n_in >= 30 & n_out >= 30 & is.finite(gap)]
+  ie[, indoor_eff := gap * n_in / (n_in + IKAP)]        # shrink thin events
+  cat(sprintf("\nindoor effect: %d events with both surfaces, median %+.2f%% of a mark\n",
+              nrow(ie), 100 * (exp(-stats::median(ie$indoor_eff)) - 1)))
+  print(ie[order(indoor_eff)][c(seq_len(min(3L, .N)), seq.int(max(1L, .N - 2L), .N)),
+           .(event_id, n_in, n_out, pct = round(100 * (exp(-indoor_eff) - 1), 2))])
+  stopifnot("no event produced an indoor effect" = nrow(ie) > 5)
+  c0 <- merge(c0, ie[, .(event_id, indoor_eff)], by = "event_id", all.x = TRUE)
+  # applied ONLY to indoor rows - an outdoor mark needs no conversion to outdoor
+  c0[, indoor_adj := fifelse(!is.na(indoor) & indoor == TRUE & is.finite(indoor_eff),
+                             indoor_eff, 0)]
+  c0[, indoor_eff := NULL]
+  cat(sprintf("indoor correction applied to %s marks (%.1f%% of the corpus)\n",
+              format(sum(c0$indoor_adj != 0), big.mark = ","),
+              100 * mean(c0$indoor_adj != 0)))
+}
+
 # --- 3. the adjusted mark -----------------------------------------------------
-c0[, adj_perf := perf - wind_adj - venue_adj]
+# SIGN: every term is SUBTRACTED in perf space, where higher is better. The
+# indoor gap is negative for sprints (indoor is worse), so subtracting it raises
+# the corrected performance - an indoor mark is worth MORE than it looks. If that
+# is backwards the within-athlete scatter test in section 4 will get worse, which
+# is exactly how the wind sign error was caught.
+c0[, adj_perf := perf - wind_adj - venue_adj - indoor_adj]
 c0[, adj_mark := exp(fifelse(orientation == -1, -adj_perf, adj_perf))]
 c0[, adj_delta := adj_mark - mark]
 
@@ -169,7 +218,7 @@ cat(sprintf("\nOVERALL: %.5f -> %.5f (%+.2f%%)\n", overall$sd_raw, overall$sd_ad
 
 out <- c0[, .(race_key, athlete_id, event_id, discipline, sex, family, date,
               comp_name, venue_city, place, mark, adj_mark, adj_delta,
-              wind, wind_adj, venue_adj, legal, unit)]
+              wind, wind_adj, venue_adj, indoor_adj, indoor, legal, unit)]
 f <- file.path(D, AOUT)
 write_parquet(out, f)
 cat(sprintf("\nwrote %s (%s performances)\n", basename(f), format(nrow(out), big.mark = ",")))

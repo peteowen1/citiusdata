@@ -858,7 +858,7 @@ if (ADJ) {
     stop("SEQ_ADJ is on but adjusted_marks.parquet is missing.\n",
          "  Build it:  Rscript citiusdata/scripts/build_adjusted_marks.R")
   .adj <- setDT(read_parquet(af, col_select = c("race_key", "athlete_id", "event_id",
-                                                "wind_adj", "venue_adj")))
+                                                "wind_adj", "venue_adj", "indoor_adj")))
   .adj[, athlete_id := as.character(athlete_id)]
   # SURFACE duplicates rather than absorbing them. This used to call unique()
   # straight away, which made the row-count assertion below UNFALSIFIABLE: with
@@ -889,8 +889,15 @@ if (ADJ) {
   }
   stopifnot("more than 0.1% of performances share a key - corrections cannot be
 matched to the right mark at that rate" = .dupe_d <= 0.001 * nrow(d))
+  # indoor_adj joined the file on 2026-08-20 and was NOT summed here for its
+  # first run, so it was written and never read - the A/B came back byte-
+  # identical on both arms, which is the only reason it was caught. A column
+  # nothing consumes is the same as a column that does not exist.
+  # Tolerated as absent so older adjusted_marks files still load.
+  if (!"indoor_adj" %chin% names(.adj)) .adj[, indoor_adj := 0]
   .adj[, adj_total := fifelse(is.finite(wind_adj), wind_adj, 0) +
-                      fifelse(is.finite(venue_adj), venue_adj, 0)]
+                      fifelse(is.finite(venue_adj), venue_adj, 0) +
+                      fifelse(is.finite(indoor_adj), indoor_adj, 0)]
   n0 <- nrow(d)
   d[, athlete_id := as.character(athlete_id)]
   d <- merge(d, .adj[, .(race_key, athlete_id, event_id, adj_total)],
