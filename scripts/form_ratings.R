@@ -754,6 +754,15 @@ d <- d[!is.na(perf) & !is.na(date) & !is.na(race_key) & !is.na(place) & place > 
 # every aggregate check and lands squarely on a famous athlete at the top of a
 # published table.
 WRF <- file.path(OUT, "world_records.csv")
+# FAILS LOUDLY, like every sibling guard in this file. This was `if (file.exists)`
+# with no else, so a missing file skipped the whole impossible-mark check in
+# silence - and this is the guard that caught an annulled 18.90 setting 30% of a
+# published rank. The file is git-tracked, so absence means something is wrong
+# with the working directory or the checkout, which is worth stopping for.
+if (!file.exists(WRF))
+  stop("world_records.csv is missing - the impossible-mark guard cannot run.
+",
+       "  It is git-tracked; a missing copy means OUT points somewhere unexpected.")
 if (file.exists(WRF)) {
   .wr <- setDT(utils::read.csv(WRF, stringsAsFactors = FALSE))
   .wr[, wr_mark := vapply(strsplit(as.character(mark), ":", fixed = TRUE), function(q) {

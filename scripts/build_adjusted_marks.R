@@ -279,5 +279,12 @@ out <- c0[, .(race_key, athlete_id, event_id, discipline, sex, family, date,
               comp_name, venue_city, place, mark, adj_mark, adj_delta,
               wind, wind_adj, venue_adj, indoor_adj, indoor, legal, unit)]
 f <- file.path(D, AOUT)
+# THE TEST THAT MATTERS MUST GATE THE WRITE. The header calls within-athlete
+# scatter the mechanism that caught the wind sign error - it rose 6.7% in the
+# sprints while the jumps improved, and that is the only reason the flip was
+# found. It was being PRINTED and not asserted, so the same regression would
+# ship with nothing but a console line contradicting it.
+stopifnot("the corrections made athletes LESS self-consistent - a sign error, almost certainly" =
+            overall$sd_adj < overall$sd_raw)
 write_parquet(out, f)
 cat(sprintf("\nwrote %s (%s performances)\n", basename(f), format(nrow(out), big.mark = ",")))

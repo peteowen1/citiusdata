@@ -175,6 +175,9 @@ cat(sprintf("\n-- %s --\nBY POINTS TOTAL%sBY SIMULATION\n", EV, strrep(" ", 12))
 a <- strsplit(mk("z_total"), "\n")[[1]]; b <- strsplit(mk("z_sim"), "\n")[[1]]
 for (i in seq_along(a)) cat(sprintf("%-27s %s\n", a[i], b[i]))
 cat("\nsimulated scores for that top ten:\n")
-print(x[is.finite(z_sim)][order(-z_sim)][1:10,
+# seq_len, not 1:10 - the same fix applied twelve lines above and missed here.
+# A combined event can hold fewer than ten simulable athletes, and 1:10 on a
+# short table fabricates NA rows that print as athletes.
+print(x[is.finite(z_sim)][order(-z_sim)][seq_len(min(10L, .N)),
         .(athlete = substr(athlete_name, 1, 22), sim = sim_mean, sd = sim_sd,
           perfs, n_eff = round(n_eff, 1))])

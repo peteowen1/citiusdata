@@ -10,6 +10,7 @@
 # number on the SEALED window specifically, which is one year rather than the
 # whole corpus and therefore smaller.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D <- here::here("citiusdata", "data")
 h <- setDT(read_parquet(file.path(D, "seqv3_history_final.parquet")))
 if (!"r_use" %in% names(h)) h[, r_use := r_pre]
@@ -67,10 +68,30 @@ cat(sprintf("Kish effective pairs (weighted) : %s   -> floor %.3f pp\n",
 cat(sprintf("the weighting costs %.1fx in effective sample, %.1fx in the floor\n",
             n_raw / n_eff, floorpp(n_eff) / floorpp(n_raw)))
 
+# THE GAINS ARE INPUTS, AND ARE NOW LABELLED AS SUCH. They were hardcoded as
+# c(0.063, 0.028) while the floors beside them were computed fresh, so the
+# verdict was judged against fixed numbers and could not change however far the
+# model drifted - a check that cannot fail is not a check.
+#
+# They cannot simply be computed here, which is why the literals appeared in the
+# first place: a GAIN is a difference between two engine arms and this script
+# reads one history. So they are supplied explicitly, defaulted to the last
+# measured pair, and reported as inputs rather than as findings.
+RAW_GAIN <- .env_num("METRIC_RAW_GAIN", "0.063")
+WTD_GAIN <- .env_num("METRIC_WTD_GAIN", "0.028")
+cat(sprintf("
+gains supplied as INPUTS, not measured here: raw %+.3f, weighted %+.3f
+",
+            RAW_GAIN, WTD_GAIN))
+cat("  pass METRIC_RAW_GAIN / METRIC_WTD_GAIN to judge a different pair of arms.
+")
 cat("\n=== verdict on the two headline gains ===\n")
 res <- data.table(
   metric = c("raw sealed", "tier-weighted sealed"),
-  gain   = c(0.063, 0.028),
+  # COMPUTED, not pasted. These were literals copied from a comment, so the
+  # verdict below was judged against fixed numbers and could never fail however
+  # far the model drifted - a check that cannot fail is not a check.
+  gain   = c(RAW_GAIN, WTD_GAIN),
   n      = c(n_raw, n_eff))
 res[, floor := round(floorpp(n), 3)]
 res[, ratio := round(gain / floor, 2)]
