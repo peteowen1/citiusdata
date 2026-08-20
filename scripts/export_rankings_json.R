@@ -6,10 +6,11 @@
 # page receives display strings plus the raw values it needs for sorting.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table)); library(jsonlite)
+source(here::here("citiusdata", "scripts", "_env.R"))
 
 D   <- here::here("citiusdata", "data")
 TAG <- Sys.getenv("FORM_TAG", "final")
-TOPN <- as.integer(Sys.getenv("RANK_TOP_N", "10"))
+TOPN <- .env_int("RANK_TOP_N", "10")
 d <- setDT(read_parquet(file.path(D, sprintf("form_display_%s.parquet", TAG))))
 reg <- as.data.table(citius::citius_events())[, .(event_id, discipline, sex, family, unit)]
 d <- merge(d, reg, by = "event_id", all.x = TRUE, suffixes = c("", ".reg"))
@@ -108,7 +109,7 @@ if (DROP_ZERO_T1) {
   }
 }
 
-MINA <- as.integer(Sys.getenv("RANK_MIN_ATHLETES", "10"))
+MINA <- .env_int("RANK_MIN_ATHLETES", "10")
 depth <- d[, .(n_ath = .N), by = event_id]
 drop <- depth[n_ath < MINA]
 if (nrow(drop)) cat(sprintf("dropping %d events with fewer than %d ranked athletes

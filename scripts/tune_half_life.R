@@ -13,10 +13,11 @@
 
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_env.R"))
 
 OUT <- here::here("citiusdata", "data")
 CANDIDATES <- as.numeric(strsplit(Sys.getenv("CITIUS_HL_GRID", "180,365,730,1460,2920"), ",")[[1]])
-N_MEETS <- as.integer(Sys.getenv("CITIUS_HL_MEETS", "30"))
+N_MEETS <- .env_int("CITIUS_HL_MEETS", "30")
 N_SIMS <- 4000L
 
 # The 365 this script selected is now DEPLOYED$half_life, and DEPLOYED also

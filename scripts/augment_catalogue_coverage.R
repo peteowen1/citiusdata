@@ -86,6 +86,7 @@
 # baked into the corpus.
 suppressMessages(devtools::load_all(here::here("citius")))
 suppressMessages({library(arrow); library(data.table)})
+source(here::here("citiusdata", "scripts", "_env.R"))
 D <- here::here("citiusdata", "data")
 CAT   <- file.path(D, "competition_catalogue.parquet")
 CORP  <- file.path(D, "athletics_corpus.parquet")
@@ -365,7 +366,7 @@ ok8 <- anchor("road racing stays out of T1/T2 (see road-coverage-and-the-strengt
 #   - report the UNMEASURED count alongside, so "0 below" can never be read as
 #     "all clear" when strength is NA throughout. 91 of 280 T1 meets in the live
 #     catalogue have no strength at all, so the bare count hides a third of them.
-FROM_YEAR <- as.integer(Sys.getenv("CATALOGUE_STRENGTH_FROM", "2020"))
+FROM_YEAR <- .env_int("CATALOGUE_STRENGTH_FROM", "2020")
 t1_win <- t1[is.finite(year) & year >= FROM_YEAR]
 t1_bad <- t1_win[is.finite(strength) & strength < 40]
 if (nrow(t1_bad))

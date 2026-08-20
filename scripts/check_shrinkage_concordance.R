@@ -26,10 +26,11 @@
 # weights move with the thing being measured is a formality.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D    <- here::here("citiusdata", "data")
 TAG  <- Sys.getenv("FORM_TAG", "final")
-SEAL <- as.integer(Sys.getenv("SHRINK_SEALED_YEAR", "2026"))
-TUNE <- as.integer(Sys.getenv("SHRINK_TUNE_YEAR",   "2025"))
+SEAL <- .env_int("SHRINK_SEALED_YEAR", "2026")
+TUNE <- .env_int("SHRINK_TUNE_YEAR", "2025")
 
 h <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG))))
 h[, athlete_id := as.character(athlete_id)]

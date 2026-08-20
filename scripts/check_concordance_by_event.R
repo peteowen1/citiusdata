@@ -21,9 +21,10 @@
 # assumed.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D <- here::here("citiusdata", "data")
 ARMS <- strsplit(Sys.getenv("ARMS", "final"), ",")[[1]]
-MINP <- as.integer(Sys.getenv("MIN_PAIRS", "500"))
+MINP <- .env_int("MIN_PAIRS", "500")
 reg <- as.data.table(citius::citius_events())[, .(event_id, discipline, sex, family)]
 
 one_arm <- function(tag) {

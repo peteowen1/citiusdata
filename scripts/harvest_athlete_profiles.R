@@ -36,13 +36,14 @@
 # at a third-party service.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(data.table)); suppressMessages(library(arrow))
+source(here::here("citiusdata", "scripts", "_env.R"))
 ns <- asNamespace("citius")
 
 OUT   <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "ath_profile_cache")
 dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
-MAX <- as.integer(Sys.getenv("CITIUS_MAX_PROFILES", "0"))
-THROTTLE <- as.numeric(Sys.getenv("CITIUS_THROTTLE", "0.25"))
+MAX <- .env_int("CITIUS_MAX_PROFILES", "0")
+THROTTLE <- .env_num("CITIUS_THROTTLE", "0.25")
 cat(sprintf("throttle: %.2f s/request (%.2f req/s)\n", THROTTLE, 1 / THROTTLE))
 
 # --- who to fetch: every athlete we have ever seen ---------------------------

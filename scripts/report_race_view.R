@@ -12,8 +12,9 @@
 # nothing to adjust, or the column looks like a fudge factor.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D    <- here::here("citiusdata", "data")
-MINF <- as.integer(Sys.getenv("RACE_MIN_FINISHERS", "6"))
+MINF <- .env_int("RACE_MIN_FINISHERS", "6")
 FROM <- as.Date(Sys.getenv("RACE_FROM", "2023-01-01"))
 
 am <- setDT(read_parquet(file.path(D, "adjusted_marks.parquet")))

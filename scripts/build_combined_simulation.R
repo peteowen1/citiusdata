@@ -25,11 +25,12 @@
 # question for check_combined_ranking.R, not an assumption made here.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 source(here::here("citiusdata", "scripts", "ce_scoring.R"))
 D     <- here::here("citiusdata", "data")
 TAG   <- Sys.getenv("STATE_TAG", "base4")
-NSIM  <- as.integer(Sys.getenv("CE_NSIM", "600"))
-SEED  <- as.integer(Sys.getenv("CE_SEED", "20260818"))
+NSIM  <- .env_int("CE_NSIM", "600")
+SEED  <- .env_int("CE_SEED", "20260818")
 DAYSD <- Sys.getenv("CE_DAY_SD", "")   # blank = fit it below
 # IMPUTATION. Requiring a rating in every slot left only 46.7% of active
 # decathletes simulable, which disqualifies the simulation as a ranking key
@@ -41,9 +42,9 @@ DAYSD <- Sys.getenv("CE_DAY_SD", "")   # blank = fit it below
 # slots they do have, with inflated variance so the simulation knows it is
 # guessing. Calibration is re-measured afterwards; if imputing breaks it, it is
 # not worth the coverage.
-MINFRAC <- as.numeric(Sys.getenv("CE_MIN_SLOTS", "0.7"))  # share of slots needed
-IMPINF  <- as.numeric(Sys.getenv("CE_IMPUTE_INFLATE", "2.5"))
-FILLHL  <- as.numeric(Sys.getenv("CE_FILL_HALFLIFE", "730"))  # days
+MINFRAC <- .env_num("CE_MIN_SLOTS", "0.7")  # share of slots needed
+IMPINF  <- .env_num("CE_IMPUTE_INFLATE", "2.5")
+FILLHL  <- .env_num("CE_FILL_HALFLIFE", "730")  # days
 # FILL FROM THE ATHLETE OWN MARKS BEFORE GUESSING. Measured 2026-08-18: guessing
 # a missing slot from the athlete average standing added +300 points of bias to
 # the decathlon and dropped coverage from 93% to 67%, because athletes go
@@ -107,7 +108,7 @@ cat("all three anchors pass (each verified present, not merely unfalsified)\n")
 # --- a rating for every slot the athlete has ever contested in a combined event
 # perf = orientation * log(mark), time-weighted so recent marks dominate. This is
 # the athlete OWN evidence, not a guess about them.
-IMPPEN <- as.numeric(Sys.getenv("CE_IMPUTE_PENALTY", "-0.55"))
+IMPPEN <- .env_num("CE_IMPUTE_PENALTY", "-0.55")
 mkraw <- setDT(read_parquet(file.path(D, "combined_components.parquet"),
                             col_select = c("ce", "athlete_id", "event_id", "mark", "tdate")))
 mkraw[, athlete_id := as.character(athlete_id)]

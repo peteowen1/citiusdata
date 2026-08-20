@@ -20,13 +20,14 @@
 #   CITIUS_WORKERS=9 CITIUS_MAX_PAGES=10 CITIUS_YEARS=2010:2026 Rscript ...
 VERSE <- here::here()
 suppressMessages({library(citius); library(data.table); library(parallel)})
+source(here::here("citiusdata", "scripts", "_env.R"))
 OUT <- file.path(VERSE, "citiusdata", "data")
 CACHE <- file.path(OUT, "se_rankings_cache")
 dir.create(CACHE, showWarnings = FALSE, recursive = TRUE)
 say <- function(...) cat(sprintf(...), "\n", sep = "")
 
-WORKERS   <- as.integer(Sys.getenv("CITIUS_WORKERS", "16"))
-MAX_PAGES <- as.integer(Sys.getenv("CITIUS_MAX_PAGES", "10"))
+WORKERS   <- .env_int("CITIUS_WORKERS", "16")
+MAX_PAGES <- .env_int("CITIUS_MAX_PAGES", "10")
 # Accepts "2010:2026" or "2014,2016,2020". Parsed explicitly rather than with
 # eval(parse()) -- this is a scheduled script and an env var is not a place to
 # accept arbitrary code, however local the caller.

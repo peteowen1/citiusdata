@@ -7,6 +7,7 @@
 # bias of -0.005% over 126,669 finals was produced on 2026-08-14 and briefly
 # mistaken for a result.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 TAG <- Sys.getenv("FORM_TAG", "final")
 SC  <- Sys.getenv("FORM_OUT", "C:/dev/citiusverse/citiusdata/data")
 f <- file.path(SC, sprintf("seqv3_history_%s.parquet", TAG))
@@ -42,8 +43,8 @@ cat(sprintf("\n   pooled finals bias: %.4f%% over %s finals rows\n",
 cat("   THIS is the number the ratings page needs, and it is out of sample.\n")
 
 cat("\n== 3. DOES THE LEARNING-RATE FLOOR BIND, AND ON WHOM? ==\n")
-K0 <- as.numeric(Sys.getenv("SEQ_K0","0.95")); KAPPA <- as.numeric(Sys.getenv("SEQ_KAPPA","3"))
-KFLOOR <- as.numeric(Sys.getenv("SEQ_KFLOOR","0.18"))
+K0 <- .env_num("SEQ_K0", "0.95"); KAPPA <- .env_num("SEQ_KAPPA", "3")
+KFLOOR <- .env_num("SEQ_KFLOOR", "0.18")
 p[, k_decay := K0 * KAPPA / (n_eff + KAPPA)]
 p[, floored := k_decay < KFLOOR]
 cat(sprintf("   floor %.2f binds on %.1f%% of forecastable rows (n_eff > %.1f)\n",

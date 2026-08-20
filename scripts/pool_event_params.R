@@ -35,11 +35,12 @@
 # estimate favours the candidate.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D     <- here::here("citiusdata", "data")
 tags  <- trimws(strsplit(Sys.getenv("ARMS", ""), ",")[[1]])
 PARAM <- Sys.getenv("PARAM", "xblend")
 GROUP <- Sys.getenv("GROUP", "family")     # family | neighbour
-MINP  <- as.integer(Sys.getenv("MIN_PAIRS", "200"))
+MINP  <- .env_int("MIN_PAIRS", "200")
 TUNE  <- as.integer(trimws(strsplit(Sys.getenv("TUNE_YEARS", "2025"), ",")[[1]]))
 SEAL  <- as.integer(trimws(strsplit(Sys.getenv("SEAL_YEARS", "2026"), ",")[[1]]))
 PRIOR <- as.integer(trimws(strsplit(Sys.getenv("PRIOR_YEARS", "2022,2023,2024"), ",")[[1]]))
@@ -47,7 +48,7 @@ OUT   <- Sys.getenv("EVPARAM_OUT",
                     file.path(D, sprintf("event_params_%s_pooled.parquet", PARAM)))
 stopifnot("ARMS needs exactly two tags: base,candidate" = length(tags) == 2)
 base_tag <- tags[1]; cand_tag <- tags[2]
-CAND_VAL <- as.numeric(Sys.getenv("CAND_VALUE", "1"))
+CAND_VAL <- .env_num("CAND_VALUE", "1")
 
 # Concordance outcome for every comparable PAIR, keyed so the same pair can be
 # matched across arms. Keyed on the two athlete ids, not on row position, so a
@@ -124,7 +125,7 @@ if (GROUP == "neighbour") {
   # a Gaussian kernel on log-distance, within sex-agnostic running events only
   x[, ld := log(dist_m)]
   run <- x[is.finite(ld)]
-  BW <- as.numeric(Sys.getenv("KERNEL_BW", "0.5"))   # ~1.6x in distance
+  BW <- .env_num("KERNEL_BW", "0.5")   # ~1.6x in distance
   grp_mean <- vapply(seq_len(nrow(x)), function(i) {
     if (!is.finite(x$ld[i])) return(x[family == x$family[i], weighted.mean(d, n)])
     k <- exp(-0.5 * ((run$ld - x$ld[i]) / BW)^2)

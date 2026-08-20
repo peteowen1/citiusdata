@@ -19,10 +19,11 @@
 #   SEQ_TAG=hist_ref  SEQ_HUBER=0  SEQ_HIST=1
 #   SEQ_TAG=hist_hub  SEQ_HUBER=<winner> SEQ_HIST=1
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D <- "C:/dev/citiusverse/citiusdata/data"
 REF <- Sys.getenv("HUB_REF", "seqv3_history_hist_ref.parquet")
 HUB <- Sys.getenv("HUB_ARM", "seqv3_history_hist_hub.parquet")
-WIN <- as.integer(Sys.getenv("HUB_WIN", "5"))     # races after the catastrophe
+WIN <- .env_int("HUB_WIN", "5")     # races after the catastrophe
 
 load1 <- function(f, lab) {
   x <- setDT(read_parquet(file.path(D, f)))

@@ -20,9 +20,10 @@
 # athlete usually does in that event.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D     <- here::here("citiusdata", "data")
-MINV  <- as.integer(Sys.getenv("VENUE_MIN_MARKS", "200"))  # marks per venue
-MINA  <- as.integer(Sys.getenv("VENUE_MIN_ATH", "3"))      # marks per athlete-event
+MINV  <- .env_int("VENUE_MIN_MARKS", "200")  # marks per venue
+MINA  <- .env_int("VENUE_MIN_ATH", "3")      # marks per athlete-event
 
 # A short, checkable reference set. Elevations in metres, rounded; these are used
 # ONLY to validate the empirical effect, never to build it.

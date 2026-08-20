@@ -12,8 +12,9 @@
 # reference rather than another view of the same rating.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D    <- here::here("citiusdata", "data")
-TOPN <- as.integer(Sys.getenv("TOPN", "10"))
+TOPN <- .env_int("TOPN", "10")
 
 d <- setDT(read_parquet(file.path(D, "form_display_final.parquet")))
 stopifnot("display table has no rank_mark - re-run form_display_marks.R" =

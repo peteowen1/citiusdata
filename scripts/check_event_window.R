@@ -22,8 +22,9 @@
 #                   it is measured rather than assumed to track the others.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D <- here::here("citiusdata", "data")
-ATH <- as.integer(Sys.getenv("SWEEP_ACT_ATHLETE_D", "730"))   # as now deployed
+ATH <- .env_int("SWEEP_ACT_ATHLETE_D", "730")   # as now deployed
 
 st <- setDT(read_parquet(file.path(D, "seqv2_state_final.parquet")))
 st[, athlete_id := as.character(athlete_id)]

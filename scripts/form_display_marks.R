@@ -24,11 +24,12 @@ FIT_BEFORE <- as.Date("2025-01-01")
 # An env var set to "" is NOT unset: Sys.getenv returns "" and as.integer("")
 # is NA, which would silently disable the thin-event fallback. Treat empty as
 # unset (learned the hard way on SEQ_MAXPLACE, 2026-08-15).
-.env_int <- function(name, default) {
-  v <- Sys.getenv(name, ""); if (!nzchar(v)) return(default)
-  x <- suppressWarnings(as.integer(v))
-  if (is.na(x)) stop(sprintf("%s='%s' is not an integer", name, v)); x
-}
+# Shared with every other script now, rather than a private copy here. The
+# lesson below was learned in this file and then not applied to the nine other
+# knobs in it, including both recency windows - an empty FORM_ACT_EVENT_D would
+# have made the window NA, and `last >= ASOF - NA` is NA, which matches no rows
+# and empties the page.
+source(here::here("citiusdata", "scripts", "_env.R"))
 MIN_N <- .env_int("FORM_OFFSET_MIN_N", 200L)
 # Minimum evidence before a "good day" mark is shown at all. Also the population
 # the spread is FITTED on, so the column is calibrated for the readers who see
@@ -312,7 +313,7 @@ ASOF        <- max(st$last, na.rm = TRUE)
 # two, so an athlete window below the event window is a hidden second gate that
 # looks like nothing at all when you read the event window on its own.
 # Keep ACT_ATHLETE >= ACT_EVENT unless there is a reason to want that gate.
-ACT_ATHLETE <- as.integer(Sys.getenv("FORM_ACT_ATHLETE_D", "800"))  # see above
+ACT_ATHLETE <- .env_int("FORM_ACT_ATHLETE_D", "800")  # see above
 # WIDENED 330 -> 365 on 2026-08-18. Pete asked whether 330 was too strict. It
 # was, though not for the reason offered: staleness decays `n_eff`, never `R`,
 # so a rating sits at full strength indefinitely and the window is the ONLY
@@ -371,8 +372,8 @@ ACT_ATHLETE <- as.integer(Sys.getenv("FORM_ACT_ATHLETE_D", "800"))  # see above
 # It is not a permanent answer to "keep championship medallists visible"; a
 # medallist-persistence rule is. Re-check this against
 # check_paris_medallists.R before Tokyo 2027, not after.
-ACT_EVENT   <- as.integer(Sys.getenv("FORM_ACT_EVENT_D",   "800"))  # two years and two months; see above
-ACT_MIN_N   <- as.numeric(Sys.getenv("FORM_ACT_MIN_NEFF",  "1"))
+ACT_EVENT   <- .env_int("FORM_ACT_EVENT_D", "800")  # two years and two months; see above
+ACT_MIN_N   <- .env_num("FORM_ACT_MIN_NEFF", "1")
 la <- h[, .(last_any = max(date)), by = athlete_id]
 la[, athlete_id := as.character(athlete_id)]
 st <- merge(st, la, by = "athlete_id", all.x = TRUE)
@@ -452,7 +453,7 @@ cat(sprintf("ranking on R_ceil; %s of %s rows fall back to raw R (no best mark)\
 # the simulation at the median, with no measured loss on either metric. The
 # monotone shape is the robust finding; the exact 8 was chosen on this referee.
 CE_ON <- Sys.getenv("FORM_CE_BLEND", "1") != "0"
-CE_PW <- as.numeric(Sys.getenv("FORM_CE_PRIOR_W", "8"))
+CE_PW <- .env_num("FORM_CE_PRIOR_W", "8")
 CE_EV <- c("AT-Decathlon-M", "AT-Heptathlon-M", "AT-Heptathlon-W", "AT-Pentathlon-W")
 if (CE_ON && any(act$event_id %chin% CE_EV)) {
   fsim <- file.path(OUT, "combined_simulated.parquet")
@@ -546,7 +547,7 @@ XB_ON     <- Sys.getenv("FORM_XBLEND", "1") != "0"
 # Precision@10 is identical on either matrix (69.1), so this buys correctness at
 # no measured cost. event_similarity_all.parquet is kept for comparison.
 XB_SIMF   <- Sys.getenv("FORM_XB_SIMFILE", "event_similarity_spec.parquet")
-XB_MINCOR <- as.numeric(Sys.getenv("FORM_XB_MINCOR", "0.30"))
+XB_MINCOR <- .env_num("FORM_XB_MINCOR", "0.30")
 # TIGHTENED 2026-08-19 from xb 1.0 / maxn 8, after LOOKING AT THE PAGE. At the
 # old settings precision@10 was unchanged (69.1 either way) and the published
 # 1500m read: 1. Wanyonyi (n_eff 1.5, an 800m runner), 2. El Bakkali (n_eff 1.1,
@@ -558,9 +559,9 @@ XB_MINCOR <- as.numeric(Sys.getenv("FORM_XB_MINCOR", "0.30"))
 # blend exists for are unaffected, because the ENGINE changes (winner censoring,
 # the shock fix) are what actually fixed them: Almgren's 10,000m rank is 8th at
 # either setting, and Kerr recovers from 18th to 13th.
-XB_STR    <- as.numeric(Sys.getenv("FORM_XB",        "0.25"))
-XB_NSIB   <- as.integer(Sys.getenv("FORM_XB_NSIB",   "6"))
-XB_MAXN   <- as.numeric(Sys.getenv("FORM_XB_MAXN",   "4"))
+XB_STR    <- .env_num("FORM_XB", "0.25")
+XB_NSIB   <- .env_int("FORM_XB_NSIB", "6")
+XB_MAXN   <- .env_num("FORM_XB_MAXN", "4")
 if (XB_ON) {
   simf <- file.path(OUT, XB_SIMF)   # OUT is this script's data dir, not D
   # Deliberately a hard stop. A silently skipped blend would publish the old
@@ -670,7 +671,7 @@ if (XB_ON) {
 # real and remains open - but the fix cannot be a transformation that measurably
 # worsens the ordering, and the honest position is that this attempt was refuted
 # rather than that the problem is solved. Set FORM_EVID_K to re-enable.
-EVID_K <- as.numeric(Sys.getenv("FORM_EVID_K", "0"))
+EVID_K <- .env_num("FORM_EVID_K", "0")
 if (EVID_K > 0) {
   act[, .mu_r := mean(R_rank), by = event_id]
   act[, .w_ev := n_eff / (n_eff + EVID_K)]

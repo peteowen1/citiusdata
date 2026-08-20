@@ -52,10 +52,10 @@ cli::cli_alert_info(
 done <- sub("\\.rds$", "", list.files(CACHE))
 todo <- pool[!athlete_id %in% done]
 cli::cli_alert_info("{format(nrow(todo), big.mark = ',')} remaining.")
-n <- min(nrow(todo), as.integer(Sys.getenv("CITIUS_MAX_SWIMMERS", "200000")))
+n <- min(nrow(todo), .env_int("CITIUS_MAX_SWIMMERS", "200000"))
 remaining_after <- max(0L, nrow(todo) - n)
 todo <- todo[seq_len(n)]
-WORKERS <- as.integer(Sys.getenv("CITIUS_WORKERS", "6"))
+WORKERS <- .env_int("CITIUS_WORKERS", "6")
 cli::cli_alert_info("Fetching {n} swimmer{?s} on {WORKERS} worker{?s}.")
 
 fetch_one <- function(j, cache) {
@@ -89,6 +89,7 @@ if (WORKERS <= 1L) {
   parallel::clusterEvalQ(cl, {
     suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
     library(data.table); NULL
+source(here::here("citiusdata", "scripts", "_env.R"))
   })
   parallel::clusterExport(cl, c("fetch_one", "CACHE"), envir = environment())
   chunks <- split(seq_len(n), ceiling(seq_len(n) / 500))

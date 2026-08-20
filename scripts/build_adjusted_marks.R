@@ -23,13 +23,14 @@
 # corpus-level artefact rather than changing the engine.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D      <- here::here("citiusdata", "data")
-VKAP   <- as.numeric(Sys.getenv("ADJ_VENUE_KAPPA", "400"))  # shrinkage on venue n
-MINA   <- as.integer(Sys.getenv("ADJ_MIN_ATH", "3"))
+VKAP   <- .env_num("ADJ_VENUE_KAPPA", "400")  # shrinkage on venue n
+MINA   <- .env_int("ADJ_MIN_ATH", "3")
 # Same argument as the wind fit: the venue effect is estimated from marks the
 # engine is scored on, so cap the ESTIMATION window while still applying the
 # result everywhere.
-VMAXY  <- as.integer(Sys.getenv("ADJ_MAX_YEAR", "9999"))
+VMAXY  <- .env_int("ADJ_MAX_YEAR", "9999")
 WCURVE <- Sys.getenv("ADJ_WIND_CURVES", "wind_effect_curves.json")
 AOUT   <- Sys.getenv("ADJ_OUT", "adjusted_marks.parquet")
 reg <- as.data.table(citius::citius_events())[, .(event_id, discipline, sex, family,

@@ -8,11 +8,12 @@
 
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_env.R"))
 
 OUT <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "ath_comp_cache")
 N_SIMS <- 10000L
-MAX_BACKTEST_COMPS <- as.integer(Sys.getenv("CITIUS_BACKTEST_COMPS", "200"))
+MAX_BACKTEST_COMPS <- .env_int("CITIUS_BACKTEST_COMPS", "200")
 
 champs <- rbindlist(lapply(list.files(CACHE, full.names = TRUE), readRDS),
                     use.names = TRUE, fill = TRUE)

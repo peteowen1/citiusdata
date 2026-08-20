@@ -32,14 +32,15 @@
 #   CITIUS_PARTIAL_FROM=2023 CITIUS_PARTIAL_MAX=2000 Rscript ...
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_env.R"))
 OUT <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "ath_comp_cache_partial")
 dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), ..., "\n", sep = "")
 
-FROM <- suppressWarnings(as.integer(Sys.getenv("CITIUS_PARTIAL_FROM", "2023")))
-MAXN <- suppressWarnings(as.integer(Sys.getenv("CITIUS_PARTIAL_MAX", "0")))
-PAUSE <- as.numeric(Sys.getenv("CITIUS_PARTIAL_PAUSE", "0.15"))
+FROM <- suppressWarnings(.env_int("CITIUS_PARTIAL_FROM", "2023"))
+MAXN <- suppressWarnings(.env_int("CITIUS_PARTIAL_MAX", "0"))
+PAUSE <- .env_num("CITIUS_PARTIAL_PAUSE", "0.15")
 
 x <- setDT(readRDS(file.path(OUT, "athletics_corpus.rds")))
 if (!nrow(x)) stop("athletics_corpus.rds loaded 0 rows.", call. = FALSE)

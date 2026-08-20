@@ -20,6 +20,7 @@
 # over the remainder would be measuring the wrong thing.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D   <- here::here("citiusdata", "data")
 TAG <- Sys.getenv("STATE_TAG", "base4")
 CE_EVENTS <- c("AT-Decathlon-M", "AT-Heptathlon-M", "AT-Heptathlon-W", "AT-Pentathlon-W")
@@ -70,7 +71,7 @@ act[, z_total := (R_ceil - mean(R_ceil)) / stats::sd(R_ceil), by = event_id]
 act[is.finite(sim_mean), z_sim := (sim_mean - mean(sim_mean)) / stats::sd(sim_mean),
     by = event_id]
 # prior weight falls with how many combined events the athlete has on file
-PW <- as.numeric(Sys.getenv("CE_PRIOR_W", "2"))
+PW <- .env_num("CE_PRIOR_W", "2")
 act[, w_prior := fifelse(is.finite(z_sim), PW / (perfs + PW), 0)]
 act[, z_blend := fifelse(is.finite(z_sim), (1 - w_prior) * z_total + w_prior * z_sim, z_total)]
 cat(sprintf("\nprior weight (CE_PRIOR_W = %.1f): median %.2f over simulable athletes\n",

@@ -67,7 +67,7 @@ print(pool[, .N, by = .(level, course)][order(-N)])
 
 todo <- pool[!file.exists(file.path(CACHE, paste0(competition_id, ".rds")))]
 cli::cli_alert_info("{nrow(todo)} remaining to harvest.")
-n <- min(nrow(todo), as.integer(Sys.getenv("CITIUS_MAX_COMPS", "5000")))
+n <- min(nrow(todo), .env_int("CITIUS_MAX_COMPS", "5000"))
 remaining_after <- max(0L, nrow(todo) - n)
 todo <- todo[seq_len(n)]
 
@@ -78,7 +78,7 @@ todo <- todo[seq_len(n)]
 #
 # 75% of listed competitions hold results, averaging 38 disciplines each, so this
 # is ~91,600 requests. Six workers takes it from 7 hours to 3.
-WORKERS <- as.integer(Sys.getenv("CITIUS_WORKERS", "6"))
+WORKERS <- .env_int("CITIUS_WORKERS", "6")
 cli::cli_alert_info("Harvesting {n} competition{?s} on {WORKERS} worker{?s}.")
 
 fetch_comp <- function(j, cache) {
@@ -120,6 +120,7 @@ if (WORKERS <= 1L) {
   parallel::clusterEvalQ(cl, {
     suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
     library(data.table); NULL
+source(here::here("citiusdata", "scripts", "_env.R"))
   })
   # Every value the worker needs travels INSIDE the job. Referencing `todo` from
   # the worker looks natural, fails silently because the data.table is not in

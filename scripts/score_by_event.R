@@ -23,10 +23,11 @@
 # Each tag needs seqv3_history_<tag>.parquet, i.e. that arm ran with SEQ_HIST=1.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D     <- here::here("citiusdata", "data")
 tags  <- trimws(strsplit(Sys.getenv("ARMS", ""), ",")[[1]])
 YEARS <- as.integer(trimws(strsplit(Sys.getenv("YEARS", "2025,2026"), ",")[[1]]))
-MINP  <- as.integer(Sys.getenv("MIN_PAIRS", "300"))
+MINP  <- .env_int("MIN_PAIRS", "300")
 stopifnot("ARMS needs at least two tags" = length(tags) >= 2,
           "YEARS parsed to nothing" = length(YEARS) > 0 && all(is.finite(YEARS)))
 SCORE_OUT <- Sys.getenv("SCORE_OUT", "")   # optional JSON of the by-family tables

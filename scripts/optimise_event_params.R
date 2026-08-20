@@ -27,9 +27,10 @@
 # Each tag needs seqv3_history_<tag>.parquet, i.e. that arm ran with SEQ_HIST=1.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D     <- here::here("citiusdata", "data")
 PARAM <- Sys.getenv("PARAM", "xblend")
-MINP  <- as.integer(Sys.getenv("MIN_PAIRS", "800"))
+MINP  <- .env_int("MIN_PAIRS", "800")
 OUT   <- Sys.getenv("EVPARAM_OUT", file.path(D, sprintf("event_params_%s.parquet", PARAM)))
 spec  <- strsplit(strsplit(Sys.getenv("ARMS", ""), ",")[[1]], "=")
 stopifnot("ARMS must be tag=value pairs" = length(spec) >= 2)

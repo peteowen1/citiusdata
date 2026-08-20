@@ -23,10 +23,11 @@
 # adjusted on evidence that does not describe them.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D      <- here::here("citiusdata", "data")
 TAG    <- Sys.getenv("STATE_TAG", "base4")
-MIN_NE <- as.numeric(Sys.getenv("MIN_NEFF", "1"))
-MIN_SH <- as.integer(Sys.getenv("MIN_SHARED", "20"))  # need enough in BOTH arms
+MIN_NE <- .env_num("MIN_NEFF", "1")
+MIN_SH <- .env_int("MIN_SHARED", "20")  # need enough in BOTH arms
 CE_EVENTS <- c("AT-Decathlon-M", "AT-Heptathlon-M", "AT-Heptathlon-W", "AT-Pentathlon-W")
 
 # --- who contests what, and how -----------------------------------------------

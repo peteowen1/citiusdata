@@ -11,6 +11,7 @@
 # is to look at the names.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D   <- here::here("citiusdata", "data")
 TAG <- Sys.getenv("STATE_TAG", "base4")
 # read the DEPLOYED prior weight rather than restate it - a copied constant that
@@ -28,7 +29,7 @@ TAG <- Sys.getenv("STATE_TAG", "base4")
   stopifnot("the deployed constant did not parse to a number" = is.finite(v))
   v
 }
-PW <- suppressWarnings(as.numeric(Sys.getenv("CE_PRIOR_W", "")))
+PW <- suppressWarnings(.env_num("CE_PRIOR_W", ""))
 if (!is.finite(PW)) PW <- .deployed_num("CE_PW")
 stopifnot("prior weight must be a positive number" = is.finite(PW) && PW > 0)
 CE_EVENTS <- c("AT-Decathlon-M", "AT-Heptathlon-M", "AT-Heptathlon-W", "AT-Pentathlon-W")

@@ -31,10 +31,11 @@
 # athlete's season schedule. Nothing in the split looks at how fast they ran.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D     <- here::here("citiusdata", "data")
-MINA  <- as.integer(Sys.getenv("ADJ_MIN_ATH",   "4"))    # marks per athlete-event
-VKAP  <- as.numeric(Sys.getenv("ADJ_VENUE_KAPPA", "400"))
-MINC  <- as.integer(Sys.getenv("OCC_MIN_CELL", "40"))    # marks per pool per cell
+MINA  <- .env_int("ADJ_MIN_ATH", "4")    # marks per athlete-event
+VKAP  <- .env_num("ADJ_VENUE_KAPPA", "400")
+MINC  <- .env_int("OCC_MIN_CELL", "40")    # marks per pool per cell
 
 reg <- as.data.table(citius::citius_events())[, .(event_id, family)]
 c0 <- setDT(read_parquet(file.path(D, "athletics_corpus.parquet"),

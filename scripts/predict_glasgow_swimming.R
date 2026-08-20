@@ -22,10 +22,11 @@
 
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_env.R"))
 
 OUT <- here::here("citiusdata", "data")
 N_SIMS <- 20000L
-HALF_LIFE <- as.numeric(Sys.getenv("CITIUS_SWIM_HALF_LIFE", "180"))
+HALF_LIFE <- .env_num("CITIUS_SWIM_HALF_LIFE", "180")
 
 g <- glasgow_swimming(OUT)
 g <- g[!is.na(event_id)]

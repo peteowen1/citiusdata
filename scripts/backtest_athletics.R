@@ -7,13 +7,14 @@
 
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_env.R"))
 
 OUT <- here::here("citiusdata", "data")
 BT_CACHE <- file.path(OUT, Sys.getenv("CITIUS_BT_CACHE", "backtest_cache"))
 dir.create(BT_CACHE, recursive = TRUE, showWarnings = FALSE)
 
 N_SIMS <- 10000L
-MAX_PER_RUN <- as.integer(Sys.getenv("CITIUS_BT_MEETS", "25"))
+MAX_PER_RUN <- .env_int("CITIUS_BT_MEETS", "25")
 # History depth per refit. TWELVE YEARS, and do not shorten it on the argument
 # that old marks carry negligible weight.
 #
@@ -26,7 +27,7 @@ MAX_PER_RUN <- as.integer(Sys.getenv("CITIUS_BT_MEETS", "25"))
 # 5.3%.
 #
 # Negligible for the mean, decisive for the sum. Verified, not assumed.
-HISTORY_DAYS <- as.integer(Sys.getenv("CITIUS_HISTORY_DAYS", "4380"))
+HISTORY_DAYS <- .env_int("CITIUS_HISTORY_DAYS", "4380")
 
 # OUTCOMES and HISTORY are separate inputs so two ability sources can be compared
 # on an IDENTICAL scored set. Pointing one file at both roles silently swaps the
@@ -94,7 +95,7 @@ if (is.null(.cal_prov)) {
 MOM_FILE <- Sys.getenv("CITIUS_BT_MOMENTUM", "")
 mom_eff <- if (nzchar(MOM_FILE) && file.exists(file.path(OUT, MOM_FILE)))
   as.data.table(readRDS(file.path(OUT, MOM_FILE))) else NULL
-PEAK_GAMMA <- as.numeric(Sys.getenv("CITIUS_BT_PEAK_GAMMA", "0"))
+PEAK_GAMMA <- .env_num("CITIUS_BT_PEAK_GAMMA", "0")
 ROBUST_LOCATION <- as.logical(Sys.getenv("CITIUS_BT_ROBUST_LOCATION", "FALSE"))
 DECOUPLE_PEAK <- as.logical(Sys.getenv("CITIUS_BT_DECOUPLE_PEAK", "FALSE"))
 if (!is.null(mom_eff)) {
@@ -115,7 +116,7 @@ cli::cli_alert_info("Outcomes from {.file {OUTCOMES}}; ability history from {.fi
 # 0.234 (730). Paired t-test vs 365: beats 730 (t=5.78), 540 (t=4.23), 180
 # (t=3.44) and 90 (t=10.52); tied with 270. It also cuts the top-band
 # over-confidence from -0.106 to -0.073.
-half_life   <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "365"))
+half_life   <- .env_num("CITIUS_HALF_LIFE", "365")
 # Optionally vary the half-life BY FAMILY. fit_half_life() finds a 6x spread --
 # road 1095 days against 180 for sprint, throw, middle, distance and hurdles --
 # and a single global value is applied to all of them. The families with the most
@@ -152,7 +153,7 @@ if (!is.null(hl_map)) cli::cli_alert_info(
 # SIGNIFICANTLY damages gold (t = -6.34) and drops AUC 0.8461 -> 0.8392: shrinking
 # everyone toward the field mean compresses the field and blurs the favourite's
 # edge. 0.5 takes most of the mark gain without paying that.
-PRIOR_WEIGHT <- as.numeric(Sys.getenv("CITIUS_PRIOR_WEIGHT", "0.5"))
+PRIOR_WEIGHT <- .env_num("CITIUS_PRIOR_WEIGHT", "0.5")
 # "event" gives every athlete their event's measured spread instead of their own.
 # A test, not a preference: per-athlete sigma REORDERS the field at the
 # simulation stage -- in the men's 100m, rank correlation with recent form falls
@@ -520,7 +521,7 @@ setorder(pool, comp_start)
 # of the meet list, so a different target selects DIFFERENT MEETS and the arms
 # quietly stop being comparable — which score_arm.R's vintage guard does not
 # check, because the history is identical either way.
-TARGET <- as.integer(Sys.getenv("CITIUS_BT_TARGET", "900"))
+TARGET <- .env_int("CITIUS_BT_TARGET", "900")
 if (nrow(pool) > TARGET) pool <- pool[round(seq(1, .N, length.out = TARGET))]
 
 todo <- pool[!file.exists(file.path(BT_CACHE, paste0(competition_id, ".rds")))]

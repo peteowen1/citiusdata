@@ -19,8 +19,9 @@
 # up as a systematic residual in exactly one column rather than as vague drift.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D       <- here::here("citiusdata", "data")
-DATEWIN <- as.integer(Sys.getenv("CE_DATE_WINDOW", "2"))   # days either side
+DATEWIN <- .env_int("CE_DATE_WINDOW", "2")   # days either side
 
 source(here::here("citiusdata", "scripts", "ce_scoring.R"))
 
