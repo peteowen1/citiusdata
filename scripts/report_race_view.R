@@ -35,8 +35,20 @@ if (file.exists(.lk)) {
               by = "athlete_id")
   nm <- unique(rbind(nm, L[!athlete_id %chin% nm$athlete_id]), by = "athlete_id")
 }
+# The union must beat the source it WIDENS, not the whole display. The first
+# version compared against uniqueN(d$athlete_id) and passed only because the
+# display then held 71,485 athletes; after the recency windows went to 800 days
+# it holds far more, many of whom have no name in any source, and the guard fired
+# on a correct state. Comparing a union against a population it never claimed to
+# cover is the wrong test - this compares it against the display's own named
+# athletes, which is the thing the lookup is there to extend.
+.n_from_display <- uniqueN(d[!is.na(athlete_name), athlete_id])
 stopifnot("the name table is smaller than the rankings it was meant to widen" =
-            nrow(nm) >= uniqueN(d$athlete_id))
+            nrow(nm) >= .n_from_display)
+cat(sprintf("names: %s from rankings, %s after adding the lookup (+%s)
+",
+            format(.n_from_display, big.mark = ","), format(nrow(nm), big.mark = ","),
+            format(nrow(nm) - .n_from_display, big.mark = ",")))
 cat(sprintf("names available for %s athletes\n", format(nrow(nm), big.mark = ",")))
 am <- merge(am, nm, by = "athlete_id", all.x = TRUE)
 am <- am[date >= FROM & is.finite(place) & place > 0]
