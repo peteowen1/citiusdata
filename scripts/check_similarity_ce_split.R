@@ -25,7 +25,11 @@ suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 source(here::here("citiusdata", "scripts", "_env.R"))
 D      <- here::here("citiusdata", "data")
-TAG    <- Sys.getenv("STATE_TAG", "base4")
+# DEFAULT TO THE DEPLOYED ARM. This read "base4" until 2026-08-20 - the arm that
+# happened to be current the day it was written. Nothing failed when the engine
+# moved on: the state file still existed, so this quietly scored against a
+# two-day-old state. Five scripts shared the default; only one was noticed.
+TAG    <- Sys.getenv("STATE_TAG", "final")
 MIN_NE <- .env_num("MIN_NEFF", "1")
 MIN_SH <- .env_int("MIN_SHARED", "20")  # need enough in BOTH arms
 CE_EVENTS <- c("AT-Decathlon-M", "AT-Heptathlon-M", "AT-Heptathlon-W", "AT-Pentathlon-W")

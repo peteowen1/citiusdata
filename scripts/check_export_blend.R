@@ -28,7 +28,11 @@
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D    <- here::here("citiusdata", "data")
-TAG  <- Sys.getenv("STATE_TAG", "base4")
+# DEFAULT TO THE DEPLOYED ARM. This read "base4" until 2026-08-20 - the arm that
+# happened to be current the day it was written. Nothing failed when the engine
+# moved on: the state file still existed, so this quietly scored against a
+# two-day-old state. Five scripts shared the default; only one was noticed.
+TAG  <- Sys.getenv("STATE_TAG", "final")
 SIMF <- Sys.getenv("SIM_FILE", "event_similarity_all.parquet")
 
 st <- setDT(read_parquet(file.path(D, sprintf("seqv2_state_%s.parquet", TAG))))

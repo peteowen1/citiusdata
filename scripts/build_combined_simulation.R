@@ -28,7 +28,14 @@ suppressMessages(library(arrow)); suppressMessages(library(data.table))
 source(here::here("citiusdata", "scripts", "_env.R"))
 source(here::here("citiusdata", "scripts", "ce_scoring.R"))
 D     <- here::here("citiusdata", "data")
-TAG   <- Sys.getenv("STATE_TAG", "base4")
+# FOLLOW THE DEPLOYED ARM, not the arm that happened to be current the day this
+# was written. This defaulted to "base4" - an 18 August development arm - while
+# form_display_marks.R blended the resulting simulation into the PUBLISHED
+# combined-event ranking. Nothing failed: the file existed, the blend fired, and
+# the log said the feature was on, so the decathlon ranking was quietly built
+# from component ratings two engine promotions out of date. The tag is recorded
+# in the output and checked by the display for exactly that reason.
+TAG   <- Sys.getenv("STATE_TAG", "final")
 NSIM  <- .env_int("CE_NSIM", "600")
 SEED  <- .env_int("CE_SEED", "20260818")
 DAYSD <- Sys.getenv("CE_DAY_SD", "")   # blank = fit it below
@@ -265,6 +272,7 @@ cat("narrow; far above means it is too wide to discriminate between athletes.\n"
 cat("NOTE: this is in-sample - component ratings include the very performances\n")
 cat("being predicted. It tests coherence, not forecasting skill.\n")
 
+res[, state_tag := TAG]   # travels with the data so the display can check it
 f <- file.path(D, "combined_simulated.parquet")
 write_parquet(res, f)
 cat(sprintf("\nwrote %s (%s rows)\n", basename(f), format(nrow(res), big.mark = ",")))

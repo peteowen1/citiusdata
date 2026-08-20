@@ -55,16 +55,58 @@ am <- merge(am, nm, by = "athlete_id", all.x = TRUE)
 am <- am[date >= FROM & is.finite(place) & place > 0]
 cat(sprintf("adjusted performances since %s: %s\n", FROM, format(nrow(am), big.mark = ",")))
 
+.first <- function(x) { u <- x[!is.na(x) & nzchar(as.character(x))]
+                        if (length(u)) u[1] else x[1] }
 # a race is usable if it has enough finishers and we can name most of them
 rk <- am[, .(n = .N, named = sum(!is.na(athlete_name)), date = date[1],
              event_id = event_id[1], discipline = discipline[1], sex = sex[1],
-             family = family[1], comp_name = comp_name[1], venue_city = venue_city[1],
+             family = family[1], venue_city = .first(venue_city),
+             # THE FIRST ROW'S VALUE IS NOT THE RACE'S VALUE. comp_name is missing on
+             # rows that only ever arrived through the per-athlete career route, and
+             # that missingness is per-ROW, not per-race - so `comp_name[1]` returned
+             # NA for two of the four chosen races while later rows in the same race
+             # named the meet perfectly well. Same shape as the venue backfill in
+             # build_adjusted_marks.R: take the first value that is actually there. NOT the
+# same guarantee, though: `.fill()` there substitutes only when a race's
+# non-missing values are UNANIMOUS and leaves disagreement alone, while this
+# takes whichever came first. Fine for a meet name, which is a property of the
+# competition rather than of the row - do not copy it to a column where rows in
+# one race can legitimately differ.
+             comp_name = .first(comp_name),
              wind = wind[1], unit = unit[1],
              wind_adj = stats::median(wind_adj), venue_adj = stats::median(venue_adj)),
          by = race_key]
 rk <- rk[n >= MINF & named >= pmin(n, MINF)]
+# BACKFILL THE MEET NAME FROM THE CATALOGUE BEFORE REQUIRING ONE. comp_name is
+# missing on a lot of corpus ROWS - the career route does not carry it - but the
+# catalogue is keyed on competition_id and names almost every competition: 394 of
+# 394 sampled on 2026-08-20. Filtering on the row-level value alone discarded
+# 65,360 of 83,825 usable races for a gap the catalogue could have filled, which
+# is why this joins first and filters second.
+rk[, competition_id := sub('[|].*$', '', race_key)]
+cgn <- unique(setDT(read_parquet(file.path(D, 'competition_catalogue.parquet'),
+                                 col_select = c('competition_id', 'comp_name'))),
+              by = 'competition_id')
+cgn[, competition_id := as.character(competition_id)]
+setnames(cgn, 'comp_name', 'cat_name')
+rk <- merge(rk, cgn, by = 'competition_id', all.x = TRUE)
+.before <- rk[is.na(comp_name) | !nzchar(comp_name), .N]
+rk[(is.na(comp_name) | !nzchar(comp_name)) & !is.na(cat_name) & nzchar(cat_name),
+   comp_name := cat_name]
+.after <- rk[is.na(comp_name) | !nzchar(comp_name), .N]
+cat(sprintf("meet names: %s races unnamed on their own rows, %s filled from the
+",
+            format(.before, big.mark = ","), format(.before - .after, big.mark = ",")),
+    sprintf("  catalogue, %s still unnamed and dropped
+", format(.after, big.mark = ",")),
+    sep = "")
+# A worked example headed "(no competition name)" teaches nothing, so what is
+# still unnamed after the backfill is dropped. The superlative labels below are
+# therefore over named meets.
+rk <- rk[!is.na(comp_name) & nzchar(comp_name)]
+cat(sprintf("usable races with a named meet: %s
+", format(nrow(rk), big.mark = ",")))
 rk[, total_adj := abs(wind_adj) + abs(venue_adj)]
-cat(sprintf("usable races: %s\n", format(nrow(rk), big.mark = ",")))
 stopifnot("no usable races" = nrow(rk) > 50)
 
 # `take`, NOT `n`. `n` is a COLUMN of rk (the finisher count), and data.table
@@ -95,7 +137,21 @@ cat(sprintf("selected %d race(s): %s\n", nrow(sel), paste(sel$label, collapse = 
 # label. race_key itself is fine: 719,848 keys, each mapping to exactly one event.
 stopifnot("a label selected more than one race" = !anyDuplicated(sel$label))
 
-out <- merge(am[race_key %chin% sel$race_key], sel, by = "race_key")
+# CARRY THE RESOLVED NAME, NOT THE ROW ONE. The catalogue backfill above happens
+# on `rk`, and `am` still holds the per-row comp_name that was missing in the
+# first place - so merging against `am` threw the fix away and the tailwind
+# example came back headed with no meet name AGAIN, after a filter that had just
+# guaranteed every candidate had one. The assertion below is the point: a repair
+# that is applied and then silently dropped downstream looks exactly like a
+# repair that worked.
+sel <- merge(sel, rk[, .(race_key, comp_name)], by = "race_key", all.x = TRUE)
+out <- merge(am[race_key %chin% sel$race_key][, comp_name := NULL], sel, by = "race_key")
+# `all()` over zero rows is TRUE, so the name check alone would pass loudest on
+# an empty table - the state it is least able to tolerate. Assert the row count
+# in the same call.
+stopifnot("the output is empty" = nrow(out) > 0,
+          "a selected race reached the output with no meet name" =
+            all(!is.na(out$comp_name) & nzchar(out$comp_name)))
 setorder(out, label, place)
 out <- out[, .(label, race_key, date, discipline, sex, comp_name, venue_city,
                wind, place, athlete = athlete_name, mark, adj_mark, adj_delta,

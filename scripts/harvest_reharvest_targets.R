@@ -23,21 +23,30 @@
 # again there, and a re-run skips whatever already landed.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(data.table))
+suppressMessages(library(arrow))
 source(here::here("citiusdata", "scripts", "_env.R"))
 D          <- here::here("citiusdata", "data")
 COMP_CACHE <- file.path(D, "ath_comp_cache")
 dir.create(COMP_CACHE, recursive = TRUE, showWarnings = FALSE)
 MAXN  <- .env_int("REHARVEST_MAX", "25")     # small by default: prove it works first
 PAUSE <- .env_num("REHARVEST_PAUSE", "1.0")  # seconds between competitions
+DURCAP <- .env_int("REHARVEST_DAYCAP", "12") # upper bound on day-pages per competition
 TARGETS <- Sys.getenv("REHARVEST_TARGETS", "reharvest_targets.csv")
 
 f <- file.path(D, TARGETS)
 stopifnot("target list missing - run build_reharvest_targets.R first" = file.exists(f))
 t <- fread(f)
 t[, competition_id := as.character(competition_id)]
-stopifnot("target list is empty" = nrow(t) > 0,
-          "target list has no ranking column" = "rows_in_merged_races" %chin% names(t))
-setorder(t, -rows_in_merged_races)
+stopifnot("target list is empty" = nrow(t) > 0)
+# TWO TARGET LISTS, RANKED ON DIFFERENT QUANTITIES. reharvest_targets.csv ranks by
+# rows sitting in merged races; bigcomp_targets.csv ranks by how many results the
+# competition holds at the endpoint. Both are "work the most valuable first", but
+# naming one column after the other would be a quiet lie, so accept either and
+# fail loudly if neither is present rather than silently fetching in file order.
+.rank <- intersect(c("rows_in_merged_races", "rank_value"), names(t))[1]
+stopifnot("target list has no ranking column (rows_in_merged_races or rank_value)" =
+            !is.na(.rank))
+setorderv(t, .rank, -1L)
 
 cached <- sub("[.]rds$", "", list.files(COMP_CACHE, pattern = "[.]rds$"))
 # A PERSISTENT FAILURE MUST BE REMEMBERED, or the ranked list guarantees we lead
@@ -60,11 +69,47 @@ if (!nrow(todo)) { cat("nothing to do\n"); quit(status = 0) }
 # How many day-pages to request. The meet harvester found 603 of 1,120 meets are
 # a single day and a blanket 1:12 wasted 84% of requests, so use the span the
 # corpus already knows about, plus a day of slack.
-span <- t[, .(competition_id, dur = 3L)]
-if ("last" %chin% names(t)) span <- t[, .(competition_id, dur = 3L)]
-todo <- merge(todo, span, by = "competition_id", all.x = TRUE)
+# THE SPAN CAME FROM THE CATALOGUE, and until 2026-08-20 it did not: both
+# branches of the `if` this replaces set dur = 3L, so the intent in the comment
+# above was never implemented. Two costs, and the second is the serious one.
+# (1) 366 of them run LONGER than three days and were being silently TRUNCATED -
+# we fetched days 1-3 of an eleven-day meet and cached the result as if it were
+# the whole competition. That is worse than not fetching it at all, because a
+# cached partial is skipped on every later run, so the missing days can never
+# arrive and the bug reports success forever. Paris 2024, Rio, London 2012 and
+# the 2025 World Championships were all in that state.
+# (2) 32% run a SINGLE day, so a blanket 3 asked for two pages that cannot
+# exist. That looks like a 30% saving and is not: the slack day below spends
+# it, and the true totals are 15,431 day-pages against a blanket 14,877 - about
+# 4% MORE. This is a correctness fix that costs a little time, not a speed-up,
+# and saying otherwise here would be the same overclaiming the fix exists to
+# undo.
+cgs <- setDT(read_parquet(file.path(D, "competition_catalogue.parquet"),
+                          col_select = c("competition_id", "first_date", "last_date")))
+cgs[, competition_id := as.character(competition_id)]
+cgs[, dur := as.integer(last_date - first_date) + 1L]
+# A day of slack past the catalogue span: the catalogue dates come from results
+# we already hold, so a day whose results we are missing entirely cannot widen
+# them - which is exactly the day this harvest exists to find.
+cgs[, dur := dur + 1L]
+cgs[is.na(dur) | dur < 1L, dur := 3L]
+# SAY SO WHEN THE CAP BITES. Capping is truncation, and truncation cached as if
+# complete is the exact bug this block exists to fix - silent is how it survived
+# the first time. The longest real span today is 12 days, so the cap currently
+# clips only the slack, but nothing guarantees that stays true.
+.capped <- cgs[dur > DURCAP, .N]
+cgs[dur > DURCAP, dur := DURCAP]
+if (.capped > 0L)
+  cat(sprintf("NOTE: %s competition(s) span more than the %d-day cap and will be\n",
+              format(.capped, big.mark = ","), DURCAP),
+      "  fetched incompletely - raise REHARVEST_DAYCAP if that matters\n", sep = "")
+todo <- merge(todo, cgs[, .(competition_id, dur)], by = "competition_id", all.x = TRUE)
 todo[is.na(dur) | dur < 1L, dur := 3L]
-setorder(todo, -rows_in_merged_races)
+cat(sprintf("day-pages to request: %s across %s competitions (a blanket 3 would be %s)
+",
+            format(sum(todo$dur), big.mark = ","), format(nrow(todo), big.mark = ","),
+            format(3L * nrow(todo), big.mark = ",")))
+setorderv(todo, .rank, -1L)
 
 n_ok <- 0L; n_empty <- 0L; n_err <- 0L; got <- 0L; new_fail <- character(0)
 for (i in seq_len(min(MAXN, nrow(todo)))) {

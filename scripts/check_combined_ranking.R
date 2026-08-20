@@ -22,7 +22,13 @@ suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 source(here::here("citiusdata", "scripts", "_env.R"))
 D   <- here::here("citiusdata", "data")
-TAG <- Sys.getenv("STATE_TAG", "base4")
+# DEFAULT TO THE DEPLOYED ARM. This read "base4" until 2026-08-20 - the arm that
+# happened to be current the day it was written. Nothing failed when the engine
+# moved on: the state file still existed, so this quietly scored a fresh
+# simulation against a two-day-old state and called it one ranking. Five scripts
+# shared the default and only one was noticed; the others were found by asking
+# what ELSE reads this artefact.
+TAG <- Sys.getenv("STATE_TAG", "final")
 CE_EVENTS <- c("AT-Decathlon-M", "AT-Heptathlon-M", "AT-Heptathlon-W", "AT-Pentathlon-W")
 
 st <- setDT(read_parquet(file.path(D, sprintf("seqv2_state_%s.parquet", TAG))))

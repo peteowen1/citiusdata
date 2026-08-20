@@ -469,6 +469,25 @@ if (CE_ON && any(act$event_id %chin% CE_EV)) {
   # component slots filled rather than observed, and without this the published
   # rank is partly a guess that looks identical to a fully observed one.
   .cs <- setDT(read_parquet(fsim))
+  # THE SIMULATION MUST COME FROM THIS ARM. Its component ratings are read from
+  # seqv2_state_<STATE_TAG>, and that default sat on a stale development arm for
+  # two days without anything failing - the blend fired, the counts looked right,
+  # and the published decathlon ranking was built on the wrong ratings.
+  if ("state_tag" %chin% names(.cs)) {
+    .st <- unique(.cs$state_tag)
+    if (length(.st) != 1L || !identical(.st[1], TAG))
+      stop("combined_simulated.parquet was built from state tag '",
+           paste(.st, collapse = "/"), "' but this display is tag '", TAG,
+           "'.
+  Rebuild:  STATE_TAG=", TAG,
+           " Rscript citiusdata/scripts/build_combined_simulation.R")
+  } else {
+    stop("combined_simulated.parquet predates the state_tag stamp, so which
+",
+         "  engine arm it was built from cannot be established. Rebuild it:
+",
+         "  STATE_TAG=", TAG, " Rscript citiusdata/scripts/build_combined_simulation.R")
+  }
   if (!"imputed_slots" %chin% names(.cs)) .cs[, imputed_slots := NA_integer_]
   csim <- .cs[, .(event_id = ce, athlete_id = as.character(athlete_id),
                   sim_mean, sim_sd, imputed_slots)]
