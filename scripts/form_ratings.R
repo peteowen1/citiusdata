@@ -184,6 +184,66 @@ SEEDNE <- .env_num("SEQ_SEEDNE", 5)     # cap on seeded n_eff, so it still learn
 # is the conservative side of the one failure this knob has that the metric
 # cannot see: blunting a genuine collapse. Both clearly beat off (+0.202/+0.155).
 HUBER <- .env_num("SEQ_HUBER", 3)
+# SEQ_HUBER_LO  the SAME cap, for bad days only. Defaults to SEQ_HUBER.
+#
+# TESTED AND REFUTED 2026-08-21. LEAVE IT AT THE DEFAULT. The machinery is kept
+# because it is inert when unset - proven, not assumed: the identity arm matched
+# the deployed model on 1,123,807 rows with a largest r_pre difference of
+# 0.000e+00 - and because the refutation is worth more than the code is worth
+# removing. Four arms, two windows, out-of-sample weighted concordance:
+#
+#   arm        2025 tune   2026 sealed   (floors 0.136 / 0.171)
+#   1.5 sigma    +0.117       -0.049
+#   2.0          +0.067       -0.014
+#   2.5          +0.042       +0.008
+#
+# Not one arm clears its floor, and the windows disagree in SIGN with a monotone
+# gradient each way - the signature of fitting the tuning window, and the same
+# shape that sank the per-family huber a fortnight earlier.
+#
+# Scored on HURDLES ALONE, where the mechanism lives, it still does nothing:
+# +0.038/-0.035 (2025) and +0.006/-0.031 (2026) against floors of 0.169 and
+# 0.192. The one effect that clears any floor is HARM to the sprints, -0.147 on
+# the sealed window, which is the family with the thinnest tail and therefore
+# the most real form in the 1.5-3 sigma band being clipped away.
+#
+# WHY IT FAILED, AND THE LESSON THAT GENERALISES. The mechanism is real and
+# controlled: every hurdle event carries a fatter left tail than its own flat
+# equivalent - 110mH skew -0.818 against 100m -0.487, 3.11% of races beyond 2
+# sigma slow against 0.38% that fast - and that is genuinely why a season best,
+# being a maximum, beats a rating there. But the cap at 3 sigma already catches
+# the catastrophes, and the 1.5-3 sigma band is mostly real form rather than
+# disasters. Clipping it discards signal to remove noise that was already gone.
+#
+# Existence is not importance. A mechanism can be measured, controlled and
+# correct and still be worth nothing, and the only way to find out is to size it.
+#
+# WHY SPLIT A SYMMETRIC CAP. The clip above treats a race 3 sigma slow and one 3
+# sigma fast as equally suspect, and the data says they are not. Within-athlete
+# residuals are left-skewed in ALL NINE families (-0.33 to -0.63): athletes have
+# far more disasters than equivalent triumphs, because the things that go wrong
+# in a race - falling, clipping a barrier, a bad baton, cramp - have no mirror
+# image. Nobody accidentally runs 3 sigma fast.
+#
+# The hurdles are the extreme case and the reason this exists. Measured against
+# their own flat equivalents - same athletes, same tracks, same era, differing
+# only by the barriers - every hurdle event carries a fatter left tail: 110mH
+# skew -0.818 against 100m -0.487, and 3.11% of hurdles races land more than 2
+# sigma slow against 0.38% that fast. Eight disasters per triumph. That is
+# exactly the asymmetry a season best is immune to, being a maximum, and it is
+# why the hurdles are the one family where sorting by season best beats the
+# rating (-0.90 pp on 28,847 sealed pairs).
+#
+# THIS IS NOT THE PER-FAMILY HUBER THAT WAS REVERTED on 2026-08-18. That fitted
+# nine values on two windows and 4 of 9 "survived" against 2.25 expected by
+# chance - noise wearing the shape of structure. This is ONE global parameter
+# with a measured mechanism and a pre-registered direction, so it is one
+# hypothesis rather than nine.
+#
+# THE FAILURE IT CAN CAUSE, unchanged from the symmetric case: a fall and a
+# genuine collapse are identical in the data, and clipping harder blunts real
+# decline. check_huber_decline.R is the check that sees it, and the score cannot.
+HUBER_LO <- .env_num("SEQ_HUBER_LO", HUBER)
 SCORE_MERGED <- Sys.getenv("SEQ_SCORE_MERGED", "0") != "0"
 # See the note at the shock estimator: "mean" reproduces the original behaviour,
 # "median" makes it robust to athletes who stop racing.
@@ -1002,6 +1062,9 @@ if (VPRIOR) {
 }
 KFLOORv <- .ev_vec("kfloor", KFLOOR, names(MUv))
 HUBERv  <- .ev_vec("huber",  HUBER,  names(MUv))
+# Per-event overrides of the bad-day cap fall back to that event's own huber,
+# so an event tuned for `huber` keeps a symmetric clip unless asked otherwise.
+HUBLOv  <- .ev_vec("huberlo", HUBER_LO, names(MUv))
 XBLENDv <- .ev_vec("xblend", XBLEND, names(MUv))
 # Added 2026-08-18 so the family optimiser can actually SHIP what it finds.
 # These three were swept per family and could not be applied, which made the
@@ -1724,8 +1787,15 @@ for (r_ in seq_along(starts)) {
     kv <- kv * fac
   }
   hub_e <- HUBERv[[ev]]; if (is.null(hub_e) || !is.finite(hub_e)) hub_e <- HUBER
-  if (hub_e > 0) {
-    lim <- hub_e * sqrt(v_pre)
+  hlo_e <- HUBLOv[[ev]]; if (is.null(hlo_e) || !is.finite(hlo_e)) hlo_e <- hub_e
+  if (hub_e > 0 || hlo_e > 0) {
+    # ONE limit per DIRECTION. surprise > 0 is a better race than the rating
+    # expected, < 0 a worse one, and the left tail is the fat one - see
+    # SEQ_HUBER_LO above. With SEQ_HUBER_LO unset, hlo_e == hub_e and this is
+    # arithmetically the symmetric clip it replaces, which the identity arm of
+    # the experiment checks rather than assumes.
+    hv  <- fifelse(surprise < 0, hlo_e, hub_e)
+    lim <- hv * sqrt(v_pre)
     ex <- is.finite(lim) & lim > 0 & abs(surprise) > lim
     if (any(ex)) kv[ex] <- kv[ex] * (lim[ex] / abs(surprise[ex]))
   }
@@ -1840,6 +1910,7 @@ res <- data.table(tag = TAG,
   brier25 = if (WINP && acc$y25["npred"] > 0) acc$y25["brier"]/acc$y25["npred"] else NA_real_,
   brier26 = if (WINP && acc$y26["npred"] > 0) acc$y26["brier"]/acc$y26["npred"] else NA_real_,
   maxplace = MAXPLACE, ceil = CEIL, seeded = n_seeded, huber = HUBER,
+             huber_lo = HUBER_LO,
   seedhl = SEEDHL, seedhlpow = SEEDHLPOW, seedne = SEEDNE, k0 = K0, kappa = KAPPA, kfloor = KFLOOR,
   kpow = KPOW, ceiladj = CEILADJ, xblend = XBLEND,
   xb_fam = paste(XB_FAM, collapse = "+"),
