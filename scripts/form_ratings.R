@@ -97,6 +97,35 @@ KT1 <- .env_num("SEQ_KT1", 1); WINDCS <- Sys.getenv("SEQ_WINDCS","") != ""
 # 69.387 -> 69.669 sealed, favourite 52.7% -> 53.2%. SEQ_CEIL=0 is bit-identical
 # to the pre-blend engine (verified: it reproduced 69.127 / 69.387 exactly).
 CEIL <- .env_num("SEQ_CEIL", 0.30)
+# SEQ_CEIL_MODE  what "their ceiling" is measured BY. "best" (default) uses the
+# athlete's best mark so far; "quantile" uses R + SEQ_CEIL_C * sqrt(v), a high
+# point of their own fitted distribution.
+#
+# WHY THIS EXISTS. A maximum is a biased estimator of ability, and the bias runs
+# in the number of races. Measured on the deployed state, the best mark sits this
+# far above the athlete's own rating, in units of their own sd:
+#
+#   1-2 races 0.297 | 3-4 0.709 | 5-8 1.191 | 9-15 1.618 | 16-30 2.008
+#
+# A SEVENFOLD spread, and it is unchanged when the comparison is made inside
+# rating deciles - so it is the race count, not that busy athletes are better.
+# At CEIL 0.30 that is roughly half a standard deviation of ordering advantage
+# handed to whoever raced most, which is a collegiate sprinter over a marathoner
+# and has nothing to do with either of them running fast.
+#
+# The quantile form is flat in n by construction: it asks how good and how
+# VARIABLE an athlete is, not how many times they rolled. Note that
+# (1-c)*r + c*(r + C*sqrt(v)) is just r + c*C*sqrt(v), so this is an additive
+# shift in units of the athlete's own spread - it still REORDERS a field,
+# because v differs between athletes, which is the whole point.
+#
+# SEQ_CEIL_C defaults to the value that puts the quantile where the median best
+# sits today, so switching modes changes the STATISTIC without changing how
+# aggressive the ceiling is. That keeps the comparison about one thing.
+CEIL_MODE <- Sys.getenv("SEQ_CEIL_MODE", "best")
+CEILC     <- .env_num("SEQ_CEIL_C", 0.684)
+stopifnot("SEQ_CEIL_MODE must be 'best' or 'quantile'" =
+            CEIL_MODE %chin% c("best", "quantile"))
 # SEQ_BEST_K   how many of an athlete's best marks the ceiling blend averages.
 #              1 keeps the original rule exactly (season best if they raced the
 #              event this year, career best otherwise).
@@ -1573,6 +1602,15 @@ for (r_ in seq_along(starts)) {
     # athlete carrying a best mark, which is nearly all of them: XBLEND 0, 1, 2
     # and 3 all returned byte-identical scores because the feature never
     # survived to be measured.
+    if (CEIL_MODE == "quantile") {
+      # A HIGH POINT OF THE ATHLETE'S OWN DISTRIBUTION, not their luckiest draw.
+      # Falls back to the event's variance when the athlete has none of their
+      # own, which is the same fallback the update below uses - so a debutant is
+      # treated identically in both modes rather than silently skipped.
+      vv <- V[[kk[m]]]
+      if (is.null(vv) || !is.finite(vv)) vv <- stats::var(z$perf)
+      if (is.finite(vv) && vv > 0) b <- r_use[m] + CEILC * sqrt(vv) else b <- NULL
+    }
     if (!is.null(b)) r_use[m] <- (1 - ceil_e) * r_use[m] + ceil_e * b
   }
   vp0 <- VPv[[ev]]; if (is.null(vp0) || !is.finite(vp0)) vp0 <- stats::var(z$perf)
@@ -1909,7 +1947,8 @@ res <- data.table(tag = TAG,
   # race set, which is what it is for.
   brier25 = if (WINP && acc$y25["npred"] > 0) acc$y25["brier"]/acc$y25["npred"] else NA_real_,
   brier26 = if (WINP && acc$y26["npred"] > 0) acc$y26["brier"]/acc$y26["npred"] else NA_real_,
-  maxplace = MAXPLACE, ceil = CEIL, seeded = n_seeded, huber = HUBER,
+  maxplace = MAXPLACE, ceil = CEIL, ceil_mode = CEIL_MODE, ceil_c = CEILC,
+             seeded = n_seeded, huber = HUBER,
              huber_lo = HUBER_LO,
   seedhl = SEEDHL, seedhlpow = SEEDHLPOW, seedne = SEEDNE, k0 = K0, kappa = KAPPA, kfloor = KFLOOR,
   kpow = KPOW, ceiladj = CEILADJ, xblend = XBLEND,
