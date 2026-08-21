@@ -101,6 +101,26 @@ CEIL <- .env_num("SEQ_CEIL", 0.30)
 # athlete's best mark so far; "quantile" uses R + SEQ_CEIL_C * sqrt(v), a high
 # point of their own fitted distribution.
 #
+# TESTED AND REFUTED 2026-08-21. KEEP "best". The quantile is worse everywhere,
+# outside the noise floor, on both windows and in both families checked:
+#
+#           hurdles 25  hurdles 26  sprint 25  sprint 26   (floors .17 .19 .11 .12)
+#   C=0.684     -0.530      -0.698     -0.503     -0.389
+#   C=0.4       -0.493      -0.653     -0.492     -0.339
+#   C=1.0       -0.642      -0.815     -0.575     -0.457
+#
+# WHICH IS THE INTERESTING PART, because the max is provably the worse estimator
+# and still wins. Two things probably explain it. An athlete who has actually
+# run the mark has DEMONSTRATED it, while sqrt(v) is estimated - and estimated
+# worst exactly where the ceiling matters most, on thin records. And the
+# race-count bias may be partly real: an athlete who races twenty times is
+# usually fit, professional and in season, and none of that is noise.
+#
+# So the defect is real and the replacement is not the fix. The bias stands
+# measured at 0.297 sd (1-2 races) to 2.008 (16-30) if anyone wants another go
+# at it - BEST_K > 1, averaging the top few rather than taking the single max,
+# is the obvious untried middle.
+#
 # WHY THIS EXISTS. A maximum is a biased estimator of ability, and the bias runs
 # in the number of races. Measured on the deployed state, the best mark sits this
 # far above the athlete's own rating, in units of their own sd:
@@ -222,13 +242,17 @@ HUBER <- .env_num("SEQ_HUBER", 3)
 # removing. Four arms, two windows, out-of-sample weighted concordance:
 #
 #   arm        2025 tune   2026 sealed   (floors 0.136 / 0.171)
-#   1.5 sigma    +0.117       -0.049
-#   2.0          +0.067       -0.014
-#   2.5          +0.042       +0.008
+#   1.5 sigma    +0.081       +0.052
+#   2.0          +0.073       +0.027
+#   2.5          +0.007       -0.014
 #
-# Not one arm clears its floor, and the windows disagree in SIGN with a monotone
-# gradient each way - the signature of fitting the tuning window, and the same
-# shape that sank the per-family huber a fortnight earlier.
+# Not one arm clears its floor on either window, so it is not shippable. But the
+# sign is CONSISTENT, which the first version of this note got wrong: it read
+# "+0.117 / -0.049, the windows disagree", because it scored `r_pre` instead of
+# `r_use`. r_pre is the pure rating; r_use is what the engine orders a field
+# with. Anything touching ordering is invisible in the first. Corrected here
+# rather than quietly - a wrong reason for a right conclusion is still wrong,
+# and the next person to try this deserves the real numbers.
 #
 # Scored on HURDLES ALONE, where the mechanism lives, it still does nothing:
 # +0.038/-0.035 (2025) and +0.006/-0.031 (2026) against floors of 0.169 and

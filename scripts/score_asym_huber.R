@@ -28,8 +28,19 @@ TUNE  <- .env_int("ASYM_TUNE",   "2025")
   f <- file.path(OUT, sprintf("seqv3_history_%s.parquet", tag))
   stopifnot("missing history for that arm" = file.exists(f))
   d <- setDT(read_parquet(f, col_select = c("race_key","event_id","athlete_id","date",
-                                            "r_pre","place","perf","seen","rc")))
-  d[seen == TRUE & is.finite(r_pre) & is.finite(place) & place > 0 & is.finite(perf)]
+                                            "r_pre","r_use","place","perf","seen","rc")))
+  # SCORE r_use, NOT r_pre. r_pre is the pure rating; r_use is the value the
+  # engine actually ORDERS a field with, after the ceiling blend and the
+  # cross-event blend. Anything that only touches ordering - the ceiling
+  # statistic above all - is invisible in r_pre, and scoring r_pre returned four
+  # ceiling arms identical to three decimals including C=0.4 against C=1.0.
+  # Identical-to-the-digit across arms that should differ is never a null result;
+  # it means the thing under test never reached the metric. The engine records
+  # the same failure once before, when XBLEND 0/1/2/3 all scored byte-identically
+  # because the blend was being reset before it could be measured.
+  if (!"r_use" %chin% names(d)) d[, r_use := r_pre]
+  d[!is.finite(r_use), r_use := r_pre]
+  d[seen == TRUE & is.finite(r_use) & is.finite(place) & place > 0 & is.finite(perf)]
 }
 
 # --- IDENTITY: the base arm must match the deployed model -------------------
@@ -69,11 +80,11 @@ score <- function(d, yr) {
   dup <- d[, .(n = .N, marks = uniqueN(round(perf, 9))), by = .(race_key, place)][
            n > 1 & marks > 1, unique(race_key)]
   d <- d[!race_key %chin% dup]
-  a <- d[, .(rid = .GRP, i = seq_len(.N), place, r_pre, wt), by = race_key]
+  a <- d[, .(rid = .GRP, i = seq_len(.N), place, r_use, wt), by = race_key]
   m <- merge(a, a, by = "rid", allow.cartesian = TRUE, suffixes = c(".x", ".y"))
   m <- m[i.x < i.y & place.x != place.y]
   if (!nrow(m)) return(NULL)
-  dd <- m$r_pre.x - m$r_pre.y
+  dd <- m$r_use.x - m$r_use.y
   cw <- as.numeric((dd > 0) == (m$place.x < m$place.y)); cw[dd == 0] <- 0.5
   ess <- sum(m$wt.x)^2 / sum(m$wt.x^2)          # Kish, because the weights cost a lot
   data.table(pairs = nrow(m), ess = round(ess),
@@ -105,11 +116,11 @@ reg <- as.data.table(citius::citius_events())[, .(event_id, family)]
 scoref <- function(d, yr, fam) {
   d <- merge(d[year(date) == yr], reg, by = "event_id", all.x = TRUE)[family == fam]
   if (nrow(d) < 100) return(NULL)
-  a <- d[, .(rid = .GRP, i = seq_len(.N), place, r_pre), by = race_key]
+  a <- d[, .(rid = .GRP, i = seq_len(.N), place, r_use), by = race_key]
   m <- merge(a, a, by = "rid", allow.cartesian = TRUE, suffixes = c(".x", ".y"))
   m <- m[i.x < i.y & place.x != place.y]
   if (!nrow(m)) return(NULL)
-  dd <- m$r_pre.x - m$r_pre.y
+  dd <- m$r_use.x - m$r_use.y
   cw <- as.numeric((dd > 0) == (m$place.x < m$place.y)); cw[dd == 0] <- 0.5
   data.table(pairs = nrow(m), conc = round(100 * mean(cw), 3),
              floor = round(100 * sqrt(0.25 / nrow(m)), 3))
