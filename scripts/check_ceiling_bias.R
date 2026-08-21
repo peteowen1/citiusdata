@@ -62,15 +62,34 @@ cat("volume. A maximum does that; a quantile of the fitted distribution does not
 # more may simply be better, or worse. Compare WITHIN a narrow rating slice so
 # ability is held roughly fixed and only the race count varies.
 cat("\n=== the same, holding ability fixed (within rating deciles) ===\n")
+# THIS CONTROL DID NOT WORK IN THE FIRST VERSION, and the tell was sitting in
+# its own output. `rdec` was computed and then never used - the aggregation said
+# `by = .(band)`, so the "controlled" table was the uncontrolled one recomputed
+# under a different name, and the two printed IDENTICAL numbers. That was
+# reported as "unchanged within rating deciles, therefore it is the race count",
+# which is a conclusion the code had never tested.
+#
+# Identical-to-the-digit between two things that should differ is never
+# confirmation - it means one of them did not happen. Third instance today.
 st[, rdec := cut(R, quantile(R, seq(0, 1, 0.1), na.rm = TRUE),
                  include.lowest = TRUE, labels = FALSE), by = event_id]
 w <- st[!is.na(rdec) & !is.na(gap_z), .(athlete_events = .N,
-        median_gap_z = round(stats::median(gap_z), 3)), by = .(band)][order(band)]
-print(w)
-cat("\nSame direction within rating deciles = the effect is the race count, not\n")
-cat("that busy athletes happen to be better.\n")
+        median_gap_z = round(stats::median(gap_z), 3)), by = .(rdec, band)]
+# Average the per-decile medians so every ability slice counts equally, rather
+# than letting the crowded deciles decide the answer.
+ww <- w[, .(ability_deciles = .N, athlete_events = sum(athlete_events),
+            mean_of_decile_medians = round(mean(median_gap_z), 3)),
+        by = band][order(band)]
+print(ww)
+cat("\nCompare against the uncontrolled table above. If the race-count gradient\n")
+cat("SURVIVES inside ability deciles, the effect is the count. If it flattens,\n")
+cat("busy athletes were simply better and the raw table overstates the bias.\n")
+cat("\n=== the gradient inside three individual ability deciles ===\n")
+print(dcast(w[rdec %in% c(2, 5, 9)], band ~ rdec, value.var = "median_gap_z"))
 
-cat("\n=== by family, because n varies hugely between them ===\n")
+cat("
+=== by family, because n varies hugely between them ===
+")
 fb <- st[!is.na(family), .(athlete_events = .N,
          median_n = round(stats::median(n_eff), 1),
          median_gap_z = round(stats::median(gap_z, na.rm = TRUE), 3)), by = family]
