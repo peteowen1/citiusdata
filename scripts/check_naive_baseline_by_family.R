@@ -15,6 +15,18 @@ OUT <- here::here("citiusdata", "data")
 TAG <- Sys.getenv("FORM_TAG", "final")
 h <- setDT(read_parquet(file.path(OUT, sprintf("seqv3_history_%s.parquet", TAG))))
 h <- h[is.finite(perf) & is.finite(place) & is.finite(r_pre)]
+# WHICH COLUMN IS "THE MODEL". r_pre is the pure rating; r_use is what the
+# engine ORDERS A FIELD WITH, after the ceiling and cross-event blends. The
+# question this table answers - "is the model better than sorting by season
+# best" - is a question about ordering, so r_use is the honest answer and
+# r_pre understates the model by whatever those blends are worth. Set
+# BASELINE_PRED=r_pre to score the bare rating instead.
+if (!"r_use" %chin% names(h)) h[, r_use := r_pre]
+h[!is.finite(r_use), r_use := r_pre]
+MODEL_COL <- Sys.getenv("BASELINE_PRED", "r_use")
+stopifnot("BASELINE_PRED must name a column that exists" = MODEL_COL %chin% names(h))
+cat(sprintf("scoring the model as `%s`
+", MODEL_COL))
 h[, yr := year(date)]
 
 setorder(h, athlete_id, event_id, date, race_key)
@@ -46,7 +58,7 @@ if (file.exists(hf)) {
 ")
 }
 
-PRED <- c(model = "r_pre", head_to_head = "p_h2h", season_best = "p_seasbest",
+PRED <- c(model = MODEL_COL, head_to_head = "p_h2h", season_best = "p_seasbest",
           mean_last3 = "p_mean3", last = "p_last", career_best = "p_best")
 s <- h[seen == TRUE & place <= 12]
 s <- s[complete.cases(s[, ..PRED])]
