@@ -121,6 +121,22 @@ CEIL <- .env_num("SEQ_CEIL", 0.30)
 # at it - BEST_K > 1, averaging the top few rather than taking the single max,
 # is the obvious untried middle.
 #
+# BEST_K WAS THEN TRIED, 2026-08-21, AND IS ALSO WORSE. K = 2, 3 and 5 all lose
+# to the single max, monotonically in K, outside the floor on both windows and
+# in both families:
+#
+#           hurdles 25  hurdles 26  sprint 25  sprint 26
+#   K=2         -0.498      -0.535     -0.701     -0.565
+#   K=3         -0.473      -0.656     -0.762     -0.659
+#   K=5         -0.649      -0.763     -0.803     -0.768
+#
+# So all four alternatives tested - a fitted quantile at three constants, and a
+# top-K mean at three depths - lose to the plain maximum. The Kerr/Rayner
+# argument above is still a correct description of what a single max cannot
+# distinguish; it simply does not cost enough to be worth the information a
+# demonstrated mark carries. Whatever the ceiling is doing for the model, it is
+# doing it through the EXTREME, not through a level.
+#
 # WHY THIS EXISTS. A maximum is a biased estimator of ability, and the bias runs
 # in the number of races. Measured on the deployed state, the best mark sits this
 # far above the athlete's own rating, in units of their own sd:
