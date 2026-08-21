@@ -63,7 +63,17 @@ cat(sprintf("events awarding exactly 3: %d | more than 3 (ties/relays): %d | few
 stopifnot("medal count is implausible for an Olympic athletics programme" =
             nrow(med) > 100 && nrow(med) < 200)
 
-d <- setDT(read_parquet(file.path(D, "form_display_final.parquet")))
+# FOLLOW FORM_TAG. This hardcoded the deployed display, so running it against an
+# arm silently re-checked `final` and reported a pass about a file the arm had
+# never touched - a verification step that could not fail for the thing it was
+# being asked about. Caught on 2026-08-21 while verifying harvest1.
+.tag <- Sys.getenv("FORM_TAG", "final")
+.f <- file.path(D, sprintf("form_display_%s.parquet", .tag))
+stopifnot("no display for that FORM_TAG - build it first with form_display_marks.R" =
+            file.exists(.f))
+cat(sprintf("checking %s
+", basename(.f)))
+d <- setDT(read_parquet(.f))
 d[, athlete_id := as.character(athlete_id)]
 med[, ranked_event := paste(athlete_id, event_id) %chin% paste(d$athlete_id, d$event_id)]
 med[, ranked_any   := athlete_id %chin% d$athlete_id]

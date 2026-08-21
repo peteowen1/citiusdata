@@ -10,7 +10,18 @@
 # predictor is available, or the comparison is between different populations.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 OUT <- "C:/dev/citiusverse/citiusdata/data"
-h <- setDT(read_parquet(file.path(OUT, "seqv3_history_final.parquet")))
+# FOLLOW FORM_TAG. Hardcoded, this scored the DEPLOYED arm no matter what it was
+# asked about: run against harvest1 it returned 78.52/78.58 and pair counts
+# identical to the previous night's `final` run, to the digit, on an arm holding
+# 28,370 more races. Identical-to-the-digit is the tell; the sibling
+# check_naive_baseline_by_family.R already did this correctly.
+TAG <- Sys.getenv("FORM_TAG", "final")
+.hf <- file.path(OUT, sprintf("seqv3_history_%s.parquet", TAG))
+stopifnot("no history for that FORM_TAG - run the engine with SEQ_TAG first" =
+            file.exists(.hf))
+cat(sprintf("scoring %s
+", basename(.hf)))
+h <- setDT(read_parquet(.hf))
 h <- h[is.finite(perf) & is.finite(place) & is.finite(r_pre)]
 h[, yr := year(date)]
 setorder(h, date, race_key)
