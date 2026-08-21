@@ -26,6 +26,20 @@ cat0[, competition_id := as.character(competition_id)]
 h[, competition_id := tstrsplit(race_key, "[|]", keep = 1L)[[1]]]
 h <- merge(h, cat0[, .(competition_id, meet_tier, class)], by = "competition_id", all.x = TRUE)
 h <- h[is.finite(perf) & is.finite(place) & is.finite(r_pre)]
+# SCORE THE ORDERING VALUE. r_pre is the bare rating; r_use is that rating plus
+# the ceiling and cross-event blends, and it is what the engine actually orders
+# a field with. A benchmark asking "is the model better than sorting by season
+# best" is asking about ordering, so scoring r_pre understates it by whatever
+# those blends are worth. On 2026-08-21 that was enough to invert the hurdles
+# result outright, from -0.90 (a loss to season best, which prompted a whole
+# evening of investigation) to +0.68. Set BASELINE_PRED=r_pre to score the bare
+# rating deliberately.
+if (!"r_use" %chin% names(h)) h[, r_use := r_pre]
+h[!is.finite(r_use), r_use := r_pre]
+MODEL_COL <- Sys.getenv("BASELINE_PRED", "r_use")
+stopifnot("BASELINE_PRED names a column that does not exist" = MODEL_COL %chin% names(h))
+cat(sprintf("scoring the model as `%s`\n", MODEL_COL))
+
 h[, yr := year(date)]
 MAJ <- c("olympics", "world_champs", "european_champs", "commonwealth")
 
@@ -37,7 +51,7 @@ h[, p_mean3    := shift(frollmean(perf, 3, na.rm = TRUE), 1L), by = .(athlete_id
 h[, p_seasbest := shift(cummax(perf), 1L),                    by = .(athlete_id, event_id, yr)]
 setorder(h, date, race_key)
 
-PRED <- c(model = "r_pre", season_best = "p_seasbest", mean_last3 = "p_mean3",
+PRED <- c(model = MODEL_COL, season_best = "p_seasbest", mean_last3 = "p_mean3",
           last = "p_last", career_best = "p_best")
 s <- h[seen == TRUE & place <= 12 & yr %in% c(2025, 2026)]
 s <- s[complete.cases(s[, ..PRED])]
