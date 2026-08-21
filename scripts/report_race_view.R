@@ -14,6 +14,7 @@ suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 source(here::here("citiusdata", "scripts", "_env.R"))
 D    <- here::here("citiusdata", "data")
+EXMAX <- .env_int("RACEVIEW_MAX_FIELD", "40")  # keep worked examples scannable
 MINF <- .env_int("RACE_MIN_FINISHERS", "6")
 FROM <- as.Date(Sys.getenv("RACE_FROM", "2023-01-01"))
 
@@ -126,8 +127,14 @@ sel <- rbindlist(list(
        rk[family %chin% c("sprint","hurdles") & is.finite(wind) & wind < 0][order(wind)]),
   pick("Highest-altitude distance race",
        rk[family %chin% c("distance","middle") & venue_adj < 0][order(venue_adj)]),
+  # A WORKED EXAMPLE HAS TO BE READABLE. This ordered by field size descending,
+  # which is right in spirit - a big field is better evidence the correction is
+  # genuinely small - and picks the largest race in the corpus. After the
+  # re-harvest that became the Valencia Marathon with 801 finishers, which
+  # renders as a wall and dwarfs the three races beside it. Cap the field at a
+  # size a reader can actually scan, and take the biggest under that.
   pick("A race needing almost no correction",
-       rk[total_adj < 0.0005 & n >= 8][order(-n)])
+       rk[total_adj < 0.0005 & n >= 8 & n <= EXMAX][order(-n)])
 ), fill = TRUE)
 stopifnot("no races selected" = !is.null(sel) && nrow(sel) > 0)
 cat(sprintf("selected %d race(s): %s\n", nrow(sel), paste(sel$label, collapse = " | ")))
