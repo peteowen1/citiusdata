@@ -212,6 +212,28 @@ cat(sprintf("\nfetched %d competition(s), %s rows | empty %d | disputed-empty %d
 # fetching fine means that competition is broken upstream, while a 500 on
 # everything means the endpoint is down and blacklisting the list would be
 # self-inflicted damage.
+# COUNT ATTEMPTS, so a FINAL stuck item can still retire itself. The condition
+# below is right in spirit - do not blacklist a whole list because the endpoint
+# is down - but it deadlocks at the tail: when the only competition left is a
+# persistent 500, nothing else can succeed, so it is never recorded and blocks
+# every subsequent run. 7158255 had to be retired by hand on 2026-08-20. An
+# attempt counter settles it without weakening the endpoint-down protection:
+# two independent runs failing on the same id is not a coincidence.
+ATT <- file.path(D, "reharvest_attempts.csv")
+if (length(new_fail)) {
+  .a <- if (file.exists(ATT)) fread(ATT) else data.table(competition_id = character(0), n = integer(0))
+  .a[, competition_id := as.character(competition_id)]
+  .a <- rbind(.a, data.table(competition_id = new_fail, n = 1L))[, .(n = sum(n)), by = competition_id]
+  fwrite(.a, ATT)
+  .worn <- .a[n >= .env_int("REHARVEST_MAX_ATTEMPTS", "3"), competition_id]
+  .worn <- intersect(.worn, new_fail)
+  if (length(.worn) && n_ok == 0L && n_empty == 0L && n_fault == 0L) {
+    fwrite(data.table(competition_id = unique(c(failed, .worn))), FAILFILE)
+    cat(sprintf("recorded %d competition(s) as persistently failing after repeated attempts
+",
+                length(.worn)))
+  }
+}
 if (length(new_fail) && n_ok > 0) {
   fwrite(data.table(competition_id = unique(c(failed, new_fail))), FAILFILE)
   cat(sprintf("recorded %d competition(s) as persistently failing

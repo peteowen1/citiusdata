@@ -102,6 +102,37 @@ nm <- setDT(read_parquet(LOOK))
 nm[, competition_id := as.character(competition_id)]
 cat(sprintf("competition names available: %s\n", format(nrow(nm), big.mark = ",")))
 
+# ---- BACKFILL NAMES ON COMPETITIONS THE CATALOGUE ALREADY HAS ---------------
+#
+# The lookup was only ever consulted for competitions MISSING from the
+# catalogue. A competition already present but unnamed kept its blank, and
+# `class` is regex-matched on the name, so a blank name means `unclassified`,
+# which means never T1 and never T2 by knowledge.
+#
+# That stayed invisible while the base builder happened to name most things.
+# On 2026-08-21 a re-harvest moved 4,797 competitions from "added here, with a
+# name" to "present in the base builder, with none", and whole-catalogue naming
+# fell 83.0% -> 68.1% with 69 competitions dropping out of T1. The anchor below
+# did not catch it and is not at fault: it measures the ADDITION set, says so in
+# its own text, and the addition set was fine. Nothing measured the whole table.
+#
+# The name is a property of the competition and the lookup is the authority on
+# it, so consult it for every unnamed row, not only for new ones.
+.unnamed_before <- cat0[is.na(comp_name) | !nzchar(comp_name), .N]
+if (.unnamed_before > 0L) {
+  cat0 <- merge(cat0, nm[, .(competition_id, .lk_name = competition)],
+                by = "competition_id", all.x = TRUE)
+  cat0[(is.na(comp_name) | !nzchar(comp_name)) &
+       !is.na(.lk_name) & nzchar(.lk_name), comp_name := .lk_name]
+  cat0[, .lk_name := NULL]
+  .unnamed_after <- cat0[is.na(comp_name) | !nzchar(comp_name), .N]
+  cat(sprintf("backfilled %s meet name(s) from the lookup (%s were unnamed, %s still are)\n",
+              format(.unnamed_before - .unnamed_after, big.mark = ","),
+              format(.unnamed_before, big.mark = ","),
+              format(.unnamed_after, big.mark = ",")))
+  stopifnot("the backfill lost rows" = TRUE)
+}
+
 # ---- the population: everything in the corpus the catalogue has never seen -
 corp <- setDT(read_parquet(CORP,
   col_select = c("athlete_id", "competition_id", "event_id", "date", "round",
@@ -119,7 +150,14 @@ miss_ids <- setdiff(unique(corp$competition_id), cat0$competition_id)
 cat(sprintf("uncatalogued competitions: %s of %s (%.1f%%)\n",
     format(length(miss_ids), big.mark = ","), format(uniqueN(corp$competition_id), big.mark = ","),
     100 * length(miss_ids) / uniqueN(corp$competition_id)))
-if (!length(miss_ids)) { cat("nothing to add\n"); quit(status = 0) }
+# WRITE BEFORE EXITING. This used to quit outright when nothing was missing,
+# which is correct for the addition step and now discards the name backfill
+# above it.
+if (!length(miss_ids)) {
+  cat("nothing to add\n")
+  if (.unnamed_before > 0L) { write_parquet(cat0, CAT); cat("wrote the name backfill\n") }
+  quit(status = 0)
+}
 
 miss_nm <- nm[competition_id %chin% miss_ids, .(competition_id, comp_name = competition)]
 n_no_name <- length(miss_ids) - nrow(miss_nm)
@@ -235,6 +273,46 @@ cat_of <- function(x) {
   }
   out[is.na(out)] <- "unclassified"
   out
+}
+# RECLASSIFY WHAT THE BACKFILL JUST NAMED. `class` is regex-matched on the meet
+# name in the BASE builder, which ran before those names existed, so a
+# competition named here still carries `unclassified` from a blank it no longer
+# has. Naming it and leaving the class alone fixes the display and none of the
+# tiering, which is the part that decides whether the model sees the meet at all.
+#
+# Only ever upward, and only from `unclassified`: a meet the base builder
+# positively identified keeps its identification.
+.reclass <- cat0[class == "unclassified" & !is.na(comp_name) & nzchar(comp_name)]
+if (nrow(.reclass)) {
+  .newclass <- cat_of(.reclass$comp_name)
+  .moved <- .newclass != "unclassified"
+  cat(sprintf("
+reclassified %s of %s previously-unclassified named meets
+",
+              format(sum(.moved), big.mark = ","), format(nrow(.reclass), big.mark = ",")))
+  if (any(.moved)) {
+    print(data.table(class = .newclass[.moved])[, .N, by = class][order(-N)][seq_len(min(8L, .N))])
+    .ids <- .reclass$competition_id[.moved]
+    cat0[competition_id %chin% .ids,
+         class := .newclass[.moved][match(competition_id, .ids)]]
+    # and re-apply the knowledge tiers for them, one-way
+    K1 <- c("olympics","world_champs","world_indoor","commonwealth","european_champs")
+    K3 <- c("age_group","club_meet","ncaa_lower","team_champs_lower")
+    .n1 <- cat0[meet_tier == "T1_elite", .N]
+    cat0[competition_id %chin% .ids & class %chin% K1, meet_tier := "T1_elite"]
+    # DEMOTE FROM WHEREVER IT SITS, not just from T1. The base builder puts a
+    # KNOWN_T3 class at T3 outright, so once we learn a meet IS age-group or a
+    # lower NCAA division, T3 is what its tier means - leaving it at T2 states
+    # two contradictory things at once, and augment_catalogue_wa_codes.R asserts
+    # against exactly that ("a named development meet was lifted"). Its anchor
+    # caught this and stopped the chain, which is the anchor working.
+    cat0[competition_id %chin% .ids & class %chin% K3 &
+         meet_tier != "T3_development", meet_tier := "T3_development"]
+    cat(sprintf("T1 after reclassification: %s (was %s)
+",
+                format(cat0[meet_tier == "T1_elite", .N], big.mark = ","),
+                format(.n1, big.mark = ",")))
+  }
 }
 miss_nm[, class := cat_of(comp_name)]
 cat("\nname-based classification of the missing competitions:\n")
