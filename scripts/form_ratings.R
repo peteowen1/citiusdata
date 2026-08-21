@@ -486,6 +486,38 @@ KPOW <- .env_num("SEQ_KPOW", 0)
 #
 # `technical` and `tactical` are already in the event registry and have never
 # been used by this model. ADJ = 0 is the current behaviour exactly.
+#
+# TESTED IN BOTH DIRECTIONS 2026-08-22 AND REFUTED. LEAVE AT 0. Six arms, two
+# windows, scored per family with the five untouched families as a control -
+# they came back exactly 0.000 everywhere, so the arms differ by this parameter
+# alone and the rest can be read.
+#
+#   ADJ           jump 25 / 26      throw 25 / 26     distance 25 / 26
+#   +0.05        -0.046 / -0.073   -0.039 / -0.032   +0.018 / -0.002
+#   +0.10        -0.085 / -0.155   -0.092 / -0.035   +0.018 / -0.007
+#   +0.15        -0.162 / -0.296   -0.149 / -0.115   +0.057 / -0.077
+#   -0.05        +0.013 / +0.008   -0.014 / -0.004   -0.038 / -0.068
+#   -0.10        -0.026 / +0.008   -0.001 / -0.020   -0.080 / -0.138
+#   -0.15        -0.048 / -0.002   -0.022 / -0.021   -0.169 / -0.191
+#
+# Raising the ceiling for technical events HURTS, consistently and
+# monotonically. Lowering it does nothing. Raising it for tactical events (which
+# is what a negative ADJ does) hurts them. CEIL = 0.30 is at or near the optimum
+# for every family and does not want to vary.
+#
+# THE MECHANISM IN THE FRAMING ABOVE IS BACKWARDS, and the reason is worth
+# keeping. A field-event mark is ALREADY a maximum: jumps store one row per
+# athlete per competition 93.5% of the time and throws 96.7%, because the
+# six-attempt series is collapsed to its best before the model sees it, while
+# sprints and hurdles carry 1.26-1.28 rows from heats and semis. So the ceiling
+# blend takes a max OF a max in exactly the families where the framing says to
+# lean on it harder - and on the noisiest measurement in the corpus, throw
+# within-athlete sd 0.05793 and jump 0.03425 against sprint 0.01902.
+#
+# That also explains an anomaly check_ceiling_bias.R could not: jumps show the
+# largest gap between best and rating (0.951 sd) on a median of only 1.9 races,
+# which is impossible under a max-of-n story and obvious once each "race" is
+# itself a best-of-six.
 CEILADJ <- .env_num("SEQ_CEILADJ", 0)
 # SEQ_SEEDHLPOW  scale the SEED half-life by how often the event is contested:
 #   hl_event = SEEDHL * (event median race gap / median across events) ^ POW
