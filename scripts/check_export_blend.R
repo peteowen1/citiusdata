@@ -167,7 +167,7 @@ cat("\n=== the athletes that prompted this ===\n")
 # the configuration that ties the published precision@10 while still borrowing
 # for thin records: mincor 0.30, xb 1.0, and only athletes with n_eff <= 8
 b <- blend(0.30, 1, 6L, 8)
-d <- setDT(read_parquet(file.path(D, "form_display_final.parquet")))
+d <- setDT(read_parquet(file.path(D, sprintf("form_display_%s.parquet", TAG))))
 nm <- unique(d[, .(athlete_id = as.character(athlete_id), athlete_name)])
 for (tab in list(list(t = act, k = "z", lab = "published"),
                  list(t = b,   k = "z_blend", lab = "blended 0.30/1/6, maxn 8"))) {

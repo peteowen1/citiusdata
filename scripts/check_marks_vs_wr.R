@@ -16,6 +16,14 @@
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D <- here::here("citiusdata", "data")
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
 
 # "1:40.91" / "2:00:35" / "9.58" -> numeric seconds; a bare field mark passes
 # through unchanged. Anything unparseable becomes NA rather than a wrong number.
@@ -35,7 +43,7 @@ wr[, wr_num := to_num(mark)]
 stopifnot("some world records did not parse" = !any(is.na(wr$wr_num)))
 cat(sprintf("world records parsed: %d\n", nrow(wr)))
 
-d <- setDT(read_parquet(file.path(D, "form_display_final.parquet")))
+d <- setDT(read_parquet(file.path(D, sprintf("form_display_%s.parquet", TAG))))
 d <- d[is.finite(pred_mark)]
 x <- merge(d, wr[, .(event_id, mark, holder, wr_num)], by = "event_id")
 stopifnot("nothing merged - event id conventions differ" = nrow(x) > 0)

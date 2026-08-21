@@ -65,7 +65,7 @@ if ("state_tag" %chin% names(sim)) {
 sim[, athlete_id := as.character(athlete_id)]
 comp <- setDT(read_parquet(file.path(D, "combined_components.parquet")))
 comp[, athlete_id := as.character(athlete_id)]
-d   <- setDT(read_parquet(file.path(D, "form_display_final.parquet")))
+d   <- setDT(read_parquet(file.path(D, sprintf("form_display_%s.parquet", TAG))))
 nm  <- unique(d[, .(athlete_id = as.character(athlete_id), athlete_name)])
 
 .deployed <- function(nm_) {

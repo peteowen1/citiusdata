@@ -23,6 +23,14 @@
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D <- here::here("citiusdata", "data")
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
 
 c0 <- setDT(read_parquet(file.path(D, "athletics_corpus.parquet"),
                          col_select = c("athlete_id","event_id","date","place","round",
@@ -86,7 +94,7 @@ cat(sprintf("ranked in any event at all           : %d of %d (%.1f%%)\n",
 # The distinction that matters for what to DO: an athlete we have no recent
 # results for needs harvesting, and one we have results for but did not rate
 # needs a code fix. They look identical on the page.
-st <- setDT(read_parquet(file.path(D, "seqv2_state_final.parquet")))
+st <- setDT(read_parquet(file.path(D, sprintf("seqv2_state_%s.parquet", TAG))))
 st[, athlete_id := as.character(athlete_id)]
 sm <- st[, .(rated_last = max(last), rated_neff = max(n_eff)), by = .(athlete_id, event_id)]
 cm <- c0[scoreable == TRUE & is.finite(perf),

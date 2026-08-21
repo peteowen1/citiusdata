@@ -12,7 +12,15 @@
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 source(here::here("citiusdata", "scripts", "_env.R"))
 D <- here::here("citiusdata", "data")
-h <- setDT(read_parquet(file.path(D, "seqv3_history_final.parquet")))
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
+h <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG))))
 if (!"r_use" %in% names(h)) h[, r_use := r_pre]
 stopifnot("history is empty" = nrow(h) > 0)
 

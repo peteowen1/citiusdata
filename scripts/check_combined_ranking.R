@@ -166,7 +166,7 @@ cat("measured total only where it does not - the simulation WITH full coverage,\
 cat("which a pure-sim ranking cannot offer.\n")
 
 cat("\n=== where they disagree most: top 10 by each key ===\n")
-d <- setDT(read_parquet(file.path(D, "form_display_final.parquet")))
+d <- setDT(read_parquet(file.path(D, sprintf("form_display_%s.parquet", TAG))))
 nm <- unique(d[, .(athlete_id = as.character(athlete_id), athlete_name)])
 EV <- Sys.getenv("CE_SHOW", "AT-Decathlon-M")
 x <- merge(act[event_id == EV], nm, by = "athlete_id", all.x = TRUE)

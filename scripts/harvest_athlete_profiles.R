@@ -40,6 +40,14 @@ source(here::here("citiusdata", "scripts", "_env.R"))
 ns <- asNamespace("citius")
 
 OUT   <- here::here("citiusdata", "data")
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
 CACHE <- file.path(OUT, "ath_profile_cache")
 dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
 MAX <- .env_int("CITIUS_MAX_PROFILES", "0")
@@ -77,7 +85,7 @@ cat(sprintf("athletes known: %s\n", format(length(ids), big.mark = ",")))
 # an hour), then all T1 elite, then everyone in the scored window, then the long
 # tail of athletes who appear only in old or minor races.
 prio <- function() {
-  hf <- file.path(OUT, "seqv3_history_final.parquet")
+  hf <- file.path(OUT, sprintf("seqv3_history_%s.parquet", TAG))
   if (!file.exists(hf)) return(list())
   h <- setDT(read_parquet(hf, col_select = c("athlete_id","race_key","date","place","rc")))
   h[, athlete_id := as.character(athlete_id)]

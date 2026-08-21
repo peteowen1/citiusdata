@@ -14,13 +14,21 @@ suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 source(here::here("citiusdata", "scripts", "_env.R"))
 D    <- here::here("citiusdata", "data")
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
 EXMAX <- .env_int("RACEVIEW_MAX_FIELD", "40")  # keep worked examples scannable
 MINF <- .env_int("RACE_MIN_FINISHERS", "6")
 FROM <- as.Date(Sys.getenv("RACE_FROM", "2023-01-01"))
 
 am <- setDT(read_parquet(file.path(D, "adjusted_marks.parquet")))
 am[, athlete_id := as.character(athlete_id)]
-d  <- setDT(read_parquet(file.path(D, "form_display_final.parquet")))
+d  <- setDT(read_parquet(file.path(D, sprintf("form_display_%s.parquet", TAG))))
 # NAMES COME FROM THE NAME TABLE, NOT THE RANKINGS. This used to read names out
 # of form_display_final, which holds only currently-ranked athletes - so anyone
 # outside the rankings rendered as "unnamed" on a results page that has nothing

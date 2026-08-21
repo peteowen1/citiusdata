@@ -21,7 +21,15 @@
 #   3. If it is real, how big, and what could it be worth?
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D <- "C:/dev/citiusverse/citiusdata/data"
-h <- setDT(read_parquet(file.path(D, "seqv3_history_final.parquet")))
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
+h <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG))))
 h <- h[seen == TRUE & is.finite(perf) & is.finite(r_pre)]
 # indoor is not in the history; join it from the corpus
 ev <- setdiff(sub("^event_id=", "", list.dirs(file.path(D, "athletics_corpus_store"),

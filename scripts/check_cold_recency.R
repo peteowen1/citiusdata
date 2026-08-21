@@ -4,12 +4,20 @@
 # building, so measure it before recommending it.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D <- "C:/dev/citiusverse/citiusdata/data"
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
 ca <- setDT(as.data.frame(open_dataset(file.path(D, "athletics_careers_store")) |>
        dplyr::select(athlete_id, date, perf, discipline, sex, tier)))
 ca <- ca[!is.na(perf) & is.finite(perf) & !is.na(date)]
 ca[, event_id := paste0("AT-", gsub("[^A-Za-z0-9]", "", discipline), "-", sex)]
 ca[, athlete_id := as.character(athlete_id)]
-h <- setDT(read_parquet(file.path(D, "seqv3_history_final.parquet")))
+h <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG))))
 h[, athlete_id := as.character(athlete_id)]
 cold <- h[year(date) == 2026 & place <= 12 & seen == FALSE,
           .(first_seen = min(date)), by = .(athlete_id, event_id)]
