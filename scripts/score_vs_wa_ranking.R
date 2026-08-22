@@ -21,6 +21,42 @@
 # with placing bonuses - closer to a season-form table than to a rating. If it
 # beats the model on championship fields, the gap is a target, not a curiosity:
 # it is exactly the population LA 2028 projections are made on.
+# RESULT, five championship windows, 2026-08-22, arm `final`:
+#
+#   Tokyo 2020    ranking 10 days before   9,197 pairs  74.61 v 69.91  +4.70
+#   Eugene 2022                4 days      8,402        77.80 v 74.92  +2.88
+#   Budapest 2023             11 days     10,767        78.62 v 75.92  +2.70
+#   Paris 2024                 9 days     12,255        74.50 v 70.85  +3.65
+#   Tokyo 2025                11 days     11,186        76.55 v 74.35  +2.20
+#   pooled                                51,807        76.35 v 73.15  +3.20
+#
+# Floor on the pooled figure is 0.22, so about 14 floors, and every window is
+# positive and outside its own floor. Five for five.
+#
+# NO EVENT SHOWS A REAL LOSS, and the two-window version of this table was
+# misleading about that. On two windows men's javelin sat at -2.50 and looked
+# like a field-event weakness worth chasing; across five it is not in the worst
+# twelve at all, and the worst event is hammer at -0.86 against a floor of 1.29,
+# which is 0.67 of a standard error. That is what the multiple-comparison note
+# below is for - the event table is for direction, never for a finding.
+#
+# On the four-way population (46,538 pairs where every method exists):
+#   model 76.91 | season best 74.13 | WA ranking 73.63 | personal best 73.94
+# Season best beats WA's own published ranking by +0.50 against a floor of 0.23,
+# about 2 floors. On two windows that gap was 1 floor and was correctly reported
+# as a wash; with five it is real but small. Worth stating plainly: the ranking
+# that governs Olympic qualification is a slightly worse predictor of
+# championship finishing order than asking who has run fastest this season.
+#
+# THIS BENCHMARK CANNOT SEE THE DEBUT PRIOR. Arms dp_id and dp_rep return
+# identical figures here to every decimal, which is normally the signature of a
+# scorer reading the wrong file. It is not: `final` returns 76.35 against
+# dp_id's 76.37, so FORM_TAG is honoured. Measured instead
+# (check_wa_pop_cold.R): of 10,201 WA-ranked rows across the five meets, 7 are
+# cold - 0.07%. A top-200 world ranking requires a season of results, so
+# WA-ranked athletes are by construction never debutants, and an arm differing
+# only in the debut prior MUST score identically. Championship fields as a whole
+# are 0.9-6.0% cold; the ranked subset is not.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 source(here::here("citiusdata", "scripts", "_env.R"))

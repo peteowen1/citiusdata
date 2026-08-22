@@ -131,18 +131,32 @@ flush_out <- function(rows) {
   stopifnot("rows arrived without a rank_date" = res[is.na(rank_date), .N] == 0)
   res <- unique(res, by = c("athlete_id", "event_slug", "sex", "rank_date"))
   if (file.exists(OUT)) {
-    old <- setDT(arrow::read_parquet(OUT))
+    # mmap = FALSE IS LOAD-BEARING ON WINDOWS. arrow::read_parquet memory-maps
+    # the file by default, and the mapping stays open after the read - so
+    # write_parquet to that same path dies with "[Windows error 1224] The
+    # requested operation cannot be performed on a file with a user-mapped
+    # section open". It is a latent bug: the very first run creates the file
+    # with nothing to read back, so it only fires on the SECOND run, after a
+    # date has already been checkpointed. Cost a full date of requests to find.
+    old <- setDT(arrow::read_parquet(OUT, mmap = FALSE))
     old <- old[!paste(rank_date, event_slug, sex) %chin%
                  res[, unique(paste(rank_date, event_slug, sex))]]
     res <- rbindlist(list(old, res), use.names = TRUE, fill = TRUE)
+    rm(old); invisible(gc(verbose = FALSE))
   }
-  arrow::write_parquet(res, OUT)
+  # write beside, then move into place, so an interrupted write cannot leave a
+  # truncated file where a good one used to be
+  tmp <- paste0(OUT, ".tmp")
+  arrow::write_parquet(res, tmp)
+  if (!file.rename(tmp, OUT)) {
+    file.copy(tmp, OUT, overwrite = TRUE); unlink(tmp)
+  }
   invisible(TRUE)
 }
 
 # already held, so a resumed run does not re-request what it has
 held <- if (file.exists(OUT)) {
-  o0 <- setDT(arrow::read_parquet(OUT))
+  o0 <- setDT(arrow::read_parquet(OUT, mmap = FALSE))
   o0[, unique(paste(as.character(rank_date), event_slug, sex))]
 } else character(0)
 if (length(held))
@@ -181,7 +195,7 @@ stopifnot("rows arrived without a rank_date" = res[is.na(rank_date), .N] == 0)
 res <- unique(res, by = c("athlete_id", "event_slug", "sex", "rank_date"))
 
 if (file.exists(OUT)) {
-  old <- setDT(arrow::read_parquet(OUT))
+  old <- setDT(arrow::read_parquet(OUT, mmap = FALSE))   # see flush_out: Windows
   old <- old[!paste(rank_date, event_slug, sex) %chin%
                res[, unique(paste(rank_date, event_slug, sex))]]
   res <- rbindlist(list(old, res), use.names = TRUE, fill = TRUE)
