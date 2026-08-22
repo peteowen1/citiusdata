@@ -62,8 +62,21 @@ h <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG))))
 if (!"r_use" %chin% names(h)) h[, r_use := r_pre]
 h[!is.finite(r_use), r_use := r_pre]
 h[, athlete_id := as.character(athlete_id)]
-h <- h[is.finite(r_use) & is.finite(place) & place > 0]
+h <- h[is.finite(r_use) & is.finite(place) & place > 0 & is.finite(perf)]
 h[, date := as.Date(date)]
+
+# --- season best and personal best, walk-forward ----------------------------
+# COMPUTED ON THE FULL HISTORY, before any restriction to the championship
+# window. An athlete arrives at a final carrying the marks from their whole
+# season and career, most of them set at meets outside this window - building
+# these inside the subset would invent a season best nobody has and would
+# flatter the model, since the baseline would be blind to marks the model saw.
+# shift() puts both strictly before the race being predicted. cummax is right
+# because perf is oriented log, so higher is better in every event.
+setorder(h, athlete_id, event_id, date, race_key)
+h[, yr := year(date)]
+h[, sb := shift(cummax(perf)), by = .(athlete_id, event_id, yr)]
+h[, pb := shift(cummax(perf)), by = .(athlete_id, event_id)]
 
 # THE EVENT_ID THE MAP BUILDS MUST EXIST IN THE HISTORY. If a stem is misspelt
 # the join returns nothing for that event and the benchmark quietly covers
@@ -106,21 +119,41 @@ score_meet <- function(i) {
   # populations, and the model would win on the strength of the easier field.
   # This is the same restriction that made the season-best comparison honest.
   p <- d[!is.na(wa_place)]
-  a <- p[, .(rid = .GRP, i = seq_len(.N), place, r_use, wa_place,
+  a <- p[, .(rid = .GRP, i = seq_len(.N), place, r_use, wa_place, sb, pb,
              event_id, rc), by = race_key]
   m <- merge(a, a, by = "rid", allow.cartesian = TRUE, suffixes = c(".x", ".y"))
   m <- m[i.x < i.y & place.x != place.y]
   if (!nrow(m)) return(NULL)
   won <- m$place.x < m$place.y
-  # higher rating is better; LOWER wa_place is better
-  cm <- fifelse(m$r_use.x    == m$r_use.y,    0.5, as.numeric((m$r_use.x > m$r_use.y) == won))
-  cw <- fifelse(m$wa_place.x == m$wa_place.y, 0.5, as.numeric((m$wa_place.x < m$wa_place.y) == won))
-  m[, `:=`(cm = cm, cw = cw)]
+  # higher rating and higher mark are better; LOWER wa_place is better
+  cc <- function(x, y) fifelse(x == y, 0.5, as.numeric((x > y) == won))
+  m[, `:=`(cm = cc(r_use.x, r_use.y),
+           cw = fifelse(wa_place.x == wa_place.y, 0.5,
+                        as.numeric((wa_place.x < wa_place.y) == won)),
+           cs = cc(sb.x, sb.y),
+           cp = cc(pb.x, pb.y))]
 
   n <- nrow(m)
-  cat(sprintf("  %s pairs | model %.2f | WA ranking %.2f | edge %+.2f (floor %.2f)\n",
-              format(n, big.mark = ","), 100 * mean(cm), 100 * mean(cw),
-              100 * (mean(cm) - mean(cw)), 100 * sqrt(0.25 / n)))
+  cat(sprintf("  %s pairs | model %.2f | WA %.2f | edge %+.2f (floor %.2f)\n",
+              format(n, big.mark = ","), 100 * mean(m$cm), 100 * mean(m$cw),
+              100 * (mean(m$cm) - mean(m$cw)), 100 * sqrt(0.25 / n)))
+
+  # FOUR METHODS NEED ONE POPULATION. Season best and personal best do not exist
+  # for a debutant or for an athlete's first race of a season, so requiring them
+  # drops pairs that the model-against-WA comparison above can keep. Scoring all
+  # four on the union would compare them on four different fields. So this
+  # narrows to the rows where ALL FOUR predictors exist and re-reports every
+  # method there, including the two already shown - the model and WA figures
+  # will move, and that movement is the cost of the restriction, not a result.
+  q <- m[is.finite(sb.x) & is.finite(sb.y) & is.finite(pb.x) & is.finite(pb.y)]
+  if (nrow(q) > 200) {
+    nq <- nrow(q)
+    cat(sprintf("  of those, %s pairs carry a season best AND a personal best for both athletes (%.0f%%)\n",
+                format(nq, big.mark = ","), 100 * nq / n))
+    cat(sprintf("    model %.2f | WA %.2f | seas best %.2f | pers best %.2f (floor %.2f)\n",
+                100 * mean(q$cm), 100 * mean(q$cw), 100 * mean(q$cs),
+                100 * mean(q$cp), 100 * sqrt(0.25 / nq)))
+  }
   m[, meet := M$meet]
   m[]
 }
@@ -134,6 +167,18 @@ n <- nrow(res)
 cat(sprintf("%s pairs | model %.2f | WA %.2f | edge %+.2f (floor %.2f)\n",
             format(n, big.mark = ","), 100 * mean(res$cm), 100 * mean(res$cw),
             100 * (mean(res$cm) - mean(res$cw)), 100 * sqrt(0.25 / n)))
+
+cat("\n=== pooled, on the pairs where all four methods exist ===\n")
+q <- res[is.finite(sb.x) & is.finite(sb.y) & is.finite(pb.x) & is.finite(pb.y)]
+if (nrow(q) > 200) {
+  nq <- nrow(q)
+  cat(sprintf("%s pairs | model %.2f | WA %.2f | seas best %.2f | pers best %.2f (floor %.2f)\n",
+              format(nq, big.mark = ","), 100 * mean(q$cm), 100 * mean(q$cw),
+              100 * mean(q$cs), 100 * mean(q$cp), 100 * sqrt(0.25 / nq)))
+  cat(sprintf("edges: over WA %+.2f | over season best %+.2f | over personal best %+.2f\n",
+              100 * (mean(q$cm) - mean(q$cw)), 100 * (mean(q$cm) - mean(q$cs)),
+              100 * (mean(q$cm) - mean(q$cp))))
+}
 
 cat("\n=== by round ===\n")
 res[, rnd := fifelse(grepl("final", rc.x, ignore.case = TRUE) &
