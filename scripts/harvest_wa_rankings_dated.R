@@ -31,12 +31,21 @@ UA    <- "citiusverse research (github.com/peteowen1)"
 # do not map onto their url slugs by any rule, and guessing would produce 404s
 # that look like missing data.
 EVENTS <- data.table(
+  # NO STEEPLECHASE. It is not published as a world ranking. Probed 2026-08-22
+  # across six candidate slugs - 3000mSC, 3000m-steeplechase, 3000msc, 3000m-sc,
+  # 3000-metres-steeplechase (which is the slug the site's own results selector
+  # uses), steeplechase, 3000mst - each against three dates the 100m control
+  # returned 100 athletes on. Every one came back HTTP 200 with the 364k empty
+  # page shell and zero athlete links. Asking anyway cost 12 failed requests per
+  # run and made the failure count look like a fault. Leaving it out and
+  # recording the benchmark as 19 of 20 events is the honest version.
   slug = c("100m","200m","400m","800m","1500m","5000m","10000m","marathon",
-           "110mh","100mh","400mh","3000mSC","high-jump","pole-vault",
+           "110mh","100mh","400mh","high-jump","pole-vault",
            "long-jump","triple-jump","shot-put","discus-throw","hammer-throw",
            "javelin-throw"),
+  # 110mh is men only and 100mh women only; everything else is both.
   sexes = c("men,women","men,women","men,women","men,women","men,women","men,women",
-            "men,women","men,women","men","women","men,women","men,women",
+            "men,women","men,women","men","women","men,women",
             "men,women","men,women","men,women","men,women","men,women",
             "men,women","men,women","men,women"))
 

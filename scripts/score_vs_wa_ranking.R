@@ -90,16 +90,46 @@ stopifnot("the slug map builds event_ids that do not exist in the history" =
 # ranking harvested for these two meets specifically, and a tier filter would
 # quietly pull in meets no ranking was fetched for.
 MEETS <- data.table(
-  meet = c("Paris 2024", "Tokyo 2025"),
-  from = as.Date(c("2024-08-01", "2025-09-13")),
-  to   = as.Date(c("2024-08-11", "2025-09-21")),
-  rank_date = as.Date(c("2024-07-23", "2025-09-02")))
+  meet = c("Tokyo 2020", "Eugene 2022", "Budapest 2023", "Paris 2024", "Tokyo 2025"),
+  from = as.Date(c("2021-07-30", "2022-07-15", "2023-08-19", "2024-08-01", "2025-09-13")),
+  to   = as.Date(c("2021-08-08", "2022-07-24", "2023-08-27", "2024-08-11", "2025-09-21")))
 
-# THE RANKING MUST PREDATE THE RACE. Asserted, not assumed - a ranking dated
-# during or after the meet contains the result it is being scored on, and would
-# produce a WA figure far above anything real.
+# THE RANKING DATE IS CHOSEN FROM THE DATA, NOT WRITTEN DOWN. Rankings pause
+# around championships, so the harvester probes backwards from the requested
+# date until it finds a published one - and it can land days or weeks earlier
+# than asked. Tokyo 2025 needed 10 days. Hardcoding the resolved date here means
+# every new meet carries a second number that has to be kept in step with what
+# the harvest actually returned, and if the two drift the join simply returns
+# nothing for that meet.
+#
+# So take the LATEST published ranking strictly before the meet opens. Strictly:
+# a ranking dated during the meet contains the results it is being scored on.
+avail <- sort(unique(w$rank_date))
+MEETS[, rank_date := as.Date(vapply(from, function(f) {
+  ok <- avail[avail < f]
+  if (!length(ok)) NA_character_ else as.character(max(ok))
+}, character(1)))]
+
+cat("=== ranking date chosen for each meet ===\n")
+print(MEETS[, .(meet, from, rank_date,
+                days_before = as.integer(from - rank_date))])
+miss <- MEETS[is.na(rank_date), meet]
+if (length(miss))
+  cat(sprintf("no ranking harvested before %s - dropped\n",
+              paste(miss, collapse = ", ")))
+MEETS <- MEETS[!is.na(rank_date)]
+stopifnot("no meet has a ranking before it" = nrow(MEETS) > 0)
 stopifnot("a ranking is dated on or after its meet - that is leakage" =
             MEETS[, all(rank_date < from)])
+
+# A RANKING FROM LONG BEFORE THE MEET IS A WEAKER BENCHMARK, NOT A BROKEN ONE,
+# but it should be visible rather than buried - a ranking 60 days stale is
+# being asked to predict races two months later, and if one meet is scored on a
+# much older ranking than the others its column is not comparable.
+stale <- MEETS[as.integer(from - rank_date) > 45]
+if (nrow(stale))
+  cat(sprintf("NOTE: %s scored on a ranking %d days old\n",
+              stale$meet, as.integer(stale$from - stale$rank_date)))
 
 score_meet <- function(i) {
   M <- MEETS[i]

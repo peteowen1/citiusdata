@@ -887,8 +887,27 @@ ENGINE_SHA <- if (file.exists(ENGINE_SRC))
 #   T2_strong 6,350,370 common pairs   69.923 -> 69.573   -0.350  (floor 0.020)
 #
 # Neutral where it was supposed to help - exactly one noise floor at T1 - and a
-# real loss of 17.6 floors overall. Keep 2020. The extra decade buys measurement
-# sample, not accuracy, and costs accuracy outside the elite tier.
+# real loss of 17.6 floors overall.
+#
+# DO NOT READ THAT AS "THE OLDER DATA IS WORTHLESS". It is not a verdict on the
+# data at all; it is the debut prior at MU below reacting to the window. Split
+# by whether the athletes carry pre-2020 history (check_from2010_where.R):
+#
+#   neither athlete has any   4,325,915 pairs   -0.412   17.2 floors
+#   one does                  1,410,050 pairs   -0.292    7.0 floors
+#   both do                     614,405 pairs   -0.046    inside the floor
+#
+# The damage lands on athletes about whom the two arms hold IDENTICAL evidence,
+# and misses the ones actually carrying a decade of extra form. That is
+# backwards from stale-form decay and forwards from an era-blind debut prior:
+# established athletes never touch MU, debutants are seeded at it. Widening the
+# window moved MU by 0.135 sd of within-race spread, and debuts are 12-20% of
+# rows a year.
+#
+# So the start date is UNRESOLVED, not rejected. Testing it honestly needs a
+# dated debut prior first - otherwise the experiment measures MU moving, not the
+# value of the data. Keeping 2020 as the default meanwhile because it is what
+# every committed result was produced under, not because 2010 was disproved.
 #
 # THE FIRST VERSION OF THIS TEST WAS CONFOUNDED and reported -0.393 / -0.992.
 # It compared from2010 against `final`, and `final` carries cross-event seeding
@@ -1197,6 +1216,21 @@ cat(sprintf("[%s] %s rows | %s races | %s athlete-events\n", TAG,
     format(nrow(d), big.mark=","), format(uniqueN(d$race_key), big.mark=","),
     format(uniqueN(paste(d$athlete_id, d$event_id)), big.mark=",")))
 
+# THE DEBUT PRIOR, AND IT IS ERA-BLIND. Every athlete with no prior rating in an
+# event is seeded at exactly this value (see the `is.null(v)` branch in the
+# sweep), so MU is the starting rating for 12-20% of rows every year. It is a
+# flat mean over the WHOLE loaded corpus, which makes it sensitive to the
+# corpus's own composition rather than to what a debutant is currently worth:
+# measured 2026-08-22, the 2020+ mean sits 0.135 sd of within-race spread from
+# the 2010+ mean, and the 2024+ mean a further 0.154 sd from the 2020+ one, in
+# 56 of 59 events in the same direction. Recent years carry more T2 meets, so
+# the mean drifts with coverage as much as with the sport.
+#
+# That makes MU stale for a current debutant even at the deployed window, and it
+# is what sank the from2010 arm (see SEQ_FROM above) - not the age of the data.
+# A dated prior - the event mean over a trailing window ending before the race -
+# is the obvious fix and is untested. Anything that changes the corpus span must
+# be judged against a dated prior, or it just measures this line moving.
 MU <- d[, .(mu = mean(perf)), by = event_id]; MUv <- setNames(MU$mu, MU$event_id)
 # variance prior: within-race spread per event (median of race-level var), the
 # broadest honest starting uncertainty -- narrows only with an athlete's own evidence
