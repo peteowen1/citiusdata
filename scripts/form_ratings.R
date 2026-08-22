@@ -858,7 +858,28 @@ ENGINE_SRC <- local({
 })
 ENGINE_SHA <- if (file.exists(ENGINE_SRC))
   digest::digest(file = ENGINE_SRC, algo = "sha256") else "unknown"
-FROM <- as.Date("2020-01-01")
+# HOW FAR BACK THE ENGINE READS. This was a bare constant with no comment for
+# most of the project's life, and the data behind it is not missing:
+# championship_results.rds spans 1982 to 2026 and the corpus store reaches 1974.
+# The cut was a choice, not a limit, and it costs elite sample - only 95 T1
+# competitions fall after 2020, against 210 after 2010.
+#
+# Measured (check_earlier_start.R, 2026-08-22), against the 2020 baseline:
+#   from 2010   2.19x the T1 rows   1.44x the total rows
+#   from 2012   2.01x               1.40x
+#   from 2016   1.56x               1.26x
+# The T1 concordance floor falls as 1/sqrt of the elite multiplier, so 2010
+# takes it from 0.13 to about 0.088. Before 2010 the elite coverage is 1-4
+# meets a year against 9-15 after, so an earlier start buys thin years and
+# sequential work rather than sample.
+#
+# TWO SEPARATE EFFECTS, AND ONLY ONE IS A MODEL CHANGE. More history gives
+# athletes longer careers going into the races we already score - that is a
+# model change and must be tested on the pairs BOTH arms share. It also adds
+# elite pairs to measure on, which lowers the floor without the model having
+# improved at all. Do not read the second as the first.
+FROM <- as.Date(Sys.getenv("SEQ_FROM", "2020-01-01"))
+stopifnot("SEQ_FROM is not a readable date" = !is.na(FROM))
 
 cat0 <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
 cat0[, competition_id := as.character(competition_id)]
