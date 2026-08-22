@@ -68,6 +68,13 @@ s <- merge(s, reg, by = "event_id", all.x = TRUE)
 cat(sprintf("scored races %s | athlete-races %s\n",
             format(uniqueN(s$race_key), big.mark = ","),
             format(nrow(s), big.mark = ",")))
+# FAIL LOUDLY ON AN EMPTY JOIN. Run against an arm with no h2h file for that
+# tag, the head-to-head merge drops every row, this prints "scored races 0"
+# and the script carries on to die several steps later with an unrelated-
+# looking error about a missing column. Zero scored races is never a valid
+# state, and the obscure downstream error is what makes it expensive.
+stopifnot("no scored races - a join dropped everything, most likely the h2h file for this FORM_TAG" =
+            nrow(s) > 1000)
 
 score <- function(dt) {
   if (!nrow(dt)) return(NULL)

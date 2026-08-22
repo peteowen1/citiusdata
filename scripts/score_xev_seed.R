@@ -28,8 +28,10 @@ YRS  <- as.integer(strsplit(Sys.getenv("XEV_YEARS", "2025,2026"), ",")[[1]])
 pairset <- function(tag, yr) {
   f <- file.path(OUT, sprintf("seqv3_history_%s.parquet", tag))
   stopifnot("missing arm" = file.exists(f))
-  d <- setDT(read_parquet(f, col_select = c("race_key","athlete_id","date","r_pre",
-                                            "r_use","place","perf","seen")))
+  d <- setDT(read_parquet(f, col_select = c("race_key","athlete_id","event_id","date",
+                                            "r_pre","r_use","place","perf","seen")))
+  d <- merge(d, as.data.table(citius::citius_events())[, .(event_id, family)],
+             by = "event_id", all.x = TRUE)
   if (!"r_use" %chin% names(d)) d[, r_use := r_pre]
   d[!is.finite(r_use), r_use := r_pre]
   d <- d[seen == TRUE & is.finite(r_use) & is.finite(place) & place > 0 &
@@ -37,7 +39,7 @@ pairset <- function(tag, yr) {
   dup <- d[, .(n = .N, marks = uniqueN(round(perf, 9))), by = .(race_key, place)][
            n > 1 & marks > 1, unique(race_key)]
   d <- d[!race_key %chin% dup]
-  a <- d[, .(rid = .GRP, i = seq_len(.N), place, r_use, athlete_id), by = race_key]
+  a <- d[, .(rid = .GRP, i = seq_len(.N), place, r_use, athlete_id, family), by = race_key]
   m <- merge(a, a, by = "rid", allow.cartesian = TRUE, suffixes = c(".x", ".y"))
   m <- m[i.x < i.y & place.x != place.y]
   dd <- m$r_use.x - m$r_use.y
@@ -46,7 +48,7 @@ pairset <- function(tag, yr) {
   # race_key is suffixed by the self-merge like every other shared column
   m[, pid := paste(race_key.x, pmin(athlete_id.x, athlete_id.y),
                    pmax(athlete_id.x, athlete_id.y), sep = "|")]
-  m[, .(pid, cw)]
+  m[, .(pid, cw, family = family.x)]
 }
 
 for (yr in YRS) {
@@ -71,6 +73,27 @@ for (yr in YRS) {
   out[, new_floor := round(100 * sqrt(0.25 / pmax(new_pairs, 1)), 3)]
   print(out[, .(arm, common_pairs, common, common_vs_base, common_floor,
                 new_pairs, new, new_floor, all_pairs, all)])
+}
+
+# --- the same split, PER FAMILY -------------------------------------------
+# THE CONTROL THAT MATTERS. Seeding only touches athletes who had no rating, so
+# the COMMON pairs should be near-flat in every family. A family whose common
+# pairs move materially is one where the seed is perturbing races it has no
+# business in, and that would be a reason not to promote regardless of how good
+# the new pairs look.
+for (yr in YRS) {
+  b <- pairset(BASE, yr); setkey(b, pid)
+  x <- pairset(tail(ARMS, 1), yr); setkey(x, pid)
+  common <- x[b, nomatch = NULL]
+  newp   <- x[!b, on = "pid"]
+  cf <- common[, .(common_pairs = .N, common = round(100 * mean(cw), 3),
+                   base = round(100 * mean(i.cw), 3)), by = family]
+  cf[, vs_base := round(common - base, 3)]
+  cf[, floor := round(100 * sqrt(0.25 / common_pairs), 3)]
+  nf <- newp[, .(new_pairs = .N, new = round(100 * mean(cw), 2)), by = family]
+  cat(sprintf("\n=== %d, per family: %s against %s ===\n", yr, tail(ARMS, 1), BASE))
+  print(merge(cf[, .(family, common_pairs, vs_base, floor)], nf,
+              by = "family", all = TRUE)[order(-new_pairs)])
 }
 
 cat("\nREAD IT LIKE THIS. `common_vs_base` is whether the model changed on the\n")
