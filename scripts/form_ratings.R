@@ -878,6 +878,25 @@ ENGINE_SHA <- if (file.exists(ENGINE_SRC))
 # model change and must be tested on the pairs BOTH arms share. It also adds
 # elite pairs to measure on, which lowers the floor without the model having
 # improved at all. Do not read the second as the first.
+#
+# TESTED AND REJECTED, 2026-08-22. Arms from2010 and from2020, identical engine
+# source and identical config, differing only in this date, scored on the pairs
+# both share from 2021 on:
+#
+#   T1_elite    253,121 common pairs   75.777 -> 75.876   +0.099  (floor 0.099)
+#   T2_strong 6,350,370 common pairs   69.923 -> 69.573   -0.350  (floor 0.020)
+#
+# Neutral where it was supposed to help - exactly one noise floor at T1 - and a
+# real loss of 17.6 floors overall. Keep 2020. The extra decade buys measurement
+# sample, not accuracy, and costs accuracy outside the elite tier.
+#
+# THE FIRST VERSION OF THIS TEST WAS CONFOUNDED and reported -0.393 / -0.992.
+# It compared from2010 against `final`, and `final` carries cross-event seeding
+# while a bare run does not - so it measured the missing seeding, not the start
+# date. The tell was that from2020, run with no options at all, came out
+# BYTE-IDENTICAL to the xev_id arm. Cross-event seeding prints "cross-event
+# seed:" and a bare run prints only "seed:", which is how the two were finally
+# told apart. When comparing arms, diff the run logs, not the arm names.
 FROM <- as.Date(Sys.getenv("SEQ_FROM", "2020-01-01"))
 stopifnot("SEQ_FROM is not a readable date" = !is.na(FROM))
 
