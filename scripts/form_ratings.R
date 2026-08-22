@@ -1254,6 +1254,41 @@ MU <- d[, .(mu = mean(perf)), by = event_id]; MUv <- setNames(MU$mu, MU$event_id
 # its own prior. The first year of the corpus therefore has nothing to learn
 # from and falls back to MU, which is correct rather than unfortunate - the
 # alternative is a prior fitted on the races it is scored against.
+# MEASURED 2026-08-22, arms dp_id / dp_rep / dp_tier, common pairs from 2021.
+# The identity arm first: with SEQ_DEBUT_PRIOR=mean the engine is BYTE-IDENTICAL
+# to the pre-change build - same sha256, same 83,502,864 bytes - so everything
+# below is the prior and nothing else.
+#
+# By how much of each pair is cold, the only slice a debut prior can reach:
+#   neither cold  4,637,002 pairs  77.230 -> 77.230   0.000
+#   one side cold 1,476,510 pairs  54.590 -> 60.754  +6.165   150 floors
+#   both cold       489,979 pairs  50.000 -> 50.000   0.000
+#
+# The two zeros were written down as predictions before the run and are
+# mechanically necessary, not lucky: a debutant is seeded with n_eff = 0, so the
+# prior carries NO weight in the posterior update. It changes the prediction for
+# the debut race and never propagates - hence established athletes untouched to
+# the last decimal, and two debutants still tying. That last point retires an
+# earlier claim: both-cold scoring exactly 50.00 was reported as "the honest
+# expectation for two unknown athletes" when it is an artefact of them sharing a
+# seed. It is still 50.00 here, and still an artefact.
+#
+# By tier, which decides what this is worth:
+#   T2_strong  6,350,370 pairs  69.923 -> 71.359  +1.436   72 floors
+#   T1_elite     253,121 pairs  75.777 -> 75.711  -0.067   inside the floor
+#   weighted sealed             72.820 -> 73.862  +1.042   about 6.5 floors
+#
+# A large correctness win across the corpus and a NON-EVENT at elite level. T1
+# debuts are 588 of 228,164 - championship fields are established athletes, so
+# there is almost nothing here for a debut prior to act on. Adopt it because the
+# old prior was wrong by 1.553 sd on 17.3% of rows, not because it improves
+# championship ordering, which it does not.
+#
+# replacement_tier is NOT adopted: within noise of plain replacement everywhere
+# (T2 +1.475 vs +1.436, T1 -0.126 vs -0.067) and slightly worse on the deployed
+# weighted metric. The 1.2 sd gap between T1 and T2 debut levels that motivated
+# it is real, but acts on 0.26% of debuts - the effect was sized without
+# weighting it by the population it applies to.
 DEBUT_PRIOR <- Sys.getenv("SEQ_DEBUT_PRIOR", "mean")
 stopifnot("SEQ_DEBUT_PRIOR must be mean, replacement or replacement_tier" =
             DEBUT_PRIOR %chin% c("mean", "replacement", "replacement_tier"))
