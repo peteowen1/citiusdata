@@ -1232,6 +1232,65 @@ cat(sprintf("[%s] %s rows | %s races | %s athlete-events\n", TAG,
 # is the obvious fix and is untested. Anything that changes the corpus span must
 # be judged against a dated prior, or it just measures this line moving.
 MU <- d[, .(mu = mean(perf)), by = event_id]; MUv <- setNames(MU$mu, MU$event_id)
+
+# ---- REPLACEMENT-LEVEL DEBUT PRIOR -----------------------------------------
+# SEQ_DEBUT_PRIOR: mean | replacement | replacement_tier   (default mean = the
+# old behaviour, so every committed arm reproduces byte-for-byte).
+#
+#   mean              seed a debutant at MU, the population mean. Biased: MU is
+#                     dominated by established athletes, and a debutant runs
+#                     1.553 sd of within-race spread below it in 55 of 56
+#                     events, on 17.3% of rows.
+#   replacement       seed at the mean of DEBUT performances in the event.
+#   replacement_tier  the same, split by the tier of the meet they debut at.
+#                     Measured gap: T1 debut -0.512 sd against the old prior,
+#                     T2 debut -1.705 - so the entry point carries about 1.2 sd
+#                     that a single flat number throws away. Field size was also
+#                     tested and carries nothing (-1.59 to -1.75 across every
+#                     size band), so it is deliberately not a conditioner.
+#
+# WALK-FORWARD BY CONSTRUCTION. The level for a race in year Y is built only
+# from debuts in years STRICTLY EARLIER than Y, so a debut never contributes to
+# its own prior. The first year of the corpus therefore has nothing to learn
+# from and falls back to MU, which is correct rather than unfortunate - the
+# alternative is a prior fitted on the races it is scored against.
+DEBUT_PRIOR <- Sys.getenv("SEQ_DEBUT_PRIOR", "mean")
+stopifnot("SEQ_DEBUT_PRIOR must be mean, replacement or replacement_tier" =
+            DEBUT_PRIOR %chin% c("mean", "replacement", "replacement_tier"))
+RLT <- new.env(hash = TRUE, parent = emptyenv())   # event|tier|year
+RLE <- new.env(hash = TRUE, parent = emptyenv())   # event|year
+if (DEBUT_PRIOR != "mean") {
+  .fd <- d[, .(first_date = min(date)), by = .(athlete_id, event_id)]
+  .db <- merge(d[, .(athlete_id, event_id, date, perf, meet_tier)], .fd,
+               by = c("athlete_id", "event_id"))
+  .db <- .db[date == first_date & is.finite(perf)]
+  .db[, yr := year(date)]
+  stopifnot("no debut rows found - the first_date join is wrong" = nrow(.db) > 0)
+
+  # expanding mean over strictly earlier years, per event and per event-tier
+  .mk <- function(dd, by_cols, env) {
+    g <- dd[, .(s = sum(perf), n = .N), by = c(by_cols, "yr")]
+    setorderv(g, c(by_cols, "yr"))
+    g[, `:=`(cs = cumsum(s) - s, cn = cumsum(n) - n), by = by_cols]
+    g <- g[cn > 0]
+    g[, rl := cs / cn]
+    if (!nrow(g)) return(invisible(0L))
+    ks <- do.call(paste, c(lapply(c(by_cols, "yr"), function(cc) g[[cc]]), sep = "|"))
+    for (i in seq_len(nrow(g))) assign(ks[i], g$rl[i], envir = env)
+    nrow(g)
+  }
+  .n1 <- .mk(.db[!is.na(meet_tier)], c("event_id", "meet_tier"), RLT)
+  .n2 <- .mk(.db,                    "event_id",                 RLE)
+  cat(sprintf("[%s] debut prior '%s': %s debut rows | %s event-tier-year cells | %s event-year cells\n",
+              TAG, DEBUT_PRIOR, format(nrow(.db), big.mark = ","),
+              format(.n1, big.mark = ","), format(.n2, big.mark = ",")))
+  # SAY SO IF IT WILL DO NOTHING. An empty lookup falls through to MU on every
+  # race and the arm then reproduces the baseline exactly, which reads as "the
+  # feature does not help" rather than "the feature never ran".
+  if (.n1 + .n2 == 0)
+    cat(sprintf("[%s] WARNING: debut prior tables are EMPTY - every seed will fall back to MU\n", TAG))
+  rm(.fd, .db)
+}
 # variance prior: within-race spread per event (median of race-level var), the
 # broadest honest starting uncertainty -- narrows only with an athlete's own evidence
 VP <- d[, .(v = var(perf)), by = .(event_id, race_key)][is.finite(v),
@@ -1789,12 +1848,24 @@ for (r_ in seq_along(starts)) {
   dt0n <- Vdaten[i1]; yr <- Vyr[i1]
   a <- z$athlete_id; ev <- z$event_id[1]; kk <- key(a, ev); dt0 <- z$date[1]
   mu <- MUv[[ev]]
+  # The value an athlete with NO prior rating starts at. Under the default this
+  # is mu, exactly as before. Note this branch is reached only when the seeding
+  # steps above left nothing in R for this athlete-event, i.e. a genuine unknown
+  # rather than someone seeded from a sibling event.
+  mu_debut <- mu
+  if (DEBUT_PRIOR != "mean") {
+    .rl <- NULL
+    if (DEBUT_PRIOR == "replacement_tier" && !is.na(z$meet_tier[1]))
+      .rl <- RLT[[paste(ev, z$meet_tier[1], yr, sep = "|")]]
+    if (is.null(.rl)) .rl <- RLE[[paste(ev, yr, sep = "|")]]
+    if (!is.null(.rl) && is.finite(.rl)) mu_debut <- .rl
+  }
   r_pre <- numeric(length(a)); n_eff <- numeric(length(a)); seen <- logical(length(a))
   fam1 <- z$family[1]
   agef <- if (AGEF && !is.na(fam1)) agefun[[fam1]] else NULL
   for (m in seq_along(a)) {
     v <- R[[kk[m]]]
-    if (is.null(v)) { r_pre[m] <- mu; n_eff[m] <- 0; next }
+    if (is.null(v)) { r_pre[m] <- mu_debut; n_eff[m] <- 0; next }
     seen[m] <- TRUE
     gap <- dt0n - LD[[kk[m]]]
     if (!is.null(agef) && !is.na(z$age[m])) {

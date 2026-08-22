@@ -116,15 +116,65 @@ DATES <- unique(stats::na.omit(vapply(DATES, nearest_valid, character(1))))
 stopifnot("none of the requested dates resolved to a published ranking" = length(DATES) > 0)
 cat(sprintf("using: %s%s", paste(DATES, collapse = ", "), "\n"))
 
-for (dt in DATES) for (i in seq_len(nrow(EVENTS))) {
-  for (sx in strsplit(EVENTS$sexes[i], ",")[[1]]) for (pg in seq_len(PAGES)) {
-    x <- fetch_one(EVENTS$slug[i], sx, dt, pg)
-    if (is.null(x)) { n_fail <- n_fail + 1L } else acc[[length(acc) + 1L]] <- x
-    Sys.sleep(PAUSE)
+# CHECKPOINT AFTER EVERY DATE. The first version accumulated every response in
+# memory and wrote once at the very end, so a run killed near the finish lost
+# ALL of it - which happened on 2026-08-22, twelve minutes of deliberately slow,
+# polite requests thrown away three events from the end. For a rate-limited
+# scrape the write has to be incremental: the cost of losing work is measured in
+# other people's bandwidth, not just our time.
+#
+# Writing per date also makes the run resumable, and re-running is cheap because
+# a date already in the file is skipped below rather than re-fetched.
+flush_out <- function(rows) {
+  if (!length(rows)) return(invisible(FALSE))
+  res <- rbindlist(rows, fill = TRUE)
+  stopifnot("rows arrived without a rank_date" = res[is.na(rank_date), .N] == 0)
+  res <- unique(res, by = c("athlete_id", "event_slug", "sex", "rank_date"))
+  if (file.exists(OUT)) {
+    old <- setDT(arrow::read_parquet(OUT))
+    old <- old[!paste(rank_date, event_slug, sex) %chin%
+                 res[, unique(paste(rank_date, event_slug, sex))]]
+    res <- rbindlist(list(old, res), use.names = TRUE, fill = TRUE)
   }
-  cat(sprintf("  %s %-14s done\n", dt, EVENTS$slug[i]))
+  arrow::write_parquet(res, OUT)
+  invisible(TRUE)
 }
-stopifnot("every request failed - check the site before re-running" = length(acc) > 0)
+
+# already held, so a resumed run does not re-request what it has
+held <- if (file.exists(OUT)) {
+  o0 <- setDT(arrow::read_parquet(OUT))
+  o0[, unique(paste(as.character(rank_date), event_slug, sex))]
+} else character(0)
+if (length(held))
+  cat(sprintf("already held: %d date-event-sex combinations, they will be skipped%s",
+              length(held), "\n"))
+
+for (dt in DATES) {
+  per_date <- list()
+  for (i in seq_len(nrow(EVENTS))) {
+    for (sx in strsplit(EVENTS$sexes[i], ",")[[1]]) {
+      if (paste(dt, EVENTS$slug[i], sx) %chin% held) next
+      for (pg in seq_len(PAGES)) {
+        x <- fetch_one(EVENTS$slug[i], sx, dt, pg)
+        if (is.null(x)) { n_fail <- n_fail + 1L } else {
+          per_date[[length(per_date) + 1L]] <- x
+          acc[[length(acc) + 1L]] <- x
+        }
+        Sys.sleep(PAUSE)
+      }
+    }
+    cat(sprintf("  %s %-14s done%s", dt, EVENTS$slug[i], "\n"))
+  }
+  if (flush_out(per_date))
+    cat(sprintf("  checkpointed %s (%d responses)%s", dt, length(per_date), "\n"))
+}
+# Everything is already on disk via the per-date checkpoints; this final block
+# only re-reads and reports. An empty `acc` now means "nothing NEW was fetched",
+# which on a resumed run is success, not failure.
+if (!length(acc)) {
+  cat("nothing new to fetch - every requested date-event-sex is already held\n")
+  quit(status = 0)
+}
 res <- rbindlist(acc, fill = TRUE)
 # THE DATE IS THE POINT. A row without one is useless and must never reach the file.
 stopifnot("rows arrived without a rank_date" = res[is.na(rank_date), .N] == 0)
