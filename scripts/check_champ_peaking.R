@@ -37,7 +37,22 @@ h <- setDT(read_parquet(file.path(OUT, sprintf("seqv3_history_%s.parquet", TAG))
                         col_select = c("race_key","event_id","athlete_id","date","r_pre",
                                        "place","perf","seen","rc","n_eff")))
 h <- h[seen == TRUE & is.finite(r_pre) & is.finite(place) & place > 0 & is.finite(perf)]
+# SCORE THE ORDERING VALUE. r_pre is the bare rating; r_use is that rating after
+# the ceiling and cross-event blends, and it is what the engine actually orders
+# a field with. Any concordance, win-rate or accuracy number here must use
+# r_use; r_pre understates the model. On 2026-08-21/22 this same confusion
+# inverted four separate conclusions - the hurdles "losing" to season best, the
+# model "losing" on thin records, a pooled margin of 1.15 that is 1.79, and a
+# "semi-final deficit" that does not exist. Set BASELINE_PRED=r_pre to score
+# the bare rating deliberately.
+if (!"r_use" %chin% names(h)) h[, r_use := r_pre]
+h[!is.finite(r_use), r_use := r_pre]
+MODEL_COL <- Sys.getenv("BASELINE_PRED", "r_use")
+stopifnot("BASELINE_PRED names a column that does not exist" = MODEL_COL %chin% names(h))
+cat(sprintf("scoring the model as `%s`\n", MODEL_COL))
+
 h[, yr := year(date)]
+h[, mv := get(MODEL_COL)]   # the value the engine orders with
 h <- h[yr %in% YRS]
 stopifnot("no rows in the window" = nrow(h) > 10000)
 
@@ -61,7 +76,7 @@ cat(sprintf("%s scored rows, %s races, by occasion:\n",
 print(h[, .(rows = .N, races = uniqueN(race_key)), by = occasion][order(-rows)])
 
 # --- pairs, with the predicted and actual outcome ---------------------------
-a <- h[, .(rid = .GRP, i = seq_len(.N), place, r_pre, n_eff, occasion = occasion[1]), by = race_key]
+a <- h[, .(rid = .GRP, i = seq_len(.N), place, mv, n_eff, occasion = occasion[1]), by = race_key]
 m <- merge(a, a, by = "rid", allow.cartesian = TRUE, suffixes = c(".x", ".y"))
 m <- m[i.x < i.y & place.x != place.y]
 # The self-merge suffixes EVERY shared column, occasion included, so the pair
@@ -73,9 +88,9 @@ setnames(m, "occasion.x", "occasion"); m[, occasion.y := NULL]
 stopifnot("no pairs" = nrow(m) > 10000)
 # orient each pair so .x is the FAVOURITE, so "gap" is always positive and
 # "won" is always "did the favourite win"
-m[, `:=`(gap = abs(r_pre.x - r_pre.y),
-         fav_won = as.numeric(((r_pre.x > r_pre.y) & (place.x < place.y)) |
-                              ((r_pre.y > r_pre.x) & (place.y < place.x))))]
+m[, `:=`(gap = abs(mv.x - mv.y),
+         fav_won = as.numeric(((mv.x > mv.y) & (place.x < place.y)) |
+                              ((mv.y > mv.x) & (place.y < place.x))))]
 m <- m[gap > 0]
 cat(sprintf("\n%s pairs with a non-zero rating gap\n", format(nrow(m), big.mark = ",")))
 

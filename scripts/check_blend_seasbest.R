@@ -16,6 +16,20 @@ TAG <- Sys.getenv("FORM_TAG", "final")
 
 h <- setDT(read_parquet(file.path(OUT, sprintf("seqv3_history_%s.parquet", TAG))))
 h <- h[is.finite(perf) & is.finite(place) & is.finite(r_pre)]
+# SCORE THE ORDERING VALUE. r_pre is the bare rating; r_use is that rating after
+# the ceiling and cross-event blends, and it is what the engine actually orders
+# a field with. Any concordance, win-rate or accuracy number here must use
+# r_use; r_pre understates the model. On 2026-08-21/22 this same confusion
+# inverted four separate conclusions - the hurdles "losing" to season best, the
+# model "losing" on thin records, a pooled margin of 1.15 that is 1.79, and a
+# "semi-final deficit" that does not exist. Set BASELINE_PRED=r_pre to score
+# the bare rating deliberately.
+if (!"r_use" %chin% names(h)) h[, r_use := r_pre]
+h[!is.finite(r_use), r_use := r_pre]
+MODEL_COL <- Sys.getenv("BASELINE_PRED", "r_use")
+stopifnot("BASELINE_PRED names a column that does not exist" = MODEL_COL %chin% names(h))
+cat(sprintf("scoring the model as `%s`\n", MODEL_COL))
+
 h[, yr := year(date)]
 setorder(h, athlete_id, event_id, date, race_key)
 h[, p_seasbest := shift(cummax(perf), 1L), by = .(athlete_id, event_id, yr)]
@@ -27,7 +41,7 @@ run <- function(y) {
   s <- h[seen == TRUE & place <= 12 & yr == y]
   s[, rid := .GRP, by = race_key]
   s[, sb := fifelse(is.na(p_seasbest), p_bestrec, p_seasbest)]   # full coverage
-  a <- s[, .(rid, i = seq_len(.N), place, model = r_pre, sb)]
+  a <- s[, .(rid, i = seq_len(.N), place, model = get(MODEL_COL), sb)]
   m <- merge(a, a, by = "rid", allow.cartesian = TRUE, suffixes = c(".x",".y"))
   m <- m[i.x < i.y & place.x != place.y]
   # blend only where sb exists for both; elsewhere the blend IS the model

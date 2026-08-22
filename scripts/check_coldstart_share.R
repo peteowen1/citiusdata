@@ -11,6 +11,21 @@
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 h <- setDT(read_parquet("C:/dev/citiusverse/citiusdata/data/seqv3_history_final.parquet"))
 h <- h[is.finite(perf) & is.finite(place) & is.finite(r_pre)]
+# SCORE THE ORDERING VALUE. r_pre is the bare rating; r_use is that rating after
+# the ceiling and cross-event blends, and it is what the engine actually orders
+# a field with. Any concordance, win-rate or accuracy number here must use
+# r_use; r_pre understates the model. On 2026-08-21/22 this same confusion
+# inverted four separate conclusions - the hurdles "losing" to season best, the
+# model "losing" on thin records, a pooled margin of 1.15 that is 1.79, and a
+# "semi-final deficit" that does not exist. Set BASELINE_PRED=r_pre to score
+# the bare rating deliberately.
+if (!"r_use" %chin% names(h)) h[, r_use := r_pre]
+h[!is.finite(r_use), r_use := r_pre]
+MODEL_COL <- Sys.getenv("BASELINE_PRED", "r_use")
+stopifnot("BASELINE_PRED names a column that does not exist" = MODEL_COL %chin% names(h))
+cat(sprintf("scoring the model as `%s`\n", MODEL_COL))
+h[, mv := get(MODEL_COL)]   # the value the engine orders with
+
 setorder(h, athlete_id, event_id, date, race_key)
 h[, n_prior := seq_len(.N) - 1L, by = .(athlete_id, event_id)]
 setorder(h, date, race_key)
@@ -23,14 +38,14 @@ a <- s[, .(rid, i = seq_len(.N), place, r_pre, depth)]
 m <- merge(a, a, by = "rid", allow.cartesian = TRUE, suffixes = c(".x", ".y"))
 m <- m[i.x < i.y & place.x != place.y]
 m[, thin := pmin(depth.x, depth.y)]
-m[, correct := (r_pre.x > r_pre.y) == (place.x < place.y)]   # engine's own rule
+m[, correct := (mv.x > mv.y) == (place.x < place.y)]   # engine's own rule
 m[, band := cut(thin, c(-1, 0, 1, 3, 7, 15, Inf),
                 labels = c("0 cold start", "1", "2-3", "4-7", "8-15", "16+"))]
 
 tot <- nrow(m); base <- 100 * mean(m$correct)
 r <- m[, .(pairs = .N, share = round(100 * .N / tot, 1),
            conc = round(100 * mean(correct), 2),
-           tied = round(100 * mean(r_pre.x == r_pre.y), 1)), by = band][order(band)]
+           tied = round(100 * mean(mv.x == mv.y), 1)), by = band][order(band)]
 # headroom: what the overall metric becomes if a band were scored perfectly
 r[, if_perfect := round(base + share/100 * (100 - conc), 2)]
 cat(sprintf("2026 scored pairs: %s | overall concordance %.2f%%\n\n",

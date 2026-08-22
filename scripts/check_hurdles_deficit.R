@@ -36,7 +36,22 @@ stopifnot("no history for that FORM_TAG" = file.exists(.hf))
 cat(sprintf("scoring %s\n", basename(.hf)))
 h <- setDT(read_parquet(.hf))
 h <- h[is.finite(perf) & is.finite(place) & is.finite(r_pre)]
+# SCORE THE ORDERING VALUE. r_pre is the bare rating; r_use is that rating after
+# the ceiling and cross-event blends, and it is what the engine actually orders
+# a field with. Any concordance, win-rate or accuracy number here must use
+# r_use; r_pre understates the model. On 2026-08-21/22 this same confusion
+# inverted four separate conclusions - the hurdles "losing" to season best, the
+# model "losing" on thin records, a pooled margin of 1.15 that is 1.79, and a
+# "semi-final deficit" that does not exist. Set BASELINE_PRED=r_pre to score
+# the bare rating deliberately.
+if (!"r_use" %chin% names(h)) h[, r_use := r_pre]
+h[!is.finite(r_use), r_use := r_pre]
+MODEL_COL <- Sys.getenv("BASELINE_PRED", "r_use")
+stopifnot("BASELINE_PRED names a column that does not exist" = MODEL_COL %chin% names(h))
+cat(sprintf("scoring the model as `%s`\n", MODEL_COL))
+
 h[, yr := year(date)]
+h[, mv := get(MODEL_COL)]   # the value the engine orders with
 
 reg <- as.data.table(citius::citius_events())[, .(event_id, discipline, family)]
 h <- merge(h, reg, by = "event_id", all.x = TRUE)
@@ -58,12 +73,12 @@ stopifnot("no hurdles rows in the sealed window" = nrow(hd) > 1000)
 # exist, or the two are being scored on different populations.
 score <- function(d) {
   if (nrow(d) < 20) return(NULL)
-  a <- d[, .(rid = .GRP, i = seq_len(.N), place, r_pre, sb), by = race_key]
+  a <- d[, .(rid = .GRP, i = seq_len(.N), place, mv, sb), by = race_key]
   m <- merge(a, a, by = "rid", allow.cartesian = TRUE, suffixes = c(".x", ".y"))
   m <- m[i.x < i.y & place.x != place.y]
   if (!nrow(m)) return(NULL)
   won <- m$place.x < m$place.y
-  cm <- fifelse(m$r_pre.x == m$r_pre.y, 0.5, as.numeric((m$r_pre.x > m$r_pre.y) == won))
+  cm <- fifelse(m$mv.x == m$mv.y, 0.5, as.numeric((m$mv.x > m$mv.y) == won))
   cs <- fifelse(m$sb.x    == m$sb.y,    0.5, as.numeric((m$sb.x    > m$sb.y)    == won))
   n <- nrow(m)
   data.table(pairs = n,

@@ -61,10 +61,49 @@ setorder(h, athlete_id, date, race_key)
 h[, prior_any_event := shift(seq_len(.N)) , by = athlete_id]
 h[, has_prior_other := !is.na(prior_any_event) & prior_any_event > 0]
 
+# THIS TEST ALONE CANNOT SEE CASE 3, AND ITS COMPLEMENT IS NOT CASE 1.
+# `has_prior_other` is computed from `h`, the engine's own scored history. Case 3
+# is BY DEFINITION an athlete whose earlier results exist but did not join into
+# the corpus - so those rows are absent from `h`, the test above returns FALSE
+# for them, and they land under a label reading "no prior scored race anywhere".
+# That is the opposite of the truth: case 3 is the CHEAPEST case to fix, because
+# the data is already downloaded. Reading the complement as case 1 understates
+# how much of cold start is addressable, which is the one question this script
+# exists to answer. Found by an adversarial audit on 2026-08-22, after the
+# unsplit number had already been quoted as "mostly the sport".
+#
+# So ask the careers store, which is far larger than the corpus and is what the
+# seeding step reads. An athlete with no prior row in `h` but a prior row in the
+# store is a join failure, not a debutant.
+csf <- file.path(OUT, "athletics_careers_store")
+have_store <- dir.exists(csf)
+if (have_store) {
+  ds <- arrow::open_dataset(csf)
+  ca <- setDT(as.data.frame(ds |> dplyr::select(athlete_id, date, perf)))
+  ca <- ca[!is.na(perf) & !is.na(date)]
+  ca[, athlete_id := as.character(athlete_id)]
+  first_any <- ca[, .(store_first = min(date)), by = athlete_id]
+  h[, athlete_id := as.character(athlete_id)]
+  h <- merge(h, first_any, by = "athlete_id", all.x = TRUE)
+  # STRICTLY EARLIER. A store row on the same day as the race being predicted is
+  # very often that race itself, so `<=` would count the race as its own prior.
+  h[, has_prior_store := !is.na(store_first) & store_first < date]
+  cat(sprintf("careers store: %s rows, %s athletes\n",
+              format(nrow(ca), big.mark = ","),
+              format(uniqueN(ca$athlete_id), big.mark = ",")))
+  stopifnot("the careers store joined to nothing - check the id types" =
+              h[!is.na(store_first), .N] > 0)
+} else {
+  h[, has_prior_store := FALSE]
+  cat("NOTE: no careers store on disk, so case 3 cannot be separated from case 1\n")
+  cat("      and the 'no prior anywhere' bucket below is an UPPER BOUND on case 1.\n")
+}
+
 cs <- h[yr == SEAL & cold == TRUE]
 cat("\n=== what the cold rows actually are ===\n")
-cs[, kind := fifelse(has_prior_other, "raced a DIFFERENT event before",
-                     "no prior scored race anywhere")]
+cs[, kind := fifelse(has_prior_other, "case 2: raced a DIFFERENT event before",
+              fifelse(has_prior_store, "case 3: in the careers store, not in the corpus",
+                      "case 1: no prior result anywhere we hold"))]
 print(cs[, .(rows = .N, pct = round(100 * .N / nrow(cs), 1)), by = kind][order(-rows)])
 
 # --- do they carry a seeded rating? -----------------------------------------
