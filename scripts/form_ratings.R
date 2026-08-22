@@ -218,6 +218,36 @@ BEST_HL <- local({
 # and MAJORS FINALS 70.84 -> 73.89 (+3.05 pp), favourite 47.1% -> 51.9%, medal
 # hits 60.5% -> 64.9%. Set SEQ_SEED=0 to turn it off.
 SEEDON <- Sys.getenv("SEQ_SEED","1") != "0"
+# SEQ_SEED_XEV  seed a debut rating from CORRELATED EVENTS when we hold no
+# same-event history. 0 = off, which is the behaviour before 2026-08-22.
+#
+# THE GAP THIS FILLS. The seed above joins on (athlete_id, event_id), so it only
+# fires when the athlete has raced this exact event before - 27.9% of cold
+# starts. The cross-event initialisation further down does use siblings, but it
+# lives in the not-seen branch of the UPDATE loop, so it sets what the athlete
+# carries OUT of their debut, not what they carry IN. Measured on sealed 2026:
+#
+#   pairs where neither side is cold   858,665   76.10%
+#   pairs where one side is cold       230,196   54.27%
+#   pairs where BOTH sides are cold     68,623   50.00%
+#
+# 50.00 exactly, because every debutant in a race carries the same rating and
+# every such pair is a tie. Cold-involved pairs are 25.8% of the metric at about
+# 53%. And prior history in another event currently buys nothing - 54.02% with
+# it against 54.58% without - because none of it reaches the debut.
+#
+# 51.9% of cold rows have raced a different event before. This uses that.
+#
+# WHY THE SIMILARITY MATRIX RATHER THAN THE FAMILY. The debut initialiser is
+# gated to `fams == z$family[1]`, and the Event Similarity Atlas has a whole
+# category for the transfer a taxonomy blocks. Correlations here are measured
+# over athletes rated in both events, shrunk toward zero by how many athletes
+# the pair rests on, and computed over SPECIALISTS - combined-event athletes are
+# excluded, because correlating ten events over a decathlete measures
+# "decathletes are good at everything" rather than transfer.
+SEED_XEV     <- Sys.getenv("SEQ_SEED_XEV", "0") != "0"
+SEED_XEV_COR <- .env_num("SEQ_SEED_XEV_MINCOR", "0.30")
+SEED_XEV_NE  <- .env_num("SEQ_SEED_XEV_NE", "0.5")   # confidence, well below a same-event seed
 # 45, not 365 (2026-08-16). Bracketed on the WEIGHTED metric: 365 -> 71.847,
 # 180 -> 71.323 (at 20/8), 45 -> 72.019, 21 -> 72.000, 10 -> 71.357 — worse on
 # both sides. +0.172 over 365 against a 0.118 pp noise floor. An earlier reading
@@ -1397,6 +1427,101 @@ if (SEEDON) {
     if (BEST_K > 1) { BKV[[K]] <- sg$best0[i]; BKD[[K]] <- as.numeric(sg$last0[i]) }
   }
   n_seeded <- nrow(sg)
+
+  # ---- CROSS-EVENT SEEDING, for debuts with no same-event history -----------
+  n_seeded_xev <- 0L
+  if (SEED_XEV) {
+    simf <- file.path(SC, "event_similarity_spec.parquet")
+    if (!file.exists(simf)) {
+      cat(sprintf("[%s] SEQ_SEED_XEV is on but %s is missing - skipping\n",
+                  TAG, basename(simf)))
+    } else {
+      sm <- setDT(arrow::read_parquet(simf))
+      simcol <- intersect(c("cor_use", "cor_shrunk", "cor"), names(sm))[1]
+      stopifnot("similarity table has no correlation column" = !is.na(simcol))
+      # stored one row per unordered pair, so mirror it - an event must find its
+      # siblings whichever side of the pair it sits on
+      sim <- rbindlist(list(sm[, .(event_id = e1, sib = e2, cr = get(simcol))],
+                            sm[, .(event_id = e2, sib = e1, cr = get(simcol))]))
+      sim <- sim[is.finite(cr) & cr >= SEED_XEV_COR & event_id != sib]
+
+      # the debuts that got NOTHING from the same-event seed
+      need <- fd[!sg[, .(athlete_id, event_id)], on = .(athlete_id, event_id)]
+      if (nrow(need) && nrow(sim)) {
+        # every career row for those athletes, in any OTHER event
+        cx <- ca[need[, .(athlete_id, target = event_id, first_date)],
+                 on = .(athlete_id), allow.cartesian = TRUE, nomatch = NULL]
+        # STRICTLY BEFORE the debut, exactly as the same-event seed requires -
+        # a seed built from a race after the one being predicted is leakage,
+        # and it would flatter this experiment precisely where it is weakest.
+        cx <- cx[date < first_date & event_id != target]
+        cx <- merge(cx, sim, by.x = c("target", "event_id"),
+                    by.y = c("event_id", "sib"), allow.cartesian = TRUE)
+        if (nrow(cx)) {
+          # PUT THE SIBLING MARK ON THE TARGET EVENT'S SCALE before averaging.
+          # perf is not comparable between events - a 100m perf and a shot put
+          # perf are different units on different scales - so centre on the
+          # sibling's mean and re-centre on the target's. Same mapping the
+          # in-loop initialiser uses.
+          cx[, mu_sib := MUv[event_id]]
+          cx[, mu_tgt := MUv[target]]
+          cx <- cx[is.finite(mu_sib) & is.finite(mu_tgt)]
+          cx[, mapped := (perf - mu_sib) + mu_tgt]
+          # RECENCY WEIGHT, computed here rather than reused. `w` is created on
+          # sd0, the same-event join, and does not exist on these rows - reusing
+          # the name would have been a silent NA rather than an error. Decay uses
+          # the TARGET event's half-life, because the question is how stale this
+          # evidence is for predicting THAT event.
+          cx[, hl_x := hl_ev[target]]
+          cx[!is.finite(hl_x), hl_x := SEEDHL]
+          cx[, w := 2^(-as.numeric(first_date - date) / hl_x)]
+          # and weight by how correlated the events are, so a distant sibling
+          # contributes less than a close one. cr^2 rather than cr because the
+          # shared-variance reading is what the sibling weighting uses elsewhere.
+          cx[, wx := w * cr^2]
+          # nsib BEFORE the by-clause renames anything. Writing
+          # `by = .(athlete_id, event_id = target)` makes `event_id` inside j
+          # refer to the GROUP - which is target - so uniqueN(event_id) was 1 by
+          # construction and reported "1.0 siblings each" no matter what the
+          # data held. The seeds themselves were always fine; only the number
+          # printed beside them was wrong, which is the more dangerous kind of
+          # bug because it invites the wrong diagnosis.
+          cx[, sib_ev := event_id]
+          sgx <- cx[, .(r0 = sum(wx * mapped) / sum(wx),
+                        ne0 = min(sum(wx), SEED_XEV_NE),
+                        last0 = max(date), nsib = uniqueN(sib_ev)),
+                    by = .(athlete_id, event_id = target)]
+          sgx <- sgx[is.finite(r0) & is.finite(ne0) & ne0 > 0]
+          # ANCHOR, the same one the same-event seed uses. A cross-event seed is
+          # a mark mapped onto this event's scale, so it must land near this
+          # event's mean. A systematic offset means the mapping is wrong, and a
+          # wrong mapping would be invisible in the score until it had quietly
+          # mis-rated every debutant.
+          if (nrow(sgx)) {
+            sgx[, dev := r0 - MUv[event_id]]
+            cat(sprintf("[%s] cross-event seed: %s athlete-events from %.1f siblings each | median dev %+.4f (|dev|>1 in %.2f%%)\n",
+                TAG, format(nrow(sgx), big.mark = ","), mean(sgx$nsib),
+                stats::median(sgx$dev), 100 * mean(abs(sgx$dev) > 1)))
+            stopifnot("cross-event seeds do not land near the target event mean - the scale mapping is wrong" =
+                        abs(stats::median(sgx$dev)) < 0.5)
+            kx <- key(sgx$athlete_id, sgx$event_id)
+            for (i in seq_len(nrow(sgx))) {
+              K <- kx[i]
+              # NEVER overwrite a same-event seed. `need` already excludes them,
+              # so this is belt and braces against the join changing shape.
+              if (!is.null(R[[K]])) next
+              R[[K]] <- sgx$r0[i]; NE[[K]] <- sgx$ne0[i]
+              LD[[K]] <- as.numeric(sgx$last0[i])
+            }
+            n_seeded_xev <- nrow(sgx)
+          }
+          rm(cx, sgx)
+        }
+        rm(need)
+      }
+      rm(sm, sim); invisible(gc())
+    }
+  }
   rm(ca, sd0, sg); invisible(gc())
 }
 # All i<j index pairs where the two placings differ. Replaces
@@ -2020,7 +2145,8 @@ res <- data.table(tag = TAG,
   brier25 = if (WINP && acc$y25["npred"] > 0) acc$y25["brier"]/acc$y25["npred"] else NA_real_,
   brier26 = if (WINP && acc$y26["npred"] > 0) acc$y26["brier"]/acc$y26["npred"] else NA_real_,
   maxplace = MAXPLACE, ceil = CEIL, ceil_mode = CEIL_MODE, ceil_c = CEILC,
-             seeded = n_seeded, huber = HUBER,
+             seeded = n_seeded, seeded_xev = if (exists("n_seeded_xev")) n_seeded_xev else 0L,
+             huber = HUBER,
              huber_lo = HUBER_LO,
   seedhl = SEEDHL, seedhlpow = SEEDHLPOW, seedne = SEEDNE, k0 = K0, kappa = KAPPA, kfloor = KFLOOR,
   kpow = KPOW, ceiladj = CEILADJ, xblend = XBLEND,
