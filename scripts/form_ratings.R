@@ -1444,6 +1444,14 @@ if (SEEDON) {
       sim <- rbindlist(list(sm[, .(event_id = e1, sib = e2, cr = get(simcol))],
                             sm[, .(event_id = e2, sib = e1, cr = get(simcol))]))
       sim <- sim[is.finite(cr) & cr >= SEED_XEV_COR & event_id != sib]
+      # SAY SO IF THE GATE LETS NOTHING THROUGH. An adversarial review found this
+      # falls through to zero seeds in silence when nothing clears
+      # SEED_XEV_COR - so a mistyped threshold or a renamed correlation column
+      # would show only as a suspiciously round zero in the results line, which
+      # reads as "the feature did nothing" rather than "the feature never ran".
+      if (!nrow(sim))
+        cat(sprintf("[%s] NOTE: no event pair clears SEQ_SEED_XEV_MINCOR=%.2f - no cross-event seeds will be made\n",
+                    TAG, SEED_XEV_COR))
 
       # the debuts that got NOTHING from the same-event seed
       need <- fd[!sg[, .(athlete_id, event_id)], on = .(athlete_id, event_id)]
