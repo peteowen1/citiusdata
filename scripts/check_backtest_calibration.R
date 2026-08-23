@@ -59,6 +59,20 @@ stopifnot("the join lost rows - the keys do not line up" = nrow(d) == nrow(pred)
 stopifnot("outcome flags are not 0/1" =
             all(d$hit %in% c(0, 1)) && all(d$hit_medal %in% c(0, 1)))
 
+# CONFIRMED AT SCALE, 2026-08-23. backtest_mergefix.rds regenerated with the
+# merged flag from a fresh cache, run in five foreground batches after
+# background runs kept dying early for an unknown reason (see the session notes
+# - five kills at the same startup point, never diagnosed). Merged rate held
+# steady across batches of growing size: 12.2%, 13.0%, 12.4%, 12.1% at 26, 46,
+# 66 and 102 competitions cached - a property of the corpus, not small-sample
+# noise. At 1,041 races (8,941 entrant-rows after the merged filter):
+#     gold   predicted  915.0   actual  916   ratio 0.999
+#     medal  predicted 2745.0   actual 2753   ratio 0.997
+# Same result as the first 402-race check, now on more than double the races.
+# The medal miscalibration reported earlier today is closed: it was 34 to 126
+# merged races (arm-size dependent) being counted as extra medals, corrected by
+# this file's filter and now caught at construction in backtest_athletics.R.
+#
 # ---- EXCLUDE MERGED RACES BEFORE SCORING ANYTHING --------------------------
 #
 # The engine's own test for a merged race is a place shared by DIFFERENT MARKS,
