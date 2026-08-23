@@ -94,6 +94,41 @@ report <- function(pcol, ocol, label) {
 g <- report("p_gold",  "hit",       "GOLD: p_gold against actually winning")
 m <- report("p_medal", "hit_medal", "MEDAL: p_medal against actually medalling")
 
+# RETRACTED 2026-08-23, SAME DAY. The finding recorded below is wrong. Read
+# this block before the numbers under it.
+#
+# The model spends EXACTLY three medals of probability per race - median, min
+# and max of sum(p_medal) by race are all 3.000 - so it cannot be short in
+# aggregate. It was scored against outcome data recording 4,185 medals in 1,346
+# races, which is 3.11 per race. The excess is not ties. 34 races record more
+# than three medallists, including single races recording 20, 17, 16, 15, 14, 13
+# and 12, which is the merged-race corruption seen elsewhere in this project
+# (duplicated place values), not dead heats. Those 34 races carry 182 unwinnable
+# medals; 29 other races record fewer than three, missing 35. Net +147, which is
+# the entire "shortfall".
+#
+# Re-scored on the 1,283 races that awarded exactly three medals:
+#   total expected 3848.9 | total actual 3849 | net +0.1
+# The bucket pattern collapses with it - the bottom four buckets go from
+# +10.9, +20.0, +31.5, +45.3 to +4.9, +8.5, +4.9, +1.1, and the residual is
+# noisy and sums to zero, with +26.6 in one bucket against -21.0 in its
+# neighbour. There is no medal miscalibration to explain.
+#
+# HOW IT WAS MISSED. The reliability table compared a predicted rate against an
+# actual rate per bucket and never checked that the two sides were counting the
+# same thing. Three units of probability per race were being scored against a
+# world that handed out 3.11, so the model looked short everywhere, and worst in
+# the buckets holding the most entrants per medal - the longshots. That
+# manufactures precisely the pattern that was reported. The check that would
+# have caught it in ten seconds is the one that eventually did: sum both sides
+# and see whether the totals can even agree. Do that before reading any
+# reliability curve.
+#
+# check_medal_count_per_race.R holds the counts and the clean re-score.
+#
+# ---------------------------------------------------------------------------
+# The superseded finding, kept so the retraction is legible:
+#
 # MEASURED 2026-08-23 on backtest.rds, which was written 2026-08-12 and so
 # predates the replacement-level debut prior. It describes the model as it stood
 # then, not as it stands now.
