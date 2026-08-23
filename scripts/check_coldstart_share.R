@@ -34,7 +34,13 @@ s[, nf := .N, by = race_key]; s <- s[nf >= 3]
 s[, rid := .GRP, by = race_key]
 s[, depth := fifelse(!seen, 0L, n_prior)]
 
-a <- s[, .(rid, i = seq_len(.N), place, r_pre, depth)]
+# mv, not r_pre: the pair comparison below reads mv.x/mv.y. Selecting r_pre here
+# and comparing mv.x there is how this script died with "object 'mv.x' not
+# found" - the r_pre-to-r_use sweep renamed the USES and missed this SELECTION,
+# because this file builds `a` as .(rid, ...) where its siblings use
+# .(rid = .GRP, ...). Caught by the guard suite, not by the parse check that was
+# run at the time; parsing is not running.
+a <- s[, .(rid, i = seq_len(.N), place, mv, depth)]
 m <- merge(a, a, by = "rid", allow.cartesian = TRUE, suffixes = c(".x", ".y"))
 m <- m[i.x < i.y & place.x != place.y]
 m[, thin := pmin(depth.x, depth.y)]
