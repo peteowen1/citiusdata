@@ -737,12 +737,53 @@ for (i in seq_len(n)) {
       mp[entrants, on = "athlete_id", shrinkage := i.shrinkage]
     if ("w_total" %in% names(entrants))
       mp[entrants, on = "athlete_id", w_total := i.w_total]
+    # ---- IS THIS RACE ACTUALLY SEVERAL RACES? -----------------------------
+    #
+    # race_key carries no section identifier for a large minority of meets, so
+    # parallel heats of one round collapse into a single race. Measured on the
+    # current outcomes file: 5,024 of 683,673 races hold more than four podium
+    # athletes, the worst carrying 64 with 23 at first place, 21 at second and
+    # 20 at third - twenty-three heats under one key.
+    #
+    # That does not touch the ratings, because form_ratings.R already refuses to
+    # SCORE a merged race. It did touch this file: hit_medal is true for anyone
+    # placed in the top three, so a race of 23 merged heats hands out up to 23
+    # golds. The model spends exactly three medals of probability per race, so
+    # it then looks short everywhere and worst among longshots. That artefact
+    # alone produced an apparent 3.2 to 3.6 standard error medal
+    # miscalibration in a model whose real net error is +0.1 medals in 3,849.
+    #
+    # THE TEST IS NOT A DUPLICATED PLACE. Two jumpers clearing the same height
+    # genuinely share second, and an earlier version of this test in the engine
+    # that flagged any repeated place discarded 8,076 legitimate races, 25.4% of
+    # all jump races. What proves a merge is a place shared by DIFFERENT MARKS:
+    # two athletes cannot both win the same race with different times. Same
+    # test, same shape, as form_ratings.R - deliberately copied rather than
+    # re-derived, so the two cannot drift apart.
+    #
+    # The flag is RECORDED, not acted on here. Dropping the race at this point
+    # would silently change which races every downstream comparison runs on;
+    # carrying a column lets the scoring step decide and lets an old arm be
+    # re-read the old way.
+    .mk <- if ("mark" %chin% names(field)) "mark" else
+           if ("perf" %chin% names(field)) "perf" else NA_character_
+    .merged <- FALSE
+    if (!is.na(.mk)) {
+      .ok <- is.finite(field$place) & is.finite(field[[.mk]])
+      if (sum(.ok) > 1L) {
+        .o  <- order(field$place[.ok], field[[.mk]][.ok])
+        .pl <- field$place[.ok][.o]; .pf <- field[[.mk]][.ok][.o]
+        .n  <- length(.pl)
+        .merged <- any(.pl[-1L] == .pl[-.n] & .pf[-1L] != .pf[-.n])
+      }
+    }
     out[[length(out) + 1L]] <- list(
       pred = mp,
       outc = data.table(
         race_id = key, athlete_id = mp$athlete_id,
         hit = mp$athlete_id %in% as.character(field[place == 1L]$athlete_id),
-        hit_medal = mp$athlete_id %in% as.character(field[place <= 3L]$athlete_id)))
+        hit_medal = mp$athlete_id %in% as.character(field[place <= 3L]$athlete_id),
+        merged = .merged))
   }
   saveRDS(out, file.path(BT_CACHE, paste0(cid, ".rds")))
   cli::cli_alert("  {i}/{n}: {cid} -> {length(out)} race{?s}  [read {round(TIMING$read)}s ability {round(TIMING$ability)}s sim {round(TIMING$sim)}s]")
@@ -781,6 +822,16 @@ cli::cli_alert_info(
 )
 
 gold <- score_predictions(pred[race_id %in% keep], outc[race_id %in% keep], "p_gold")
+# SAY HOW MANY RACES ARE MERGED. A flag nobody prints is a flag nobody reads,
+# and this one changes the denominator of every medal number below it.
+if ("merged" %chin% names(outc)) {
+  .mr <- outc[, .(merged = any(merged)), by = race_id]
+  cat(sprintf("merged races: %s of %s scored (%.1f%%)\n",
+              format(.mr[merged == TRUE, .N], big.mark = ","),
+              format(nrow(.mr), big.mark = ","),
+              100 * .mr[, mean(merged)]))
+}
+
 medal <- score_predictions(pred[race_id %in% keep],
                            outc[race_id %in% keep, .(race_id, athlete_id, hit = hit_medal)],
                            "p_medal")

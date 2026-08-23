@@ -78,11 +78,28 @@ stopifnot("outcome flags are not 0/1" =
 # needs a full re-run because the per-competition cache holds outcomes without
 # it. Set BT_KEEP_MERGED=1 to reproduce the uncorrected numbers.
 KEEP_MERGED <- Sys.getenv("BT_KEEP_MERGED", "0") != "0"
+
+# PREFER THE REAL TEST WHEN THE ARM CARRIES IT. backtest_athletics.R now records
+# a `merged` flag per race, computed the way form_ratings.R computes it: a place
+# shared by DIFFERENT MARKS. The medal-count rule below is only a stand-in for
+# arms written before that flag existed, and it is a poor one - it cannot see a
+# merged race that happens to award three or four medals. Measured on the first
+# arm to carry the flag: the real test finds 12.2% of scored races merged where
+# counting finds 2.5%.
+if ("merged" %chin% names(d)) {
+  drop_ids <- d[merged == TRUE, unique(race_id)]
+  cat(sprintf("\narm carries a `merged` flag: %s of %s races flagged by the mark-based test\n",
+              format(length(drop_ids), big.mark = ","),
+              format(uniqueN(d$race_id), big.mark = ",")))
+  per_race <- d[, .(medals = sum(hit_medal)), by = race_id]
+  cat(sprintf("for comparison, the medal-count rule would flag %s\n",
+              format(per_race[medals > 4L | medals < 3L, .N], big.mark = ",")))
+} else {
 per_race <- d[, .(medals = sum(hit_medal)), by = race_id]
 drop_ids <- per_race[medals > 4L | medals < 3L, race_id]
-cat(sprintf("\nraces: %s total | %s awarding 3 or 4 medals | %s dropped as merged or incomplete\n",
+}
+cat(sprintf("races: %s total | %s dropped\n",
             format(nrow(per_race), big.mark = ","),
-            format(per_race[medals %in% c(3L, 4L), .N], big.mark = ","),
             format(length(drop_ids), big.mark = ",")))
 if (length(drop_ids))
   cat(sprintf("dropped races carry %s medals against %d expected by the three-per-race rule\n",
