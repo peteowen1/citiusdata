@@ -54,7 +54,7 @@ if (!file.exists(f))
 
 h <- setDT(read_parquet(f, col_select = c(
   "race_key", "date", "event_id", "athlete_id",
-  "r_pre", "r_use", "perf", "place", "seen", "n_eff", "rc"
+  "r_pre", "r_use", "perf", "place", "seen", "n_eff", "rc", "v_pre"
 )))
 stopifnot("history file loaded with zero rows - check FORM_TAG and the file path" =
             nrow(h) > 0)
@@ -128,7 +128,11 @@ stopifnot("race-level table does not have one row per race" =
 # one row per athlete within a race, self-joined by race, kept only where
 # i.x < i.y (so each pair counts once) and place.x != place.y (drops ties on
 # place, which carry no order information).
-a <- h[, .(rid = .GRP, i = seq_len(.N), place, r_use, seen, n_eff, athlete_id),
+# v_pre and event_id ride along because the calibration block below needs the
+# model's own posterior variance and the event's within-race spread to derive
+# the probability the model actually implies.
+a <- h[, .(rid = .GRP, i = seq_len(.N), place, r_use, seen, n_eff, athlete_id,
+           v_pre, event_id),
        by = race_key]
 m <- merge(a, a, by = "rid", allow.cartesian = TRUE, suffixes = c(".x", ".y"))
 m <- m[i.x < i.y & place.x != place.y]
@@ -217,12 +221,77 @@ res <- list(
 # a near-certainty that the data does not support.
 cat("\n=== calibration: predicted win rate implied by the rating gap, vs actual ===\n")
 cal <- m[r_use.x != r_use.y]
+stopifnot("pair table lacks v_pre - add it where the pairs are built" =
+            all(c("v_pre.x", "v_pre.y") %chin% names(cal)))
 if (nrow(cal) == 0)
   stop("no pairs carry distinct ratings - cannot check calibration", call. = FALSE)
 cal[, gap := abs(r_use.x - r_use.y)]
 
-fit <- suppressWarnings(glm(c ~ gap, data = cal, family = binomial()))
-cal[, pred := predict(fit, type = "response")]
+# USE THE MODEL'S OWN IMPLIED PROBABILITY, NOT A FITTED CURVE.
+#
+# The first version of this block fitted a global logistic of win on gap and
+# compared it against actual win rates. That is a goodness-of-fit test for the
+# LOGISTIC, not for the model: it reported the curve to be 8.32 points
+# overconfident at near-zero gaps, which says a logistic in the raw gap does not
+# describe the data, and says nothing at all about whether the deployed system
+# is miscalibrated. The deployed simulator (simulate_event in citius/R) does not
+# use a logistic - it draws performances from a normal around each athlete's
+# ability with a per-athlete sigma plus a shared condition shock. Testing a link
+# the model does not use produces a real-looking number about nothing.
+#
+# So derive the probability the MODEL implies. For two athletes the difference
+# of their performances is normal, with variance equal to the sum of their
+# rating uncertainties plus the within-race performance spread on both sides:
+#
+#     P(higher rated wins) = pnorm( gap / sqrt(v_x + v_y + 2 * vp_event) )
+#
+# v_pre is the engine's own posterior variance on the rating, carried in the
+# history. vp_event is the median within-race variance for the event, rebuilt
+# here exactly as form_ratings.R builds its VP prior so the two cannot drift.
+#
+# The shared condition shock is deliberately absent: it is common to both
+# athletes in a race and cancels out of every pairwise comparison, which is the
+# verse's headline rule. Including it would widen the denominator and make the
+# model look better calibrated than it is.
+#
+# READ THE RESULT WITH THIS LIMIT IN MIND. simulate_event uses a PER-ATHLETE
+# sigma from the ability table; vp_event is an approximation of it, and the
+# within-race variance mixes individual noise together with the ability spread
+# between the athletes in that race, so it is plausibly too large. Measured
+# 2026-08-23 on the deployed arm, actual exceeds predicted in all eight buckets:
+#
+#     gap 0.0030   model 52.80   actual 54.47   +1.67
+#         0.0094         58.37          62.08   +3.71
+#         0.0165         63.86          68.39   +4.53
+#         0.0251         69.23          72.90   +3.67
+#         0.0360         74.29          76.77   +2.48
+#         0.0516         78.83          79.96   +1.13
+#         0.0775         82.95          83.06   +0.11
+#         0.1604         90.00          90.37   +0.37
+#
+# Consistent sign across every bucket, peaking in the middle and vanishing at
+# both ends, which is the shape a too-large variance produces: it compresses
+# every probability toward 50 and the compression is largest where the curve is
+# steepest. That points at the denominator, and the denominator here is MY
+# approximation, so this is evidence about the approximation until it is rerun
+# with the deployed per-athlete sigma. Do not quote it as the medal projections
+# being underconfident. The previous version of this block made exactly that
+# mistake in the other direction, reporting an 8.32 point overconfidence that
+# was an artefact of testing a logistic the model does not use.
+if (!"v_pre" %chin% names(h))
+  stop("history carries no v_pre - cannot derive the model's own probability",
+       call. = FALSE)
+vp_ev <- h[, .(v = var(perf)), by = .(event_id, race_key)][is.finite(v),
+           .(vp = stats::median(v)), by = event_id]
+cal <- merge(cal, vp_ev, by.x = "event_id.x", by.y = "event_id", all.x = TRUE)
+stopifnot("no pair could be given an event variance" = cal[!is.na(vp), .N] > 0)
+cal <- cal[is.finite(vp) & vp > 0 & is.finite(v_pre.x) & is.finite(v_pre.y)]
+cal[, sd_diff := sqrt(v_pre.x + v_pre.y + 2 * vp)]
+cal <- cal[is.finite(sd_diff) & sd_diff > 0]
+stopifnot("every pair was dropped building the model probability" = nrow(cal) > 0)
+cal[, pred := stats::pnorm(gap / sd_diff)]
+cat(sprintf("model-implied probabilities on %s pairs carrying v_pre and an event variance\n",
+            format(nrow(cal), big.mark = ",")))
 
 brk <- unique(stats::quantile(cal$gap, probs = seq(0, 1, length.out = 9), na.rm = TRUE))
 if (length(brk) < 3)
