@@ -78,6 +78,16 @@ cat("is far from zero is one where the single flat prior is most wrong - and\n")
 cat("the spread BETWEEN tiers is what a conditional prior would recover.\n")
 
 cat("\n=== and by how strong the debut field is, which is also known pre-race ===\n")
-d0[, fld := cut(d0[, .N, by = race_key][d0, on = "race_key", x.N],
-                c(0, 4, 8, 16, Inf), labels = c("2-4", "5-8", "9-16", "17+"))]
+# FIELD SIZE MUST COME FROM THE WHOLE RACE, NOT FROM d0. d0 is already filtered
+# to debut rows, so counting race_key within it gives the number of DEBUTANTS
+# sharing a race - typically 0 to 2 - not the size of the field. The first
+# version did exactly that while the label, the variable name and the buckets
+# all said field size, and the resulting "field size carries nothing" was
+# repeated into form_ratings.R as a reason not to condition on it. Take the
+# count from h, which holds every competitor.
+fs <- h[, .(field_size = .N), by = race_key]
+d0 <- merge(d0, fs, by = "race_key", all.x = TRUE)
+stopifnot("field size did not join" = d0[is.na(field_size), .N] == 0)
+d0[, fld := cut(field_size, c(0, 4, 8, 16, Inf),
+                labels = c("2-4", "5-8", "9-16", "17+"))]
 print(d0[!is.na(fld), .(debuts = .N, mean_z = round(mean(z), 3)), by = fld][order(fld)])

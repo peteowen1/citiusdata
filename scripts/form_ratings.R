@@ -1244,10 +1244,46 @@ MU <- d[, .(mu = mean(perf)), by = event_id]; MUv <- setNames(MU$mu, MU$event_id
 #   replacement       seed at the mean of DEBUT performances in the event.
 #   replacement_tier  the same, split by the tier of the meet they debut at.
 #                     Measured gap: T1 debut -0.512 sd against the old prior,
-#                     T2 debut -1.705 - so the entry point carries about 1.2 sd
-#                     that a single flat number throws away. Field size was also
-#                     tested and carries nothing (-1.59 to -1.75 across every
-#                     size band), so it is deliberately not a conditioner.
+#                     T2 debut -1.705.
+#   replacement_field the same, split by the SIZE of the field they debut in,
+#                     which is known before the race and varies across every
+#                     debut rather than a rare few.
+#
+# AN EARLIER VERSION OF THIS COMMENT SAID FIELD SIZE "CARRIES NOTHING (-1.59 to
+# -1.75 across every size band)". That was wrong, and wrong because the script
+# behind it counted race_key inside a table already filtered to debut rows - so
+# it measured how many DEBUTANTS shared a race, typically 0 to 2, while every
+# label said field size. Counted over the whole field instead:
+#     2-4 starters   30,647 debuts   -2.141 sd
+#     5-8            98,043          -1.784
+#     9-16           68,931          -1.596
+#     17+            30,543          -1.236
+# Monotonic, a 0.905 sd spread, and it applies to all 228,164 debuts.
+#
+# AND CONDITIONING ON IT STILL MAKES THINGS WORSE. Arm dp_field against the
+# deployed replacement prior, same config otherwise: one-side-cold pairs
+# 59.991 -> 59.614, -0.378 on a floor of 0.044, so 8.6 floors in the wrong
+# direction, and sealed weighted 74.040 -> 74.009. So the gradient above is real
+# and the conditioner is still wrong.
+#
+# The reason is that field size is a RACE-level variable, and the rating is used
+# to order athletes WITHIN a race. Shifting every debutant in a race by the same
+# amount cancels out of debutant-versus-debutant comparisons and moves them all
+# against the ESTABLISHED athletes in that same race. Big fields do contain
+# better debutants, but they contain better established athletes too, so lifting
+# only the debutants counts the field's quality twice. This is the same shape as
+# the rule at the top of the verse: something shared by a whole field cannot
+# change finishing order, it only moves absolute marks.
+#
+# The original comment here said field size "carries nothing", which was based
+# on a measurement that counted debutants per race rather than starters per
+# race. That was wrong, the gradient is real, and the conclusion it supported
+# happened to be right anyway. Both errors are recorded because "right answer,
+# wrong reason" is the state that survives review and then breaks the next
+# decision built on it.
+#
+# The tier split is larger per athlete (1.2 sd) but T1 debuts are 588 of
+# 228,164, and it too failed on test. Plain replacement is what ships.
 #
 # WALK-FORWARD BY CONSTRUCTION. The level for a race in year Y is built only
 # from debuts in years STRICTLY EARLIER than Y, so a debut never contributes to
@@ -1290,13 +1326,19 @@ MU <- d[, .(mu = mean(perf)), by = event_id]; MUv <- setNames(MU$mu, MU$event_id
 # it is real, but acts on 0.26% of debuts - the effect was sized without
 # weighting it by the population it applies to.
 DEBUT_PRIOR <- Sys.getenv("SEQ_DEBUT_PRIOR", "mean")
-stopifnot("SEQ_DEBUT_PRIOR must be mean, replacement or replacement_tier" =
-            DEBUT_PRIOR %chin% c("mean", "replacement", "replacement_tier"))
+stopifnot("SEQ_DEBUT_PRIOR must be mean, replacement, replacement_tier or replacement_field" =
+            DEBUT_PRIOR %chin% c("mean", "replacement", "replacement_tier",
+                                 "replacement_field"))
 RLT <- new.env(hash = TRUE, parent = emptyenv())   # event|tier|year
 RLE <- new.env(hash = TRUE, parent = emptyenv())   # event|year
+RLF <- new.env(hash = TRUE, parent = emptyenv())   # event|fieldband|year
+# ONE definition of the bands, used to build the table and to look it up. Two
+# copies of a cut() call is how a lookup silently misses every key.
+.fld_band <- function(n) as.character(cut(n, c(0, 4, 8, 16, Inf),
+                                          labels = c("2-4", "5-8", "9-16", "17+")))
 if (DEBUT_PRIOR != "mean") {
   .fd <- d[, .(first_date = min(date)), by = .(athlete_id, event_id)]
-  .db <- merge(d[, .(athlete_id, event_id, date, perf, meet_tier)], .fd,
+  .db <- merge(d[, .(athlete_id, event_id, date, perf, meet_tier, race_key)], .fd,
                by = c("athlete_id", "event_id"))
   .db <- .db[date == first_date & is.finite(perf)]
   .db[, yr := year(date)]
@@ -1316,15 +1358,23 @@ if (DEBUT_PRIOR != "mean") {
   }
   .n1 <- .mk(.db[!is.na(meet_tier)], c("event_id", "meet_tier"), RLT)
   .n2 <- .mk(.db,                    "event_id",                 RLE)
-  cat(sprintf("[%s] debut prior '%s': %s debut rows | %s event-tier-year cells | %s event-year cells\n",
+  # field size counted over the WHOLE race, from d, not over the debut subset -
+  # counting inside the debut rows gives the number of debutants sharing a race
+  # and is the error that produced the "field size carries nothing" claim.
+  .fs <- d[, .(nf = .N), by = race_key]
+  .db <- merge(.db, .fs, by = "race_key", all.x = TRUE)
+  .db[, fband := .fld_band(nf)]
+  .n3 <- .mk(.db[!is.na(fband)], c("event_id", "fband"), RLF)
+  cat(sprintf("[%s] debut prior '%s': %s debut rows | tier-year %s | event-year %s | field-year %s\n",
               TAG, DEBUT_PRIOR, format(nrow(.db), big.mark = ","),
-              format(.n1, big.mark = ","), format(.n2, big.mark = ",")))
+              format(.n1, big.mark = ","), format(.n2, big.mark = ","),
+              format(.n3, big.mark = ",")))
   # SAY SO IF IT WILL DO NOTHING. An empty lookup falls through to MU on every
   # race and the arm then reproduces the baseline exactly, which reads as "the
   # feature does not help" rather than "the feature never ran".
-  if (.n1 + .n2 == 0)
+  if (.n1 + .n2 + .n3 == 0)
     cat(sprintf("[%s] WARNING: debut prior tables are EMPTY - every seed will fall back to MU\n", TAG))
-  rm(.fd, .db)
+  rm(.fd, .db, .fs)
 }
 # variance prior: within-race spread per event (median of race-level var), the
 # broadest honest starting uncertainty -- narrows only with an athlete's own evidence
@@ -1892,6 +1942,10 @@ for (r_ in seq_along(starts)) {
     .rl <- NULL
     if (DEBUT_PRIOR == "replacement_tier" && !is.na(z$meet_tier[1]))
       .rl <- RLT[[paste(ev, z$meet_tier[1], yr, sep = "|")]]
+    # length(a) IS the field size for this race - the sweep slice is the race,
+    # so this needs no extra join and cannot disagree with the table above.
+    if (DEBUT_PRIOR == "replacement_field")
+      .rl <- RLF[[paste(ev, .fld_band(length(a)), yr, sep = "|")]]
     if (is.null(.rl)) .rl <- RLE[[paste(ev, yr, sep = "|")]]
     if (!is.null(.rl) && is.finite(.rl)) mu_debut <- .rl
   }
