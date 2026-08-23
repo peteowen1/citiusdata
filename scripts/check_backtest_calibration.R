@@ -59,6 +59,44 @@ stopifnot("the join lost rows - the keys do not line up" = nrow(d) == nrow(pred)
 stopifnot("outcome flags are not 0/1" =
             all(d$hit %in% c(0, 1)) && all(d$hit_medal %in% c(0, 1)))
 
+# ---- EXCLUDE MERGED RACES BEFORE SCORING ANYTHING --------------------------
+#
+# The engine's own test for a merged race is a place shared by DIFFERENT MARKS,
+# which is right because a shared place alone is usually a legitimate tie. The
+# backtest outcomes carry no marks, so that test is unavailable here and the
+# count has to stand in for it: a race recording more than four medallists
+# cannot be explained by ties, since the most a tie can produce is four - two
+# silvers and no bronze, or two bronzes.
+#
+# Four is therefore kept and five or more is dropped. Races recording FEWER than
+# three are dropped too: they are incomplete rather than merged, and scoring
+# three units of model probability against two awarded medals biases the same
+# way, just in the other direction.
+#
+# This is a filter on a stored artefact, not a fix. The real fix is to apply the
+# mark-based test inside backtest_athletics.R where outcomes are built, which
+# needs a full re-run because the per-competition cache holds outcomes without
+# it. Set BT_KEEP_MERGED=1 to reproduce the uncorrected numbers.
+KEEP_MERGED <- Sys.getenv("BT_KEEP_MERGED", "0") != "0"
+per_race <- d[, .(medals = sum(hit_medal)), by = race_id]
+drop_ids <- per_race[medals > 4L | medals < 3L, race_id]
+cat(sprintf("\nraces: %s total | %s awarding 3 or 4 medals | %s dropped as merged or incomplete\n",
+            format(nrow(per_race), big.mark = ","),
+            format(per_race[medals %in% c(3L, 4L), .N], big.mark = ","),
+            format(length(drop_ids), big.mark = ",")))
+if (length(drop_ids))
+  cat(sprintf("dropped races carry %s medals against %d expected by the three-per-race rule\n",
+              format(per_race[race_id %chin% drop_ids, sum(medals)], big.mark = ","),
+              3L * length(drop_ids)))
+if (!KEEP_MERGED && length(drop_ids)) {
+  d <- d[!race_id %chin% drop_ids]
+  stopifnot("every row was dropped as merged" = nrow(d) > 0)
+  cat(sprintf("scoring %s entrant-rows after the filter\n",
+              format(nrow(d), big.mark = ",")))
+} else if (KEEP_MERGED) {
+  cat("BT_KEEP_MERGED is set - scoring the uncorrected outcomes\n")
+}
+
 report <- function(pcol, ocol, label) {
   x <- d[is.finite(get(pcol))]
   if (!nrow(x)) { cat(sprintf("%s: no finite probabilities\n", label)); return(NULL) }
