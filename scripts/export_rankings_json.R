@@ -41,9 +41,31 @@ d[is.na(athlete_name) | !nzchar(athlete_name), athlete_name := paste0("Athlete "
 #
 # The distinction is carried by the name: athletics uses METRES for track and
 # KILOMETRES for road, which is exactly why both spellings exist.
+#
+# SWIMMING FAMILIES (swim_sprint/swim_middle/swim_distance/swim_im) match none
+# of the athletics branches above and would otherwise fall through to "field"
+# by default -- wrong, and silently so: a swim event would appear to a reader
+# among discus and pole vault with nothing on the page to explain it. Given
+# its own bucket instead of being folded into an existing one. NOTE: this is
+# a CONTAINED, LOW-RISK addition to the grp label only -- it does not make
+# this script runnable end-to-end against swimming data. Confirmed while
+# reading this file (2026-08-25): DROP_ZERO_T1 below reads
+# competition_catalogue.parquet (athletics-only; swimming's own catalogue is
+# swim_competition_catalogue.parquet and has no meet_tier column of that
+# shape), and the World Athletics rank block's map_group() parses athletics-
+# style "Men's 100m" event-group names that have no swimming equivalent. A
+# swim TAG would need both of those paths made tier/sport-aware before this
+# exporter could run cleanly against form_display_SW-baseline.parquet. Also
+# not found anywhere in this repo: the frontend/page template that actually
+# reads form_rankings.json (grepped citiusverse and all of C:\dev -- no
+# hits), so whether it enumerates a fixed set of groups that would need a
+# matching "swim" entry could not be confirmed from this codebase and is
+# flagged rather than guessed at.
 d[, grp := fifelse(family %chin% c("sprint","middle","distance","hurdles"), "track",
             fifelse(family == "walk" & grepl("Metres", discipline), "track",
-            fifelse(family %chin% c("road","walk"), "road", "field")))]
+            fifelse(family %chin% c("road","walk"), "road",
+            fifelse(family %chin% c("swim_sprint","swim_middle","swim_distance","swim_im"),
+                    "swim", "field"))))]
 
 # --- a distance to sort by ---------------------------------------------------
 # Parsed from the discipline name, which carries it explicitly ("800 Metres",
