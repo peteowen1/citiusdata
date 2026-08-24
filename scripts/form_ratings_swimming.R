@@ -16,8 +16,9 @@
 #     `course_offset` upstream, in the corpus build.
 #   * NO per-family half-life table. One flat SEQ_HL, default 180 days,
 #     validated in backtest_swimming.R (180 beat 730 on every measure).
-#   * NO world-record impossible-mark guard. No swimming WR reference file
-#     exists anywhere in this repo (confirmed absent) -- dropped for v1.
+#   * NO world-record impossible-mark guard. data/world_records.csv exists
+#     but holds 0 swimming rows (every row is an AT- event id) -- no swimming
+#     WR data to guard against, dropped for v1.
 #   * NO age-drift / aging-curve adjustment. The corpus carries no `age`
 #     column and there is no swimming aging.rds -- the mechanism has nothing
 #     to attach to.
@@ -128,8 +129,8 @@ BEST_HL <- local({
 # found replacement beats mean by +0.75pp tune / +0.72-0.76pp confirm,
 # consistent in sign across both ceil_mode pairings -- a robust win, unlike
 # ceil_mode itself (see SEQ_CEIL_MODE below, sign-flipped between windows and
-# left at its inherited default). Full sweep and Glasgow floor check in
-# docs/reviews/ (see NEXT-STEPS.md 2026-08-24 swimming entry).
+# left at its inherited default). Full sweep numbers in DECISIONS.md's
+# 2026-08-24 entry (no separate docs/reviews/ write-up exists yet).
 # The athletics engine also has replacement_tier / replacement_field variants;
 # NOT ported here. Porting all four athletics variants (two of which were
 # refuted or marginal there) would be manufacturing false precision on a knob
@@ -256,6 +257,7 @@ reg <- as.data.table(citius::citius_events())[sport == "Swimming", .(event_id, f
 stopifnot("swimming event registry is empty" = nrow(reg) > 0)
 
 cat0 <- setDT(read_parquet(file.path(OUT, "swim_competition_catalogue.parquet")))
+stopifnot("swim_competition_catalogue.parquet loaded 0 rows" = nrow(cat0) > 0)
 cat0[, competition_id := as.character(competition_id)]
 cat0 <- cat0[, .(competition_id, tier)]
 stopifnot("competition_id must be unique in the catalogue" =
@@ -265,17 +267,31 @@ evs <- setdiff(sub("^event_id=", "", list.dirs(file.path(OUT, "swimming_corpus_s
                recursive = FALSE, full.names = FALSE)), "__unmatched__")
 stopifnot("no swimming_corpus_store event partitions found" = length(evs) > 0)
 dl <- list()
+n_fail <- 0L
 for (EV in evs) {
   f <- file.path(OUT, sprintf("swimming_corpus_store/event_id=%s/part-0.parquet", EV))
-  x <- tryCatch(setDT(read_parquet(f)), error = function(e) NULL)
-  if (is.null(x)) next
+  x <- tryCatch(setDT(read_parquet(f)), error = function(e) e)
+  if (inherits(x, "error")) {
+    n_fail <- n_fail + 1L
+    warning(sprintf("failed to read swimming_corpus_store partition event_id=%s: %s",
+                    EV, conditionMessage(x)))
+    next
+  }
   x[, `:=`(event_id = EV, athlete_id = as.character(athlete_id),
            competition_id = as.character(competition_id))]
   dl[[EV]] <- x
 }
 d <- rbindlist(dl, fill = TRUE); rm(dl); invisible(gc())
-cat(sprintf("[%s] loaded %s rows from %d swim event partitions\n", TAG,
-            format(nrow(d), big.mark = ","), length(evs)))
+cat(sprintf("[%s] loaded %s rows from %d of %d swim event partitions (%d failed)\n", TAG,
+            format(nrow(d), big.mark = ","), length(evs) - n_fail, length(evs), n_fail))
+# A partial partition-read failure would otherwise produce plausible-looking
+# output built on silently-incomplete history -- fail loud rather than let a
+# clean-looking scorecard hide missing data (this file's own SEQ_SEED coverage
+# check below applies the same discipline; this is the one place it was
+# missing before this fix).
+stopifnot("one or more swimming_corpus_store partitions failed to read - see warnings above" =
+            n_fail == 0L,
+          "no rows loaded from swimming_corpus_store" = nrow(d) > 0)
 
 # A small number of rows (1,722 of 1.83M in the full corpus) carry a garbage
 # athlete_id like "worldaquatics|NA" -- an unresolved-identity sentinel that
@@ -306,6 +322,13 @@ cat(sprintf("[%s] tier coverage: %.2f%% of rows carry T1_elite (left join, not f
 # competition's start date rather than dropping those rows outright.
 d[, date := fifelse(is.na(date), comp_start, date)]
 d <- d[!is.na(perf) & !is.na(date) & !is.na(race_key) & !is.na(place) & place > 0 & date >= FROM]
+# Guards below this point (row-count-preserved joins, "every row has a finite
+# weight") are vacuously TRUE on an empty data.table -- stopifnot(nrow(d)==0)
+# would pass, all(logical(0)) is TRUE. This is the one place that actually
+# distinguishes "empty because nothing survived filtering" from "the filter
+# worked as intended," so every check downstream can rely on nrow(d) > 0.
+stopifnot("no rows survived corpus filtering (date/perf/place/race_key) - FROM cutoff or upstream corpus may be broken" =
+            nrow(d) > 0)
 
 n0 <- nrow(d)
 d <- merge(d, reg, by = "event_id", all.x = TRUE)
@@ -499,15 +522,23 @@ if (SEEDON) {
   # development, and surfaced exactly this way: a 0-column empty table).
   cev <- setdiff(sub("^event_id=", "", list.dirs(file.path(OUT, "swimming_careers_store"),
                  recursive = FALSE, full.names = FALSE)), "__unmatched__")
-  cl <- list()
+  cl <- list(); cev_fail <- 0L
   for (EV in cev) {
     f <- file.path(OUT, sprintf("swimming_careers_store/event_id=%s/part-0.parquet", EV))
     x <- tryCatch(setDT(read_parquet(f, col_select = c("athlete_id", "date", "perf"))),
-                  error = function(e) NULL)
-    if (is.null(x)) next
+                  error = function(e) e)
+    if (inherits(x, "error")) {
+      cev_fail <- cev_fail + 1L
+      warning(sprintf("failed to read swimming_careers_store partition event_id=%s: %s",
+                      EV, conditionMessage(x)))
+      next
+    }
     x[, event_id := EV]
     cl[[EV]] <- x
   }
+  if (cev_fail > 0L)
+    cat(sprintf("[%s] WARNING: %d of %d swimming_careers_store partitions failed to read -- seeding proceeds on the rest, coverage check below still applies\n",
+                TAG, cev_fail, length(cev)))
   ca <- rbindlist(cl, fill = TRUE); rm(cl)
   ca <- ca[!is.na(perf) & is.finite(perf) & !is.na(date) & !is.na(event_id)]
   ca[, athlete_id := as.character(athlete_id)]
@@ -540,8 +571,19 @@ if (SEEDON) {
       TAG, format(nrow(sg), big.mark = ","), stats::median(sg$dev), 100 * mean(abs(sg$dev) > 1)))
   # ANCHOR: a seed is a mark in the same event, so it must land near that
   # event's own mean, or the perf convention differs and the seeds are junk.
-  stopifnot("seeds do not land near the event mean - identity or scale mapping is wrong" =
-              nrow(sg) == 0 || abs(stats::median(sg$dev)) < 0.5)
+  # nrow(sg) == 0 is NOT silently treated as "check passed" -- SEEDON=TRUE and
+  # a >90%-resolved crosswalk join already happened above, so an empty sg here
+  # is itself suspicious (every seed candidate failed the date/event-match
+  # filters) rather than an expected "nothing to seed" state. Warn loudly
+  # rather than let a genuinely broken join hide behind a vacuous stopifnot.
+  if (nrow(sg) == 0L) {
+    warning("SEQ_SEED: zero seed rows survived after a >90%-resolved crosswalk join -- ",
+            "the anchor check below has nothing to verify against. Investigate before ",
+            "trusting SEQ_SEED on this run.")
+  } else {
+    stopifnot("seeds do not land near the event mean - identity or scale mapping is wrong" =
+                abs(stats::median(sg$dev)) < 0.5)
+  }
   kz <- key(sg$athlete_id, sg$event_id)
   for (i in seq_len(nrow(sg))) {
     K <- kz[i]
@@ -827,8 +869,10 @@ res <- data.table(tag = TAG,
   w_t1_elite = W_T1_ELITE, w_default = W_DEFAULT, w_rnd = W_RND,
   cens = CENS, censwin = CENSWIN, stale = STALE, kt1 = KT1, atten = ATTEN,
   from = as.character(FROM))
-cat(sprintf("[%s] concordance %.3f%% | favourite %.1f%% | %d scored races (%d skipped by the conflict guard) | %.1f min\n",
-    TAG, res$conc, res$fav, res$races, n_conflict_skipped, el))
+cat(sprintf("[%s] concordance %.3f%% | favourite %.1f%% | %d scored races (%d skipped by the conflict guard, %.1f%% of %s exact-Final groups) | %.1f min\n",
+    TAG, res$conc, res$fav, res$races, n_conflict_skipped,
+    if (n_merged > 0) 100 * n_conflict_skipped / n_merged else NA_real_,
+    format(n_merged, big.mark = ","), el))
 cat(sprintf("[%s] WEIGHTED (T1_elite %g / default %g, non-final x%g): %.3f%% (ess %s)\n",
     TAG, W_T1_ELITE, W_DEFAULT, W_RND, res$wconc, format(round(res$ess), big.mark = ",")))
 cat(sprintf("[%s] TUNE    (2025) weighted %.3f%% (ess %s, %s races)\n",

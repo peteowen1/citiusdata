@@ -46,7 +46,26 @@ stopifnot("Glasgow must not be inside the swimming history" =
 # order alone. Falls back to the athlete_key() name-token match only where the
 # crosswalk has no link -- costs nothing, no regression risk (citius#3).
 xw <- setDT(arrow::read_parquet(file.path(OUT, "athlete_crosswalk_swimming.parquet")))
-xw_g  <- unique(xw[source == "crs_glasgow2026" & !is.na(person_id),
+# Two DIFFERENT crs_glasgow2026 athletes sharing one athlete_name string would
+# collapse under [, .SD[1L], by = athlete_name] and silently attribute BOTH
+# Glasgow entries to whichever person_id happened to sort first -- a wrong,
+# confident (non-NA) id, not a flagged miss. Found a REAL one on first run:
+# "Sam WILLIAMSON" appears twice in the crosswalk (BER and AUS) already
+# pointing at the SAME person_id "SAMWILLIAMSON" -- two different real
+# athletes merged upstream in the crosswalk build's loose name-key matching
+# (Games entries carry no birthdate to disambiguate). That's a crosswalk-build
+# defect worth its own fix; this script cannot repair it, so it EXCLUDES any
+# colliding name from the crosswalk link entirely and lets it fall through to
+# the pre-existing athlete_key() name-token fallback below -- the same
+# behaviour this script had before the crosswalk was wired in, for exactly
+# the names the crosswalk can't currently be trusted on.
+xw_dupnames <- xw[source == "crs_glasgow2026" & !is.na(person_id),
+                  .N, by = athlete_name][N > 1, athlete_name]
+if (length(xw_dupnames))
+  cli::cli_alert_warning(
+    "{length(xw_dupnames)} crs_glasgow2026 name{?s} collide in the crosswalk (e.g. {xw_dupnames[1]}) -- excluded from the crosswalk link, falling back to name-key match: {paste(xw_dupnames, collapse=', ')}"
+  )
+xw_g  <- unique(xw[source == "crs_glasgow2026" & !is.na(person_id) & !athlete_name %chin% xw_dupnames,
                     .(athlete_name, person_id)])[, .SD[1L], by = athlete_name]
 xw_wa <- unique(xw[source == "worldaquatics" & !is.na(person_id),
                     .(person_id, wa_id = athlete_id)])[, .SD[1L], by = person_id]
@@ -59,9 +78,16 @@ g[, key := athlete_key(athlete_name)]
 g <- merge(g, lk, by = "key", all.x = TRUE)
 g <- merge(g, xw_link, by = "athlete_name", all.x = TRUE)
 g[, hist_id := fifelse(!is.na(wa_id), wa_id, hist_id)][, wa_id := NULL]
+n_linked <- uniqueN(g[!is.na(hist_id)]$athlete_name)
 cli::cli_alert_info(
-  "Linked {uniqueN(g[!is.na(hist_id)]$athlete_name)} of {uniqueN(g$athlete_name)} swimmer{?s} to World Aquatics history."
+  "Linked {n_linked} of {uniqueN(g$athlete_name)} swimmer{?s} to World Aquatics history."
 )
+# Regression floor, not a tuned threshold: fixing citius#3 took this from 190
+# to 273 of 393 (2026-08-24). A future crosswalk-build regression should fail
+# this run loudly, not just print a smaller number that's easy to miss in a
+# log.
+stopifnot("Glasgow swimmer linkage regressed well below the post-citius#3 fix level - crosswalk build may be broken" =
+            n_linked >= 250L)
 
 # In-meet rounds are prior form for the final, and they are what makes the field
 # complete. Only 72% of finalists carry World Aquatics history -- a Commonwealth

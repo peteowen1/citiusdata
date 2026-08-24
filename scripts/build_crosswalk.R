@@ -99,12 +99,23 @@ if (file.exists(f)) {
       100 * mean(!is.na(sw_src$worldaquatics$birthdate)))
 }
 
-g <- setDT(glasgow_swimming(D))[!is.na(event_id)]
-sw_src$crs_glasgow2026 <- unique(g[, .(
-  source = "crs_glasgow2026", athlete_id = NA_character_,
-  athlete_name, country, birthdate = as.Date(NA))])
-say("  crs_glasgow2026: %s swimmers (no birthdate -- results pages omit it)",
-    format(nrow(sw_src$crs_glasgow2026), big.mark = ","))
+# glasgow_swimming() stop()s if NONE of its four capture files exist -- fine
+# as an internal contract, but every other optional source in this script
+# degrades gracefully on a missing/fresh-clone data/ (data/* is gitignored,
+# so that's a real state, not hypothetical). Match that convention here too,
+# so a missing Games capture doesn't abort the worldaquatics/swimengland/
+# swimcloud sources that come after it.
+g <- tryCatch(setDT(glasgow_swimming(D))[!is.na(event_id)],
+              error = function(e) { say("  crs_glasgow2026: SKIPPED (%s)", conditionMessage(e)); NULL })
+if (!is.null(g)) {
+  stopifnot("glasgow_swimming() returned implausibly few rows - capture files may be stale/truncated" =
+              nrow(g) > 300)
+  sw_src$crs_glasgow2026 <- unique(g[, .(
+    source = "crs_glasgow2026", athlete_id = NA_character_,
+    athlete_name, country, birthdate = as.Date(NA))])
+  say("  crs_glasgow2026: %s swimmers (no birthdate -- results pages omit it)",
+      format(nrow(sw_src$crs_glasgow2026), big.mark = ","))
+}
 
 # Swim England and SwimCloud each carry their own stable id, so within a source
 # linking is exact -- but the three namespaces are disjoint (a uuid, SE123456,
