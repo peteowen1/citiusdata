@@ -96,6 +96,47 @@ all <- rbindlist(lapply(parts, function(p) {
 }), fill = TRUE)
 say("\ncombined: %s rows", format(nrow(all), big.mark = ","))
 
+# ---- repair stale race_key (citiusdata#15) ----------------------------------
+# Found 2026-08-25: race_key is `competition_id|event_id|heat_name`, baked in
+# at harvest time. For Individual Medley events specifically, event_id was NA
+# when race_key was first built (match_event() works fine on "Women's 100m
+# Medley" TODAY -- verified -- so whatever caused the original mismatch is
+# already resolved for the row's own event_id column, just never propagated
+# into the cached race_key string). The stale "|NA|" middle field then made
+# calibrate()/the SEQ engine treat every heat sharing a NUMBER as one race
+# regardless of event or sex -- 100% of Medley race_keys in swimming_history
+# .rds carried this, source of the cross-sex contamination this issue tracked.
+# Repair here (not just at swimming_history.rds, which was fixed directly as a
+# one-time repair) so a future full re-harvest can't silently reintroduce it:
+# substitute the row's own CURRENT event_id into the existing race_key string,
+# preserving the original heat-level granularity rather than rebuilding from
+# a coarser field (`round` here is phase-level, e.g. "Heats" for every heat of
+# an event -- rebuilding from it would merge every heat of one event into one
+# block, a different and worse bug).
+# Only touch rows whose race_key matches the EXACT expected stale shape for
+# THIS row's own competition_id ("<competition_id>|NA|<rest>") -- a bare
+# grepl("|NA|") would also match unrelated race_key shapes from other sources
+# (swimengland/swimcloud don't share this convention) and a vectorized
+# sub()/tstrsplit() across a mixed-format column is exactly the kind of
+# per-row assumption that breaks silently on the field it wasn't built for.
+expected_prefix <- paste0(all$competition_id, "|NA|")
+stale <- !is.na(all$event_id) & !is.na(all$race_key) &
+  startsWith(all$race_key, expected_prefix)
+n_stale <- sum(stale)
+if (n_stale > 0) {
+  rest <- substring(all$race_key[stale], nchar(expected_prefix[stale]) + 1L)
+  all[stale, race_key := paste0(competition_id, "|", event_id, "|", rest)]
+  say("repaired %s stale race_key row(s) (event_id known, race_key still carried the old NA)",
+      format(n_stale, big.mark = ","))
+}
+# Rows that contain "|NA|" somewhere but did NOT match the exact prefix above
+# are a different shape -- surfaced, not silently left as a maybe-still-broken
+# race_key with no visibility.
+n_other_na <- sum(!stale & !is.na(all$race_key) & grepl("\\|NA\\|", all$race_key, fixed = FALSE))
+if (n_other_na > 0)
+  say("NOTE: %s row(s) contain '|NA|' in race_key but did not match the expected repair shape -- left untouched, worth a look",
+      format(n_other_na, big.mark = ","))
+
 # ---- one identity ----------------------------------------------------------
 all[id2person, on = .(source, athlete_id), person_id := i.person_id]
 say("person_id resolved: %.1f%% (unresolved rows keep their source id and stay\n  separate people, which is the safe failure)",
