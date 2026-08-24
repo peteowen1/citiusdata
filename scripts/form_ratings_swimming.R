@@ -65,13 +65,16 @@
 # year is easy to add once a tuning methodology exists.
 #
 # SEVERAL NUMERIC DEFAULTS BELOW ARE INHERITED FROM ATHLETICS UNCHANGED AND
-# ARE FLAGGED, NOT SILENTLY ASSUMED. K0/KAPPA/KFLOOR, CENS, CENSWIN, HUBER,
-# CEIL and CEIL_MODE all keep their athletics-fitted values because the task
-# spec groups them under "copy essentially unchanged" and no swap was noted --
-# but none of them has been swept against swimming data. Treat these as
-# placeholders pending a swimming-specific fit, not validated choices -- this
-# is called out again at each knob. DEBUT_PRIOR is the one exception: swept
-# 2026-08-24 (see that knob's own comment below) and promoted to "replacement".
+# ARE FLAGGED, NOT SILENTLY ASSUMED. KAPPA/KFLOOR, CENS, CENSWIN, HUBER, CEIL
+# and CEIL_MODE all keep their athletics-fitted values because the task spec
+# grouped them under "copy essentially unchanged" and no swap was noted --
+# but none of them has been swept against swimming data (CENS/CENSWIN were
+# tested as a possible fix for the calibration issue below and ruled OUT --
+# tested, not just left alone). Treat the rest as placeholders pending a
+# swimming-specific fit, not validated choices -- this is called out again at
+# each knob. K0 and DEBUT_PRIOR are the two exceptions: each swept and
+# promoted on its own knob's comment below (DEBUT_PRIOR on 2026-08-24 to
+# "replacement", K0 on 2026-08-25 to 0.7) -- see each for the numbers.
 suppressMessages(library(data.table)); suppressMessages(library(arrow))
 
 .env_num <- function(name, default) {
@@ -85,8 +88,35 @@ suppressMessages(library(data.table)); suppressMessages(library(arrow))
 OUT <- "C:/dev/citiusverse/citiusdata/data"
 SC  <- Sys.getenv("FORM_OUT", here::here("citiusdata", "data"))
 
-# --- learning-rate schedule (INHERITED, unswept for swimming) ---------------
-K0 <- .env_num("SEQ_K0", 0.95); KAPPA <- .env_num("SEQ_KAPPA", 3)
+# --- learning-rate schedule ---------------------------------------------------
+# K0 SWEPT 2026-08-25 (citiusdata#16 investigation): 0.95 (inherited from
+# athletics) is too aggressive for swimming's post-debut updates. Swept
+# {0.3,0.5,0.7,0.85,0.95}: K0=0.7 strictly dominates the athletics default on
+# BOTH axes measured -- confirm-window concordance 79.514% -> 79.544%, and
+# "typical" calibration on the 2026 out-of-sample window improves substantially
+# at low/mid evidence depth (n_eff<=1 band: 47.4% -> 49.9% beaten, target 50%;
+# n_eff 1-2: 38.1% -> 41.6%) with ZERO change at high n_eff (5-10 and >10 bands
+# identical to baseline either way -- K0 does not explain the persistent
+# high-n_eff miscalibration, see below). 0.3/0.5 improve low-n_eff calibration
+# even further (up to 56.1%/50.0% at K0=0.3) but cost concordance (78.998%/
+# 79.288% confirm) -- 0.7 was chosen as the point that does not trade one
+# metric for the other. KAPPA/KFLOOR NOT swept alongside it -- still inherited
+# placeholders.
+#
+# THE HIGH-n_eff MISCALIBRATION IS NOT A K0 PROBLEM AND IS STILL OPEN. Cutting
+# "typical beaten %" by n_eff (not by month -- the original "worst in January"
+# framing was a confound, see citiusdata#16) shows a monotonic decline from
+# ~50% at low evidence to 0% at n_eff>10, UNCHANGED by K0 in the 5-10/>10
+# bands across the whole swept range. Per-race `surprise` shows an
+# overshoot-and-drift shape (positive right after debut, growing negative with
+# n_eff) that K0 only partially addresses. SEQ_CENS/SEQ_CENSWIN tested and
+# ruled out directly (no effect on any band). Candidate causes not yet tested:
+# the debut-prior's own calibration (promoted on a concordance sweep, never
+# calibration-checked), a feedback loop through the shared race-shock
+# estimator (established athletes' already-biased surprise feeding into the
+# shock estimate for their own races), or an aging effect this engine has no
+# mechanism for. Needs a real experiment campaign, not a knob tweak.
+K0 <- .env_num("SEQ_K0", 0.7); KAPPA <- .env_num("SEQ_KAPPA", 3)
 KFLOOR <- .env_num("SEQ_KFLOOR", 0.32)
 CENS <- .env_num("SEQ_CENS", 0.3); STALE <- Sys.getenv("SEQ_STALE","1") != "0"
 CENSWIN   <- .env_num("SEQ_CENSWIN", 0.1)
