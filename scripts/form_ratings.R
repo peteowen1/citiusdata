@@ -2480,12 +2480,19 @@ if (HIST) {
   # parquets, same schema, same row count, silently incomparable, with nothing
   # in the output saying so. score_by_event.R reads this stamp and refuses to
   # difference arms built by different engines.
+  # Sys.getenv(character(0)) does NOT return empty -- it falls back to the
+  # no-argument form and returns the WHOLE environment. With no SEQ_* vars set
+  # (the normal case) this silently dumped every secret in the shell --
+  # CLOUDFLARE_API_TOKEN, CLERK_SECRET_KEY included -- into a "SEQ_* knobs used"
+  # field. Never reached git (data/ is gitignored, confirmed no meta JSON was
+  # ever committed), but the guard belongs here regardless.
+  seq_env_names <- grep("^SEQ_", names(Sys.getenv()), value = TRUE)
   meta <- list(tag = TAG,
                written = format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
                engine = basename(ENGINE_SRC),
                engine_sha = ENGINE_SHA,
                rows = nrow(hd),
-               env = as.list(Sys.getenv(grep("^SEQ_", names(Sys.getenv()), value = TRUE))))
+               env = if (length(seq_env_names)) as.list(Sys.getenv(seq_env_names)) else list())
   writeLines(jsonlite::toJSON(meta, auto_unbox = TRUE, pretty = TRUE),
              file.path(SC, sprintf("seqv3_meta_%s.json", TAG)))
   cat(sprintf("[%s] engine sha %s\n", TAG, substr(ENGINE_SHA, 1, 12)))

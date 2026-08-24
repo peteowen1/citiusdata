@@ -18,6 +18,7 @@ suppressMessages({
   library(data.table)
 })
 D <- file.path(VERSE, "citiusdata", "data")
+source(file.path(VERSE, "citiusdata", "scripts", "_deployed.R"))
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
 say <- function(...) cat(sprintf(...), "\n", sep = "")
@@ -98,15 +99,12 @@ if (file.exists(f)) {
       100 * mean(!is.na(sw_src$worldaquatics$birthdate)))
 }
 
-f <- file.path(D, "glasgow2026_swimming.json")
-if (file.exists(f)) {
-  g <- setDT(parse_crs_export(f))[!is.na(event_id)]
-  sw_src$crs_glasgow2026 <- unique(g[, .(
-    source = "crs_glasgow2026", athlete_id = NA_character_,
-    athlete_name, country, birthdate = as.Date(NA))])
-  say("  crs_glasgow2026: %s swimmers (no birthdate -- results pages omit it)",
-      format(nrow(sw_src$crs_glasgow2026), big.mark = ","))
-}
+g <- setDT(glasgow_swimming(D))[!is.na(event_id)]
+sw_src$crs_glasgow2026 <- unique(g[, .(
+  source = "crs_glasgow2026", athlete_id = NA_character_,
+  athlete_name, country, birthdate = as.Date(NA))])
+say("  crs_glasgow2026: %s swimmers (no birthdate -- results pages omit it)",
+    format(nrow(sw_src$crs_glasgow2026), big.mark = ","))
 
 # Swim England and SwimCloud each carry their own stable id, so within a source
 # linking is exact -- but the three namespaces are disjoint (a uuid, SE123456,

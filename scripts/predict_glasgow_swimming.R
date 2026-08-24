@@ -23,6 +23,7 @@
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
 source(here::here("citiusdata", "scripts", "_env.R"))
+source(here::here("citiusdata", "scripts", "_deployed.R"))
 
 OUT <- here::here("citiusdata", "data")
 N_SIMS <- 20000L
@@ -40,11 +41,24 @@ stopifnot("Glasgow must not be inside the swimming history" =
             !any(sw$competition_id %in% unique(g$competition_id), na.rm = TRUE))
 
 # --- link Glasgow swimmers to their history ---------------------------------
+# Primary: the cross-source crosswalk (person_id), which resolves identity
+# across World Aquatics/CRS/SwimEngland/SwimCloud instead of guessing from name
+# order alone. Falls back to the athlete_key() name-token match only where the
+# crosswalk has no link -- costs nothing, no regression risk (citius#3).
+xw <- setDT(arrow::read_parquet(file.path(OUT, "athlete_crosswalk_swimming.parquet")))
+xw_g  <- unique(xw[source == "crs_glasgow2026" & !is.na(person_id),
+                    .(athlete_name, person_id)])[, .SD[1L], by = athlete_name]
+xw_wa <- unique(xw[source == "worldaquatics" & !is.na(person_id),
+                    .(person_id, wa_id = athlete_id)])[, .SD[1L], by = person_id]
+xw_link <- merge(xw_g, xw_wa, by = "person_id")[, .(athlete_name, wa_id)]
+
 lk <- unique(sw[!is.na(athlete_name), .(key = athlete_key(athlete_name),
                                         hist_id = as.character(athlete_id))])
 lk <- lk[!is.na(key), .(hist_id = hist_id[1]), by = key]
 g[, key := athlete_key(athlete_name)]
 g <- merge(g, lk, by = "key", all.x = TRUE)
+g <- merge(g, xw_link, by = "athlete_name", all.x = TRUE)
+g[, hist_id := fifelse(!is.na(wa_id), wa_id, hist_id)][, wa_id := NULL]
 cli::cli_alert_info(
   "Linked {uniqueN(g[!is.na(hist_id)]$athlete_name)} of {uniqueN(g$athlete_name)} swimmer{?s} to World Aquatics history."
 )
