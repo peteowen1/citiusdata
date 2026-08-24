@@ -18,6 +18,7 @@ suppressMessages({
   library(data.table)
 })
 D <- file.path(VERSE, "citiusdata", "data")
+source(file.path(VERSE, "citiusdata", "scripts", "_deployed.R"))
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
 say <- function(...) cat(sprintf(...), "\n", sep = "")
@@ -98,9 +99,17 @@ if (file.exists(f)) {
       100 * mean(!is.na(sw_src$worldaquatics$birthdate)))
 }
 
-f <- file.path(D, "glasgow2026_swimming.json")
-if (file.exists(f)) {
-  g <- setDT(parse_crs_export(f))[!is.na(event_id)]
+# glasgow_swimming() stop()s if NONE of its four capture files exist -- fine
+# as an internal contract, but every other optional source in this script
+# degrades gracefully on a missing/fresh-clone data/ (data/* is gitignored,
+# so that's a real state, not hypothetical). Match that convention here too,
+# so a missing Games capture doesn't abort the worldaquatics/swimengland/
+# swimcloud sources that come after it.
+g <- tryCatch(setDT(glasgow_swimming(D))[!is.na(event_id)],
+              error = function(e) { say("  crs_glasgow2026: SKIPPED (%s)", conditionMessage(e)); NULL })
+if (!is.null(g)) {
+  stopifnot("glasgow_swimming() returned implausibly few rows - capture files may be stale/truncated" =
+              nrow(g) > 300)
   sw_src$crs_glasgow2026 <- unique(g[, .(
     source = "crs_glasgow2026", athlete_id = NA_character_,
     athlete_name, country, birthdate = as.Date(NA))])

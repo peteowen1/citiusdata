@@ -19,14 +19,20 @@
 #   SEQ_TAG=hist_ref  SEQ_HUBER=0  SEQ_HIST=1
 #   SEQ_TAG=hist_hub  SEQ_HUBER=<winner> SEQ_HIST=1
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D <- "C:/dev/citiusverse/citiusdata/data"
 REF <- Sys.getenv("HUB_REF", "seqv3_history_hist_ref.parquet")
 HUB <- Sys.getenv("HUB_ARM", "seqv3_history_hist_hub.parquet")
-WIN <- as.integer(Sys.getenv("HUB_WIN", "5"))     # races after the catastrophe
+WIN <- .env_int("HUB_WIN", "5")     # races after the catastrophe
 
 load1 <- function(f, lab) {
   x <- setDT(read_parquet(file.path(D, f)))
   x <- x[is.finite(perf) & is.finite(r_pre) & is.finite(place)]
+  # SCORE THE ORDERING VALUE for the concordance below. r_pre is right for the
+  # residual and bias columns - the engine updates on r_pre - but wrong for
+  # deciding whether clipping helped, which is an ORDERING question.
+  if (!"r_use" %chin% names(x)) x[, r_use := r_pre]
+  x[!is.finite(r_use), r_use := r_pre]
   setorder(x, athlete_id, event_id, date, race_key)
   x[, idx := seq_len(.N), by = .(athlete_id, event_id)]
   x[, arm := lab][]
@@ -53,7 +59,7 @@ score <- function(x, lab) {
   s <- x[race_key %chin% unique(s$race_key)]        # whole race, for pairs
   s <- s[place <= 12]
   s[, rid := .GRP, by = race_key]
-  p <- s[, .(rid, i = seq_len(.N), place, r = r_pre)]
+  p <- s[, .(rid, i = seq_len(.N), place, r = r_use)]
   m <- merge(p, p, by = "rid", allow.cartesian = TRUE, suffixes = c(".x", ".y"))
   m <- m[i.x < i.y & place.x != place.y]
   d <- m$r.x - m$r.y

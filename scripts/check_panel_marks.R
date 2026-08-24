@@ -10,16 +10,32 @@
 # bug the moment a unit is spelled differently.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 OUT <- "C:/dev/citiusverse/citiusdata/data"
-h <- setDT(read_parquet(file.path(OUT, "seqv3_history_final.parquet")))
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
+h <- setDT(read_parquet(file.path(OUT, sprintf("seqv3_history_%s.parquet", TAG))))
 h <- h[seen == TRUE & is.finite(perf) & is.finite(r_pre)]
 h[, resid := perf - r_pre]
-d <- setDT(read_parquet(file.path(OUT, "form_display_final.parquet")))
+d <- setDT(read_parquet(file.path(OUT, sprintf("form_display_%s.parquet", TAG))))
 nm <- unique(d[, .(athlete_id, athlete_name)])
 
 # --- derive orientation per event, and check it ---
+# The centre includes the evidence-depth correction as of 2026-08-20. Rebuilding
+# from R + offset alone stopped reproducing pred_mark when that landed, and this
+# assertion is what caught it - correctly, because a displayed mark that cannot
+# be rebuilt from the columns published beside it is unverifiable. band_adj is
+# now published for exactly this reason; tolerate its absence for older files.
+if (!"band_adj" %chin% names(d)) d[, band_adj := 0]
+d[!is.finite(band_adj), band_adj := 0]
 o <- d[is.finite(pred_mark) & pred_mark > 0 & is.finite(R) & is.finite(offset)]
-o[, e_pos := abs(exp(R + offset) - pred_mark)]
-o[, e_neg := abs(exp(-(R + offset)) - pred_mark)]
+o[, centre := R + offset + band_adj]
+o[, e_pos := abs(exp(centre) - pred_mark)]
+o[, e_neg := abs(exp(-centre) - pred_mark)]
 ori <- o[, .(orient = if (median(e_neg) < median(e_pos)) -1L else 1L,
              err = min(median(e_neg), median(e_pos)),
              unit = unit[1]), by = event_id]
@@ -52,7 +68,7 @@ cohort <- function(yr, n_panel = 10, min_finals = 6) {
   p <- merge(p, nm, by = "athlete_id", all.x = TRUE)
   p <- merge(p, ori[, .(event_id, orient)], by = "event_id", all.x = TRUE)
   setorder(p, -gap)
-  p[1:min(n_panel, .N)]
+  p[seq_len(min(n_panel, .N))]
 }
 
 show <- function(p, yr) {

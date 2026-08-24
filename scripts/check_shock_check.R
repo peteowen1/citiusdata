@@ -5,8 +5,16 @@
 # they did not, the shock is mis-estimated and it is eating her signal.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 OUT <- "C:/dev/citiusverse/citiusdata/data"
-h <- setDT(read_parquet(file.path(OUT, "seqv3_history_final.parquet")))
-d <- setDT(read_parquet(file.path(OUT, "form_display_final.parquet")))
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
+h <- setDT(read_parquet(file.path(OUT, sprintf("seqv3_history_%s.parquet", TAG))))
+d <- setDT(read_parquet(file.path(OUT, sprintf("form_display_%s.parquet", TAG))))
 aid <- d[event_id == "AT-800Metres-W" & grepl("Werro", athlete_name), athlete_id][1]
 keys <- h[athlete_id == aid & event_id == "AT-800Metres-W" &
           date %in% as.Date(c("2026-06-07","2026-06-16","2026-06-28")), race_key]

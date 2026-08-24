@@ -7,6 +7,7 @@
 
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_env.R"))
 
 OUT <- here::here("citiusdata", "data")
 N_SIMS <- 20000L
@@ -17,7 +18,7 @@ N_SIMS <- 20000L
 HISTORY <- Sys.getenv("CITIUS_SWIM_HISTORY", "swimming_history.rds")
 # 1825 days = 10 half-lives at 180 days; the oldest retained swim carries ~0.1%
 # of the weight of a fresh one.
-HISTORY_DAYS <- as.integer(Sys.getenv("CITIUS_HISTORY_DAYS", "1825"))
+HISTORY_DAYS <- .env_int("CITIUS_HISTORY_DAYS", "1825")
 history <- readRDS(file.path(OUT, HISTORY))
 cli::cli_alert_info("Input: {HISTORY}")
 history <- history[!is.na(event_id) & !is.na(athlete_id)]
@@ -42,7 +43,7 @@ calibration <- calibrate(clean, min_races = 10L)
 # below w_total = 1, ability_se balloons to ~2x sigma, and favourites get
 # under-rated. Do not copy a tuned value across sports.
 half_life_fitted <- fit_half_life(clean[!is.na(perf)])
-half_life <- as.numeric(Sys.getenv("CITIUS_HALF_LIFE", "180"))
+half_life <- .env_num("CITIUS_HALF_LIFE", "180")
 cat("\nfitted (next-result MAE) vs used (ranking-tuned):\n")
 print(half_life_fitted); cat("using:", half_life, "days\n")
 

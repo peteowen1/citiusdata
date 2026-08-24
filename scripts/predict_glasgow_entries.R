@@ -128,7 +128,7 @@ cli::cli_alert_success("{nrow(pred)} prediction row{?s} across {uniqueN(pred$eve
 # --- reports -----------------------------------------------------------------
 setorder(pred, event_id, -p_gold)
 cat("\n=== TOP 3 PER EVENT ===\n")
-top3 <- pred[, .SD[1:min(3, .N)], by = event_id]
+top3 <- pred[, .SD[seq_len(min(3, .N))], by = event_id]
 print(top3[, .(discipline, sex, athlete, nation,
                gold = round(p_gold, 3), medal = round(p_medal, 3))], nrows = 200)
 

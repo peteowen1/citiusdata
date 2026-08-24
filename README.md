@@ -1,6 +1,6 @@
 # citiusdata
 
-Cached competition result histories and scrapers for [`citius`](../citius).
+Cached competition result histories and scrapers for [`citius`](https://github.com/peteowen1/citius).
 
 Follows the ecosystem release-as-data-bus pattern: processed parquet is
 published to GitHub Releases via `piggyback` and read back by `citius` loaders

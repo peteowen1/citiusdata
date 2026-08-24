@@ -11,14 +11,15 @@
 #      when n_eff_own <= FORM_XB_MAXN. That is per athlete, not per event.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D    <- here::here("citiusdata", "data")
 SIMF <- Sys.getenv("SIM_FILE", "event_similarity_spec.parquet")
 # the all-athletes matrix is carried alongside so the combined-event inflation is
 # visible rather than merely corrected out of sight
 SIMF_ALL <- Sys.getenv("SIM_FILE_ALL", "event_similarity_all.parquet")
-MINCOR <- as.numeric(Sys.getenv("FORM_XB_MINCOR", "0.30"))
-NSIB   <- as.integer(Sys.getenv("FORM_XB_NSIB", "6"))
-TOPN   <- as.integer(Sys.getenv("TOPN", "10"))
+MINCOR <- .env_num("FORM_XB_MINCOR", "0.30")
+NSIB   <- .env_int("FORM_XB_NSIB", "6")
+TOPN   <- .env_int("TOPN", "10")
 
 sim <- setDT(read_parquet(file.path(D, SIMF)))
 scol <- if ("cor_use" %chin% names(sim)) "cor_use" else "cor"

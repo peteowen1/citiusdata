@@ -18,6 +18,14 @@ suppressMessages(library(data.table)); library(arrow); library(jsonlite)
 source(file.path(VERSE, "citiusdata", "scripts", "_deployed.R"))
 
 D      <- file.path(VERSE, "citiusdata", "data")
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
 BLOG   <- file.path(VERSE, "citiusdata", "blog")
 BUCKET <- "inthegame-data"
 PREFIX <- "athletics"
@@ -184,7 +192,7 @@ EVENT_NOTES <- list(
 # the caveat sentence is built from that number so the page cannot drift from
 # what was measured. A missing file is a hard stop, not a silent default: a page
 # that quietly loses its calibration caveat is worse than one that fails to build.
-CALIB_F <- file.path(D, "form_display_final_calib.json")
+CALIB_F <- file.path(D, sprintf("form_display_%s_calib.json", TAG))
 if (!file.exists(CALIB_F))
   stop("form_display_final_calib.json is missing -- run form_display_marks.R before exporting")
 CALIB <- fromJSON(CALIB_F)

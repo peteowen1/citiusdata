@@ -19,11 +19,12 @@
 # comparable rather than one enjoying cross-event information the other lacks.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D   <- here::here("citiusdata", "data")
 TAG <- Sys.getenv("FORM_TAG", "final")
-K0  <- .env <- as.numeric(Sys.getenv("H2H_K0", "60"))
-KH  <- as.numeric(Sys.getenv("H2H_KHALF", "5"))   # races at which K has halved
-SC  <- as.numeric(Sys.getenv("H2H_SCALE", "400"))
+K0  <- .env <- .env_num("H2H_K0", "60")
+KH  <- .env_num("H2H_KHALF", "5")   # races at which K has halved
+SC  <- .env_num("H2H_SCALE", "400")
 
 h <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG)),
                         col_select = c("race_key","date","event_id","athlete_id",

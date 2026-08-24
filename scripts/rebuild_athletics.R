@@ -8,15 +8,104 @@
 
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_env.R"))
 
 OUT <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "ath_comp_cache")
 N_SIMS <- 10000L
-MAX_BACKTEST_COMPS <- as.integer(Sys.getenv("CITIUS_BACKTEST_COMPS", "200"))
+MAX_BACKTEST_COMPS <- .env_int("CITIUS_BACKTEST_COMPS", "200")
 
+# UNION WITH WHAT IS ALREADY THERE - never replace it.
+#
+# This assembles championship_results.rds from the cache directory alone, and
+# five OTHER harvesters write the same file: harvest_gap.R,
+# harvest_gap_20260818.R, harvest_missing_majors.R, harvest_referenced.R and
+# harvest_athletics_meets.R. Rebuilding from the cache therefore DELETED
+# everything they had contributed. Measured 2026-08-21: 4,797 competitions
+# gained and 2,324 LOST - 763,531 rows - with the total going DOWN by 21,147 on
+# a run that had just harvested 4,817 new competitions overnight. It exits 0,
+# and the only symptom is a file that got smaller.
+#
+# Only 4 of the lost were T2 and none were T1, and the engine inner-joins on
+# T1/T2, so the model barely noticed. But the corpus also feeds percentiles,
+# meet strength and the tier analysis, and all of those read T3.
+#
+# Cache rows WIN where a competition is in both - they are the fuller,
+# eventName-carrying version this re-harvest exists to get - and prior rows are
+# carried forward for any competition the cache does not hold.
+.prior_f <- file.path(OUT, "championship_results.rds")
+.prior <- if (file.exists(.prior_f)) as.data.table(readRDS(.prior_f)) else NULL
 champs <- rbindlist(lapply(list.files(CACHE, full.names = TRUE), readRDS),
                     use.names = TRUE, fill = TRUE)
 champs <- champs[!is.na(date)]
+if (!is.null(.prior) && nrow(.prior)) {
+  .cache_ids <- unique(as.character(champs$competition_id))
+  .keep <- .prior[!as.character(competition_id) %chin% .cache_ids]
+  .n_before <- nrow(champs)
+  if (nrow(.keep)) {
+    champs <- rbindlist(list(champs, .keep), use.names = TRUE, fill = TRUE)
+    cat(sprintf("carried forward %s competition(s) / %s rows the cache does not hold\n",
+                format(uniqueN(.keep$competition_id), big.mark = ","),
+                format(nrow(.keep), big.mark = ",")))
+  }
+  # A UNION CANNOT SHRINK, and cannot lose a competition. The failure this
+  # replaces was a silent shrink that returned exit 0.
+  stopifnot(
+    "the union lost rows - it must only ever add" = nrow(champs) >= .n_before,
+    "the union dropped competitions the prior file had" =
+      length(setdiff(unique(as.character(.prior$competition_id)),
+                     unique(as.character(champs$competition_id)))) == 0)
+}
+
+# CACHE ROWS WIN ON DATA, NOT ON THE MEET'S NAME.
+#
+# "Cache wins" is right for results - they are the fuller, eventName-carrying
+# version. It is wrong for comp_name, which is a property of the COMPETITION and
+# not of the row, and which the competition endpoint frequently omits entirely.
+# Applied naively on 2026-08-21 it wiped the name off every major: Paris 2024,
+# Rio, London, Sydney and the World Championships all came through with
+# named_rows = 0, `class` is derived from comp_name by regex, and so all of them
+# became `unclassified` and dropped out of T1_elite. Catalogue naming fell from
+# 83.0% to 67.1% in one run, and the anchor that exists to catch exactly this
+# passed vacuously - `cat_tbl[class == "olympics"]` was EMPTY, and all() of
+# nothing is TRUE.
+#
+# So the name is coalesced across every source for the competition: whoever has
+# one, wins. A name cannot conflict in a way that matters here - it is the same
+# meet - and having any name is strictly better than having none.
+# THE NAME MAP MUST INCLUDE THE PRIOR FILE, not just the rows we kept.
+# Coalescing only within `champs` cannot help when the cached rows carry no name
+# at all and the prior rows holding it were the ones "cache wins" discarded -
+# which is exactly the state the majors were in. Build the map from BOTH.
+.src <- if (!is.null(.prior) && nrow(.prior))
+          rbindlist(list(champs[, .(competition_id, comp_name)],
+                         .prior[, .(competition_id, comp_name)]),
+                    use.names = TRUE, fill = TRUE) else
+          champs[, .(competition_id, comp_name)]
+.nm <- .src[!is.na(comp_name) & nzchar(comp_name),
+            .(.fill_name = comp_name[1]), by = competition_id]
+if (nrow(.nm)) {
+  .missing_before <- champs[is.na(comp_name) | !nzchar(comp_name), .N]
+  champs <- merge(champs, .nm, by = "competition_id", all.x = TRUE)
+  champs[(is.na(comp_name) | !nzchar(comp_name)) &
+         !is.na(.fill_name), comp_name := .fill_name]
+  champs[, .fill_name := NULL]
+  .missing_after <- champs[is.na(comp_name) | !nzchar(comp_name), .N]
+  cat(sprintf("meet names: %s rows unnamed, %s filled from a sibling row of the same competition\n",
+              format(.missing_before, big.mark = ","),
+              format(.missing_before - .missing_after, big.mark = ",")))
+  # NAMING MUST NOT GO BACKWARDS. This is the check the vacuous anchor failed to
+  # be: it compares against the file this run is replacing.
+  if (!is.null(.prior) && nrow(.prior)) {
+    .pn <- uniqueN(.prior[!is.na(comp_name) & nzchar(comp_name)]$competition_id)
+    .cn <- uniqueN(champs[!is.na(comp_name) & nzchar(comp_name)]$competition_id)
+    cat(sprintf("named competitions: %s -> %s\n", format(.pn, big.mark = ","),
+                format(.cn, big.mark = ",")))
+    stopifnot("fewer competitions are named than before - a source overwrote names it should have kept" =
+                .cn >= .pn)
+  }
+}
+
 saveRDS(champs, file.path(OUT, "championship_results.rds"))
 cli::cli_alert_success(
   "{format(nrow(champs), big.mark=',')} results | {uniqueN(champs$competition_id)} meets | {format(uniqueN(champs$athlete_id), big.mark=',')} athletes"

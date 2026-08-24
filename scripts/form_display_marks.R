@@ -24,11 +24,12 @@ FIT_BEFORE <- as.Date("2025-01-01")
 # An env var set to "" is NOT unset: Sys.getenv returns "" and as.integer("")
 # is NA, which would silently disable the thin-event fallback. Treat empty as
 # unset (learned the hard way on SEQ_MAXPLACE, 2026-08-15).
-.env_int <- function(name, default) {
-  v <- Sys.getenv(name, ""); if (!nzchar(v)) return(default)
-  x <- suppressWarnings(as.integer(v))
-  if (is.na(x)) stop(sprintf("%s='%s' is not an integer", name, v)); x
-}
+# Shared with every other script now, rather than a private copy here. The
+# lesson below was learned in this file and then not applied to the nine other
+# knobs in it, including both recency windows - an empty FORM_ACT_EVENT_D would
+# have made the window NA, and `last >= ASOF - NA` is NA, which matches no rows
+# and empties the page.
+source(here::here("citiusdata", "scripts", "_env.R"))
 MIN_N <- .env_int("FORM_OFFSET_MIN_N", 200L)
 # Minimum evidence before a "good day" mark is shown at all. Also the population
 # the spread is FITTED on, so the column is calibrated for the readers who see
@@ -71,7 +72,64 @@ st[is.na(offset), offset := pooled]
 if (any(is.na(st$orientation)))
   stop(sprintf("%d rows have no orientation in the registry -- refusing to guess a mark",
                sum(is.na(st$orientation))))
-st[, pred_mark := exp(orientation * (R + offset))]
+# --- 2a. DEPTH CORRECTION on the displayed centre -----------------------------
+# The pooled per-event offset is right on average and wrong for everybody. It is
+# beaten 50.3% of the time overall - which looks perfect - while being beaten
+# 53.6% by records with under one effective race and 43.9% by records with 15+.
+# The offset carries the average depth of its fit population and fits nobody at
+# the extremes.
+#
+# Corrected with one median per evidence BAND, shared across events, on top of
+# the per-event offset. Per event AND band would be 86 x 7 cells and far too
+# thin; this is the smallest change that can work, and it keeps the per-event
+# level, which is real and varies in sign.
+#
+# Fitted before 2025, then checked on 2025 and 2026 SEPARATELY. Worst band
+# deviation from 50%: 2025 6.1 pp -> 2.2 pp, 2026 5.3 pp -> 2.5 pp. It has to
+# improve the window that is neither fitted nor sealed, or it was fitted to the
+# sealed data by accident.
+#
+# APPLIED TO THE DISPLAYED CENTRE ONLY, NEVER TO rank_mark. Two athletes on the
+# same rating with different evidence get different depth corrections, so putting
+# this in the sort key WOULD reorder them - and this file guarantees in its header
+# that it changes what is shown and never the rank. What an athlete typically runs
+# and how they are ranked are different questions that never had to share an
+# offset; separating them satisfies the guarantee instead of breaking it.
+DEPTH_ADJ <- Sys.getenv("FORM_DEPTH_ADJ", "1") != "0"
+.band_of <- function(n) cut(n, c(-Inf, 1, 2, 3, 5, 8, 15, Inf),
+                            labels = c("<1", "1-2", "2-3", "3-5", "5-8", "8-15", "15+"))
+if (DEPTH_ADJ) {
+  fitb <- copy(fit)
+  fitb[, band := .band_of(n_eff)]
+  dadj <- fitb[, .(band_adj = stats::median(resid - pooled), n_band = .N), by = band]
+  dadj[n_band < 500, band_adj := 0]      # a band too thin to estimate gets nothing
+  st[, band := .band_of(n_eff)]
+  st <- merge(st, dadj[, .(band, band_adj)], by = "band", all.x = TRUE)
+  st[is.na(band_adj), band_adj := 0]
+  cat(sprintf("depth correction: %d bands, range %+.4f to %+.4f log-perf\n",
+              dadj[band_adj != 0, .N], min(dadj$band_adj), max(dadj$band_adj)))
+  stopifnot("the depth correction is inert - every band came out zero" =
+              any(dadj$band_adj != 0))
+} else {
+  st[, band_adj := 0]
+}
+# the centre every DISPLAYED mark is built from
+# Rebuild the SAME centre on any validation frame. Checking a new spread against
+# an old centre measures neither, which is exactly what happened on the first
+# attempt at this - the good-day column read 7.80% purely because the check line
+# had no depth correction while the spread had been refitted with one.
+# Uses r_pre (the rating carried into that race) rather than R (the end state),
+# because a validation row is a race and not an athlete.
+.add_centre <- function(x) {
+  if (DEPTH_ADJ) {
+    x[, band := .band_of(n_eff)]
+    x <- merge(x, dadj[, .(band, band_adj)], by = "band", all.x = TRUE)
+    x[is.na(band_adj), band_adj := 0]
+  } else x[, band_adj := 0]
+  x[, centre := r_pre + offset + band_adj][]
+}
+st[, centre := R + offset + band_adj]
+st[, pred_mark := exp(orientation * centre)]
 st[, raw_mark  := exp(orientation * R)]
 # THE MARK THE TABLE IS ACTUALLY SORTED BY. Ranking runs on R_ceil (see the
 # setorder below) while `pred_mark` comes from R, so without this the visible
@@ -105,12 +163,39 @@ zf <- h[seen == TRUE & rc == "final" & date < FIT_BEFORE & n_eff >= PEAK_MIN_N &
 # offset with a spread taken around zero double-counted the skew.
 zf <- merge(zf, off[, .(event_id, offset)], by = "event_id", all.x = TRUE)
 zf[is.na(offset), offset := pooled]
-zf[, z := (perf - r_pre - offset) / sqrt(v_pre)]
+# z is measured around the SAME centre the peak mark is built on, depth
+# correction included. Fitting the spread around one centre and applying it
+# around another would reintroduce exactly the bias just removed.
+if (DEPTH_ADJ) {
+  zf[, band := .band_of(n_eff)]
+  zf <- merge(zf, dadj[, .(band, band_adj)], by = "band", all.x = TRUE)
+  zf[is.na(band_adj), band_adj := 0]
+} else zf[, band_adj := 0]
+zf[, z := (perf - r_pre - offset - band_adj) / sqrt(v_pre)]
 q50 <- stats::quantile(zf$z, 0.50); q90 <- stats::quantile(zf$z, 0.90)
-ZSPREAD <- unname(q90 - q50)
-cat(sprintf("peak spread: empirical q90 %.3f - q50 %.3f = %.3f sd (normal would be %.3f)\n",
-            q90, q50, ZSPREAD, stats::qnorm(0.9)))
-st[, peak_mark := exp(orientation * (R + offset + ZSPREAD * sqrt(v)))]
+# ZSPREAD IS q90, NOT q90 - q50. The column promises P(beat it) = 10%, the rule
+# applied is `perf > r_pre + offset + ZSPREAD * sqrt(v)`, and z here is ALREADY
+# (perf - r_pre - offset)/sqrt(v_pre) - so the value delivering that promise is
+# the 90th percentile of z, full stop.
+#
+# Subtracting q50 was double-centring. The comment above argued that only the
+# spread above typical should be taken "because the level is already handled by
+# the per-event offset" - which is exactly why q50 must NOT be subtracted again:
+# the offset is already inside z. It reads as harmless because q50 looks like
+# zero, and it is not: on the deep population it is -0.131, because deep records
+# run slightly below their rating (the known evidence-depth bias). Subtracting a
+# negative made ZSPREAD 1.544 instead of 1.413, pushed the good-day mark further
+# out, and left it beaten 8.05% of the time against the 10% it advertises - a
+# 1-in-12.4 event labelled 1 in 10.
+#
+# This needed no tuning on the sealed window, which is why the earlier decision
+# not to "refit the spread to force 10%" was right and still left a bug: it is
+# arithmetic, not calibration. 2025 sits unused between the fit (< 2025) and the
+# sealed check (2026), and is reported below as an independent validation.
+ZSPREAD <- unname(q90)
+cat(sprintf("peak spread: q90 of z = %.3f sd (normal would be %.3f); q50 %.3f\n",
+            ZSPREAD, stats::qnorm(0.9), q50))
+st[, peak_mark := exp(orientation * (centre + ZSPREAD * sqrt(v)))]
 st[!is.finite(v) | v <= 0, peak_mark := NA_real_]
 # SUPPRESS the good-day mark on a thin record rather than capping it.
 #
@@ -188,7 +273,47 @@ st <- merge(st, nm, by = "athlete_id", all.x = TRUE)
 # Expressed in months back from the DATA date, not as fixed dates: hardcoding
 # them would silently tighten the window every time the corpus is extended.
 ASOF        <- max(st$last, na.rm = TRUE)
-ACT_ATHLETE <- as.integer(Sys.getenv("FORM_ACT_ATHLETE_D", "210"))  # ~7 months
+# WIDENED 210 -> 730 on 2026-08-19 (Pete). The 210-day athlete window was
+# calibrated on track athletes and quietly deleted the people who race least
+# often, which in athletics means the marathoners and the walkers.
+#
+# It cost us the Olympic champion. Sifan Hassan won the Paris 2024 marathon and
+# had NO ranking in any event - not unnamed on the race page, absent from the
+# rankings entirely - despite 129 scoreable marks, 40 rated races and n_eff 6.41
+# in the 5000m. Her last race was 2025-11-02, which is 287 days before the data
+# date. A marathoner runs two a year by design; the rule asked her to be a track
+# athlete. Across Paris 2024, 152 of 991 medal-round performances (15.3%)
+# belonged to athletes the rankings did not contain.
+#
+# The measurement that settles it - share of athlete-events passing the EVENT
+# test that the 210-day ATHLETE test then killed, against how long that family
+# actually goes between races:
+#
+#   family     killed by 210d    median gap    p90 gap
+#   road            31.5%           196 d       567 d
+#   walk            22.6%           175 d       455 d
+#   jump             9.5%            23 d       265 d
+#   sprint           8.1%            16 d       265 d
+#
+# Road athletes have a p90 racing gap of 567 days. A 210-day window asks them to
+# race nearly three times more often than the sport does, so it removes a third
+# of them at any moment - and a filtered-out athlete leaves no trace, which is
+# why this ran for months without anyone seeing it.
+#
+# At 730 the ATHLETE test stops binding at all: the EVENT test (400 d) is
+# strictly tighter, so the composite rule becomes "contested THIS event within
+# 400 days", which is the condition that was doing the work anyway. That is the
+# honest description of what this now is - not a wider athlete window, but the
+# retirement of a rule that was fighting the calendar of half the sport.
+# RAISED 730 -> 800 with the event window, and the two must move together.
+# Setting the event window to 800 alone got medallist coverage to 98.4%, not
+# 100%: Brian Pintado and Alvaro Martin both last raced on 2024-08-01, which is
+# 745 days back, so the EVENT test admitted them and the 730-day ATHLETE test
+# then silently excluded them again. The composite rule is the tighter of the
+# two, so an athlete window below the event window is a hidden second gate that
+# looks like nothing at all when you read the event window on its own.
+# Keep ACT_ATHLETE >= ACT_EVENT unless there is a reason to want that gate.
+ACT_ATHLETE <- .env_int("FORM_ACT_ATHLETE_D", "800")  # see above
 # WIDENED 330 -> 365 on 2026-08-18. Pete asked whether 330 was too strict. It
 # was, though not for the reason offered: staleness decays `n_eff`, never `R`,
 # so a rating sits at full strength indefinitely and the window is the ONLY
@@ -211,8 +336,44 @@ ACT_ATHLETE <- as.integer(Sys.getenv("FORM_ACT_ATHLETE_D", "210"))  # ~7 months
 # weeks before they next contest the event. 400 gives five weeks of slack for
 # calendar drift, still sits on the 70.0 / 97.7 plateau, and stays clear of the
 # cliff at 420.
-ACT_EVENT   <- as.integer(Sys.getenv("FORM_ACT_EVENT_D",   "400"))  # a year plus calendar slack
-ACT_MIN_N   <- as.numeric(Sys.getenv("FORM_ACT_MIN_NEFF",  "1"))
+# WIDENED 400 -> 800 on 2026-08-19 (Pete's call, after seeing the medallist
+# audit). This is the change that takes Paris 2024 medallist coverage from
+# 89.0% to 100%: fourteen medallists had no rated result in their own event
+# inside 400 days, seven of them because their last run of it WAS the Olympic
+# final, which sits 735-745 days back. 730 recovers seven of the fourteen; 760
+# recovers all fourteen; 800 clears them with a margin.
+#
+# The audit is the thing to trust here rather than the concordance metric, and
+# it took four attempts to define a medallist correctly - see
+# check_paris_medallists.R, which found that `place <= 3` counts DNFs (0 and -1
+# are sentinels), that top three in a heat is not a medal, and that decathlon
+# component placings were awarding nine extra 100m medals.
+#
+# Every one of the fourteen was checked individually and none is a data fault.
+# Sydney McLaughlin-Levrone did not stop racing, she moved to the flat 400m and
+# won the world title in it. Cheptegei did not run Tokyo 2025 at all. Sifan
+# Hassan has not contested a 10,000m since Paris. Fred Kerley entered ten races
+# in 2025 and produced a mark in none of them, and in every one of those races
+# he was the only athlete in a field of 7-9 without one. So no amount of
+# harvesting would have recovered these; a window was the only lever.
+#
+# WHAT THIS COSTS, measured on referees that can see it rather than p@10 (440
+# slots, one athlete moves it 0.2pp). A recency window is a pure FILTER: it
+# never re-rates anybody, which check_window_common.R demonstrates by scoring
+# every window on the population common to all of them and getting identical
+# numbers to four decimals. So widening cannot degrade an existing athlete's
+# rating - it only adds staler names beside the medallists. Overall Spearman is
+# flat across the whole range (0.9250-0.9299 on ~4,500 matched athletes).
+#
+# THE ONE THING TO WATCH: 800 is measured from the DATA date, not a fixed date,
+# so it does not silently tighten as the corpus grows. But the 735-745 day
+# figure it was chosen against is the distance to Paris 2024, and that distance
+# grows daily - this reaches the Games until roughly late 2026 and then stops.
+# It is not a permanent answer to "keep championship medallists visible"; a
+# medallist-persistence rule is. Re-check this against
+# check_paris_medallists.R before Tokyo 2027, not after.
+ACT_EVENT   <- .env_int("FORM_ACT_EVENT_D", "800")  # two years and two months; see above
+ACT_MIN_N   <- .env_num("FORM_ACT_MIN_NEFF", "1")
 la <- h[, .(last_any = max(date)), by = athlete_id]
 la[, athlete_id := as.character(athlete_id)]
 st <- merge(st, la, by = "athlete_id", all.x = TRUE)
@@ -292,7 +453,7 @@ cat(sprintf("ranking on R_ceil; %s of %s rows fall back to raw R (no best mark)\
 # the simulation at the median, with no measured loss on either metric. The
 # monotone shape is the robust finding; the exact 8 was chosen on this referee.
 CE_ON <- Sys.getenv("FORM_CE_BLEND", "1") != "0"
-CE_PW <- as.numeric(Sys.getenv("FORM_CE_PRIOR_W", "8"))
+CE_PW <- .env_num("FORM_CE_PRIOR_W", "8")
 CE_EV <- c("AT-Decathlon-M", "AT-Heptathlon-M", "AT-Heptathlon-W", "AT-Pentathlon-W")
 if (CE_ON && any(act$event_id %chin% CE_EV)) {
   fsim <- file.path(OUT, "combined_simulated.parquet")
@@ -308,6 +469,25 @@ if (CE_ON && any(act$event_id %chin% CE_EV)) {
   # component slots filled rather than observed, and without this the published
   # rank is partly a guess that looks identical to a fully observed one.
   .cs <- setDT(read_parquet(fsim))
+  # THE SIMULATION MUST COME FROM THIS ARM. Its component ratings are read from
+  # seqv2_state_<STATE_TAG>, and that default sat on a stale development arm for
+  # two days without anything failing - the blend fired, the counts looked right,
+  # and the published decathlon ranking was built on the wrong ratings.
+  if ("state_tag" %chin% names(.cs)) {
+    .st <- unique(.cs$state_tag)
+    if (length(.st) != 1L || !identical(.st[1], TAG))
+      stop("combined_simulated.parquet was built from state tag '",
+           paste(.st, collapse = "/"), "' but this display is tag '", TAG,
+           "'.
+  Rebuild:  STATE_TAG=", TAG,
+           " Rscript citiusdata/scripts/build_combined_simulation.R")
+  } else {
+    stop("combined_simulated.parquet predates the state_tag stamp, so which
+",
+         "  engine arm it was built from cannot be established. Rebuild it:
+",
+         "  STATE_TAG=", TAG, " Rscript citiusdata/scripts/build_combined_simulation.R")
+  }
   if (!"imputed_slots" %chin% names(.cs)) .cs[, imputed_slots := NA_integer_]
   csim <- .cs[, .(event_id = ce, athlete_id = as.character(athlete_id),
                   sim_mean, sim_sd, imputed_slots)]
@@ -386,7 +566,7 @@ XB_ON     <- Sys.getenv("FORM_XBLEND", "1") != "0"
 # Precision@10 is identical on either matrix (69.1), so this buys correctness at
 # no measured cost. event_similarity_all.parquet is kept for comparison.
 XB_SIMF   <- Sys.getenv("FORM_XB_SIMFILE", "event_similarity_spec.parquet")
-XB_MINCOR <- as.numeric(Sys.getenv("FORM_XB_MINCOR", "0.30"))
+XB_MINCOR <- .env_num("FORM_XB_MINCOR", "0.30")
 # TIGHTENED 2026-08-19 from xb 1.0 / maxn 8, after LOOKING AT THE PAGE. At the
 # old settings precision@10 was unchanged (69.1 either way) and the published
 # 1500m read: 1. Wanyonyi (n_eff 1.5, an 800m runner), 2. El Bakkali (n_eff 1.1,
@@ -398,9 +578,9 @@ XB_MINCOR <- as.numeric(Sys.getenv("FORM_XB_MINCOR", "0.30"))
 # blend exists for are unaffected, because the ENGINE changes (winner censoring,
 # the shock fix) are what actually fixed them: Almgren's 10,000m rank is 8th at
 # either setting, and Kerr recovers from 18th to 13th.
-XB_STR    <- as.numeric(Sys.getenv("FORM_XB",        "0.25"))
-XB_NSIB   <- as.integer(Sys.getenv("FORM_XB_NSIB",   "6"))
-XB_MAXN   <- as.numeric(Sys.getenv("FORM_XB_MAXN",   "4"))
+XB_STR    <- .env_num("FORM_XB", "0.25")
+XB_NSIB   <- .env_int("FORM_XB_NSIB", "6")
+XB_MAXN   <- .env_num("FORM_XB_MAXN", "4")
 if (XB_ON) {
   simf <- file.path(OUT, XB_SIMF)   # OUT is this script's data dir, not D
   # Deliberately a hard stop. A silently skipped blend would publish the old
@@ -458,6 +638,76 @@ if (XB_ON) {
 # and computed AFTER every adjustment to it. Any column built earlier is stale
 # by construction, which is how a ranking table came to show a slower athlete
 # above a faster one with nothing on the page to explain it.
+# --- SHRINK THE RANKING KEY BY EVIDENCE ---------------------------------------
+#
+# A rank resting on one race is not the same claim as one resting on twelve, and
+# until now the table presented them identically: 352 of 819 published top-ten
+# rows had fewer than three effective races, the men's 10,000m top ten contained
+# three athletes with exactly 1.0, and Barega led the 1500m on 1.60 races.
+#
+# A hard cutoff would discard a genuinely fast athlete who has raced twice and
+# pick a threshold with nothing behind it. Shrinking toward the event mean in
+# proportion to evidence is the same empirical-Bayes shape the ratings already
+# use: w = n_eff / (n_eff + k). A deep record barely moves, a single race is
+# pulled most of the way back.
+#
+# k = 0.5, chosen on FIVE referees rather than one, because they disagree and the
+# disagreement is the finding. Against the World Athletics order:
+#
+#   k     p@10   p@16   p@20   spearman  sp_top30   thin top-ten rows
+#   none  70.2   69.0   68.1   0.9256    0.7754     352
+#   0.5   71.6   71.9   70.8   0.9337    0.7851     311
+#   1.0   71.6   72.7   71.9   0.9342    0.7722     284
+#   2.0   70.9   72.9   71.5   0.9304    0.7438     257
+#
+# RETIRED 2026-08-19: DEFAULT 0.5 -> 0. Everything above is agreement with the
+# World Athletics ranking, and that is a REFERENCE, not the referee. The metric
+# this model is judged on is out-of-sample tier-weighted concordance - given the
+# athletes who actually lined up, did the rating order them the way the race did.
+# Measured on that (check_shrinkage_concordance.R), shrinkage is not a small win,
+# it is a large loss:
+#
+#   k      sealed 2026 weighted   vs none      tune 2025 vs none
+#   0      76.429                  -           -
+#   0.25   75.838                 -0.591       -0.531
+#   0.5    75.399                 -1.030       -0.929
+#   1.0    74.688                 -1.741       -1.609
+#   4.0    72.776                 -3.653       -3.805
+#
+# The noise floor on that window is 0.159 pp, so -1.030 is 6.5x the floor. It is
+# monotone in k, and the independent 2025 window agrees in sign at every step.
+# There is no reading of this on which shrinkage helps.
+#
+# WHY THE TWO REFEREES DISAGREED, which is the lesson worth keeping. Pulling thin
+# athletes toward the event mean makes our list resemble WA's more closely -
+# their ranking has its own recency and quality rules that penalise exactly those
+# athletes - while making it WORSE at ordering actual races. Agreeing with another
+# system is not the same as being right, and when the reference and the ground
+# truth point opposite ways, the ground truth decides.
+#
+# WHAT IS LOST. Thin evidence returns to the published top tens: 312 rows with
+# under three effective races, against 276 with shrinkage at 0.5. That problem is
+# real and remains open - but the fix cannot be a transformation that measurably
+# worsens the ordering, and the honest position is that this attempt was refuted
+# rather than that the problem is solved. Set FORM_EVID_K to re-enable.
+EVID_K <- .env_num("FORM_EVID_K", "0")
+if (EVID_K > 0) {
+  act[, .mu_r := mean(R_rank), by = event_id]
+  act[, .w_ev := n_eff / (n_eff + EVID_K)]
+  .thin_before <- act[, {setorder(.SD, -R_rank); sum(n_eff[seq_len(min(10, .N))] < 3)},
+                      by = event_id][, sum(V1)]
+  act[, R_rank := .mu_r + .w_ev * (R_rank - .mu_r)]
+  .thin_after <- act[, {setorder(.SD, -R_rank); sum(n_eff[seq_len(min(10, .N))] < 3)},
+                     by = event_id][, sum(V1)]
+  cat(sprintf("evidence shrinkage k=%.1f: median weight %.2f | thin top-ten rows %d -> %d\n",
+              EVID_K, stats::median(act$.w_ev), .thin_before, .thin_after))
+  # If it removes nothing it is not doing its job, and a silently inert transform
+  # is exactly what this repo keeps producing.
+  stopifnot("evidence shrinkage removed no thin rows at all - it is inert" =
+              .thin_after < .thin_before)
+  act[, c(".mu_r", ".w_ev") := NULL]
+}
+
 act[, rank_mark := exp(orientation * (R_rank + offset))]
 setorder(act, event_id, -R_rank)
 act[, rk := seq_len(.N), by = event_id]
@@ -545,10 +795,28 @@ val <- h[seen == TRUE & rc == "final" & year(date) == 2026 &
          is.finite(perf) & is.finite(r_pre) & is.finite(v_pre) & v_pre > 0]
 val <- merge(val, off[, .(event_id, offset)], by = "event_id", all.x = TRUE)
 val[is.na(offset), offset := pooled]
-val[, peak_perf := r_pre + offset + ZSPREAD * sqrt(v_pre)]
+val <- .add_centre(val)
+val[, peak_perf := centre + ZSPREAD * sqrt(v_pre)]
 val_pk <- val[n_eff >= PEAK_MIN_N]        # the good-day column's own population
 hit <- val_pk[, mean(perf > peak_perf)]
-typ_hit <- val[, mean(perf > r_pre + offset)]
+typ_hit <- val[, mean(perf > centre)]
+# 2025 IS AN INDEPENDENT WINDOW, and it was going spare. The spread is fitted on
+# dates before 2025 and the honest check is 2026, so 2025 belongs to neither -
+# which makes it the right place to confirm a change to this column WITHOUT
+# reading the sealed window first. If 2025 and 2026 disagree the fix is
+# overfitted to one of them and should not ship.
+v25 <- h[seen == TRUE & rc == "final" & year(date) == 2025 &
+         is.finite(perf) & is.finite(r_pre) & is.finite(v_pre) & v_pre > 0]
+v25 <- merge(v25, off[, .(event_id, offset)], by = "event_id", all.x = TRUE)
+v25[is.na(offset), offset := pooled]
+v25 <- .add_centre(v25)
+v25_pk <- v25[n_eff >= PEAK_MIN_N]
+stopifnot("the 2025 validation window is empty" = nrow(v25_pk) > 1000)
+cat(sprintf("\nVALIDATION (2025, neither fitted nor sealed):\n"))
+cat(sprintf("  'good day' beaten %.2f%% over %s finals with n_eff >= %d (target 10%%)\n",
+            100 * v25_pk[, mean(perf > centre + ZSPREAD * sqrt(v_pre))],
+            format(nrow(v25_pk), big.mark = ","), PEAK_MIN_N))
+
 cat(sprintf("\nCALIBRATION (2026, out of sample):\n"))
 cat(sprintf("  'typical'  beaten %.2f%% over %s finals (target 50%%)\n",
             100*typ_hit, format(nrow(val), big.mark=",")))
@@ -558,7 +826,7 @@ cat(sprintf("  'good day' beaten %.2f%% over %s finals with n_eff >= %d (target 
 # records beat 'typical' LESS often than thin ones do. Reported rather than
 # corrected - it is the known evidence-depth bias, not a fault in this file.
 cat(sprintf("  ...'typical' among those same deep records: %.2f%%\n",
-            100*val_pk[, mean(perf > r_pre + offset)]))
+            100*val_pk[, mean(perf > centre)]))
 # The page must state the MEASURED frequency, not the nominal one. Median
 # centring fixed the skew half of this; the rest is structural. ZSPREAD is ONE
 # pooled quantile of z applied to athletes whose variances differ, so it cannot
@@ -617,7 +885,14 @@ if (!"xb_sibs"  %in% names(act)) act[, xb_sibs  := 0L]
 if (!"ce_share" %in% names(act)) act[, ce_share := 0]
 if (!"imputed_slots" %in% names(act)) act[, imputed_slots := NA_integer_]
 act[, ce_imputed := fifelse(is.finite(imputed_slots), as.integer(imputed_slots), 0L)]
+# band_adj IS PUBLISHED, not just used. Without it pred_mark stopped being
+# reconstructible from the published columns the moment the depth correction
+# landed - exp(R + offset) no longer reproduces it - and check_panel_marks.R
+# caught exactly that by failing its reconstruction assertion. A displayed number
+# that cannot be rebuilt from the columns beside it is one nobody can check.
+if (!"band_adj" %chin% names(act)) act[, band_adj := 0]
 write_parquet(act[, .(event_id, athlete_id, athlete_name, rk, R, R_ceil, offset,
+                      band_adj,
                       pred_mark, rank_mark, peak_mark, raw_mark, n_eff, v, last, unit,
                       xb_share, xb_sibs, ce_share, ce_imputed)],
               file.path(OUT, sprintf("form_display_%s.parquet", TAG)))

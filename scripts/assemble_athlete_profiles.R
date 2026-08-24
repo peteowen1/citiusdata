@@ -101,7 +101,52 @@ w <- function(l, nm) {
 }
 cat(sprintf("\n404 sentinels skipped: %d\n", nmiss))
 m <- w(Filter(Negate(is.null), meta), "athlete_meta")
-w(wr, "athlete_wa_rankings"); w(pb, "athlete_pbs")
+.wr <- w(wr, "athlete_wa_rankings"); w(pb, "athlete_pbs")
+
+# ---- APPEND A DATED SNAPSHOT TO THE RANKING HISTORY -------------------------
+#
+# WHY THIS EXISTS, AND WHY IT CANNOT BE BACKFILLED. The profile JSON gives
+# `currentWorldRankings` - the ranking as of the moment it was fetched, with no
+# date attached. athlete_wa_rankings.parquet is therefore a SNAPSHOT, and world
+# rankings run on a rolling 12-18 month window, so that place already reflects
+# every race we might want to predict and everything after them. Scored as a
+# walk-forward predictor it would look excellent and mean nothing.
+#
+# That makes "does the model beat the official world ranking" - the first
+# question anyone outside this project would ask - unanswerable today, and
+# unanswerable retroactively no matter how much is scraped later. World
+# Athletics does not publish historical ranking tables, and a ranking as it
+# stood in March 2026 cannot be reconstructed from a table fetched in August.
+#
+# So this appends today's snapshot, stamped, and the series accrues from now.
+# Every week this does not run is a week permanently missing. In a season there
+# is enough to benchmark against; there is no way to get there faster.
+#
+# IDEMPOTENT BY DATE. Re-running on the same day replaces that day's rows rather
+# than duplicating them, so this is safe to call from anything.
+if (!is.null(.wr) && nrow(.wr)) {
+  .today <- Sys.Date()
+  .snap <- copy(.wr)[, captured_on := .today]
+  .hf <- file.path(D, "athlete_wa_rankings_history.parquet")
+  if (file.exists(.hf)) {
+    .old <- setDT(read_parquet(.hf))
+    .old <- .old[captured_on != .today]          # replace, never duplicate
+    .snap <- rbindlist(list(.old, .snap), use.names = TRUE, fill = TRUE)
+  }
+  write_parquet(.snap, .hf)
+  .days <- .snap[, uniqueN(captured_on)]
+  cat(sprintf("  %-22s %s rows across %s capture date(s)%s", "wa_rankings_history",
+              format(nrow(.snap), big.mark = ","), format(.days, big.mark = ","), "\n"))
+  if (.days == 1L)
+    cat("    first capture - a usable series needs months, so run this weekly\n")
+  # A HISTORY THAT STOPS GROWING IS THE FAILURE MODE, and it is silent: the file
+  # exists, the snapshot writes, and nothing looks wrong. Say the span out loud
+  # so a stalled schedule is visible in the log rather than discovered in a year.
+  if (.days > 1L)
+    cat(sprintf("    spans %s to %s (%d days)\n",
+                .snap[, min(captured_on)], .snap[, max(captured_on)],
+                as.integer(.snap[, max(captured_on) - min(captured_on)])))
+}
 w(sb, "athlete_sbs");         w(ho, "athlete_honours")
 if (!is.null(m)) {
   cat(sprintf("\ncountry present on %.1f%% | birthdate on %.1f%%\n",

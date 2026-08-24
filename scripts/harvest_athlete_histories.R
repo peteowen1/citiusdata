@@ -67,7 +67,7 @@ done <- sub("\\.rds$", "", list.files(CACHE))
 todo <- held[!as.character(aid) %in% done]
 cli::cli_alert_info("{format(nrow(todo), big.mark = ',')} remaining ({round(100 * nrow(todo) / nrow(held))}%).")
 
-n <- min(nrow(todo), as.integer(Sys.getenv("CITIUS_MAX_ATHLETES", "200000")))
+n <- min(nrow(todo), .env_int("CITIUS_MAX_ATHLETES", "200000"))
 # Measured: this feed is LATENCY bound, not throttle bound -- per-request time is
 # flat from a 0.25s throttle down to 0.03s (0.85s vs 0.76s). So the only lever is
 # concurrency, and it works: 1 worker 0.81s/req, 3 workers 0.37s, 6 workers
@@ -75,7 +75,7 @@ n <- min(nrow(todo), as.integer(Sys.getenv("CITIUS_MAX_ATHLETES", "200000")))
 #
 # Six is the sweet spot. Ten buys 0.5x more for 67% more connections against a
 # free community API, which is not a trade worth making.
-WORKERS <- as.integer(Sys.getenv("CITIUS_WORKERS", "6"))
+WORKERS <- .env_int("CITIUS_WORKERS", "6")
 remaining_after <- max(0L, nrow(todo) - n)   # captured BEFORE todo is truncated
 todo <- todo[seq_len(n)]
 cli::cli_alert_info("Fetching {n} athlete{?s} on {WORKERS} worker{?s}.")
@@ -112,6 +112,7 @@ if (WORKERS <= 1L) {
   parallel::clusterEvalQ(cl, {
     suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
     library(data.table); NULL
+source(here::here("citiusdata", "scripts", "_env.R"))
   })
   parallel::clusterExport(cl, c("fetch_one", "CACHE"), envir = environment())
   # Each task carries its OWN values. Referencing `todo` inside the worker looks

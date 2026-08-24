@@ -23,13 +23,17 @@
 # corpus-level artefact rather than changing the engine.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D      <- here::here("citiusdata", "data")
-VKAP   <- as.numeric(Sys.getenv("ADJ_VENUE_KAPPA", "400"))  # shrinkage on venue n
-MINA   <- as.integer(Sys.getenv("ADJ_MIN_ATH", "3"))
+VKAP   <- .env_num("ADJ_VENUE_KAPPA", "400")  # shrinkage on city n
+SKAP   <- .env_num("ADJ_STADIUM_KAPPA", "150") # stadium shrinks toward its city
+MINA   <- .env_int("ADJ_MIN_ATH", "3")
 # Same argument as the wind fit: the venue effect is estimated from marks the
 # engine is scored on, so cap the ESTIMATION window while still applying the
 # result everywhere.
-VMAXY  <- as.integer(Sys.getenv("ADJ_MAX_YEAR", "9999"))
+VMAXY  <- .env_int("ADJ_MAX_YEAR", "9999")
+IKAP   <- .env_num("ADJ_INDOOR_KAPPA", "200")  # shrinkage on indoor n
+INDOOR_ON <- Sys.getenv("ADJ_INDOOR", "1") != "0"
 WCURVE <- Sys.getenv("ADJ_WIND_CURVES", "wind_effect_curves.json")
 AOUT   <- Sys.getenv("ADJ_OUT", "adjusted_marks.parquet")
 reg <- as.data.table(citius::citius_events())[, .(event_id, discipline, sex, family,
@@ -38,8 +42,25 @@ reg <- as.data.table(citius::citius_events())[, .(event_id, discipline, sex, fam
 c0 <- setDT(read_parquet(file.path(D, "athletics_corpus.parquet"),
                          col_select = c("athlete_id","event_id","race_key","mark","perf",
                                         "date","wind","legal","indoor","scoreable",
-                                        "venue_city","tier","place","comp_name")))
+                                        "venue_city","venue_stadium","tier","place","comp_name")))
 c0[, athlete_id := as.character(athlete_id)]
+
+# BACKFILL THE VENUE WITHIN A RACE. Everyone in a race is at the same venue by
+# definition, but venue_city is missing on 0.18% of marks and that missingness
+# CLUSTERS: 3,234 races had some rows naming the venue and others blank, so the
+# blank rows fell back to venue_adj = 0 while their own competitors received the
+# city effect. A correction that differs between two athletes in the same race is
+# wrong on its face - it cannot be a property of the place.
+# Spotted by Pete reading the within-race constancy table and asking how venue
+# could possibly vary inside a race.
+.fill <- function(x) { u <- unique(x[!is.na(x) & nzchar(x)]); if (length(u) == 1L) u else x }
+c0[, venue_city    := .fill(venue_city),    by = race_key]
+c0[, venue_stadium := .fill(venue_stadium), by = race_key]
+.still <- c0[, .(k = uniqueN(fifelse(is.na(venue_city) | !nzchar(venue_city),
+                                     "(none)", venue_city))), by = race_key][k > 1, .N]
+cat(sprintf("venue backfilled within race; %d race(s) still disagree about the venue
+",
+            .still))
 c0 <- c0[scoreable == TRUE & is.finite(perf) & is.finite(mark) & mark > 0]
 # An inner join drops any corpus event_id absent from the registry, silently and
 # partially. This verse has lost whole events that way before - the 20km walk and
@@ -90,17 +111,64 @@ cat(sprintf("wind corrected: %s performances across %d events\n",
             format(sum(c0$wind_adj != 0), big.mark = ","), uniqueN(wc$event_id)))
 stopifnot("no performance received a wind correction" = sum(c0$wind_adj != 0) > 1000)
 
-# --- 2. VENUE -----------------------------------------------------------------
+# --- 2. INDOOR ----------------------------------------------------------------
+# An 800m on a 200m banked oval is not an 800m on a 400m outdoor track, and until
+# now the model treated them as the same event with no conversion. World
+# Athletics does not: it ranks them separately as "800 Metres Short Track".
+#
+# Note this is the FIRST correction that touches indoor marks at all - both the
+# wind and venue blocks above filter to outdoor, so an indoor mark previously
+# passed through completely uncorrected.
+#
+# Estimated within athlete AND restricted to athletes who raced both surfaces in
+# the same event. Someone who only ever races indoors contributes no contrast and
+# would otherwise just add their own level to one side of the comparison.
+c0[, indoor_adj := 0]
+if (INDOOR_ON) {
+  ix <- c0[!is.na(indoor) & is.finite(perf)]
+  ix[, n_ath := .N, by = .(athlete_id, event_id)]
+  ix <- ix[n_ath >= MINA]
+  ix <- ix[as.integer(format(date, "%Y")) <= VMAXY]
+  ix[, has_both := uniqueN(indoor) == 2, by = .(athlete_id, event_id)]
+  ix <- ix[has_both == TRUE]
+  ix[, y := perf - mean(perf), by = .(athlete_id, event_id)]
+  ie <- ix[, .(n_in = sum(indoor), n_out = sum(!indoor),
+               gap = mean(y[indoor == TRUE]) - mean(y[!indoor])), by = event_id]
+  # An event needs both sides before its gap means anything. 60m is indoor-only
+  # and correctly gets nothing rather than a number built from noise.
+  ie <- ie[n_in >= 30 & n_out >= 30 & is.finite(gap)]
+  ie[, indoor_eff := gap * n_in / (n_in + IKAP)]        # shrink thin events
+  cat(sprintf("\nindoor effect: %d events with both surfaces, median %+.2f%% of a mark\n",
+              nrow(ie), 100 * (exp(-stats::median(ie$indoor_eff)) - 1)))
+  print(ie[order(indoor_eff)][c(seq_len(min(3L, .N)), seq.int(max(1L, .N - 2L), .N)),
+           .(event_id, n_in, n_out, pct = round(100 * (exp(-indoor_eff) - 1), 2))])
+  stopifnot("no event produced an indoor effect" = nrow(ie) > 5)
+  c0 <- merge(c0, ie[, .(event_id, indoor_eff)], by = "event_id", all.x = TRUE)
+  # applied ONLY to indoor rows - an outdoor mark needs no conversion to outdoor
+  c0[, indoor_adj := fifelse(!is.na(indoor) & indoor == TRUE & is.finite(indoor_eff),
+                             indoor_eff, 0)]
+  c0[, indoor_eff := NULL]
+  cat(sprintf("indoor correction applied to %s marks (%.1f%% of the corpus)\n",
+              format(sum(c0$indoor_adj != 0), big.mark = ","),
+              100 * mean(c0$indoor_adj != 0)))
+}
+
+# --- 3. VENUE -----------------------------------------------------------------
 # Estimated per venue and FAMILY, because altitude pushes sprints and distance in
 # opposite directions and a single per-venue number would average them away.
-v <- c0[!is.na(venue_city) & nzchar(venue_city) & (is.na(indoor) | indoor == FALSE)]
+# ALL MARKS, not outdoor only. Indoor rows were excluded here while the surface
+# was unmodelled, because they would have contaminated the venue effect. Now
+# that indoor is removed first (section 2), an indoor arena can carry a venue
+# effect of its own - an indoor track at altitude is still at altitude, and
+# previously received no place correction whatsoever.
+v <- c0[!is.na(venue_city) & nzchar(venue_city)]
 v[, n_ath := .N, by = .(athlete_id, event_id)]
 v <- v[n_ath >= MINA]
 v <- v[as.integer(format(date, "%Y")) <= VMAXY]
 cat(sprintf("venue effects estimated up to %s (%s marks)\n",
             ifelse(VMAXY > 9000, "all years", as.character(VMAXY)),
             format(nrow(v), big.mark = ",")))
-v[, y := perf - wind_adj]                                  # wind removed first
+v[, y := perf - wind_adj - indoor_adj]                     # wind and surface first
 v[, y := y - mean(y), by = .(athlete_id, event_id)]        # then ability
 v[is.na(tier) | !nzchar(tier), tier := "unknown"]
 # then meet occasion - but LEAVE THE VENUE ITSELF OUT of the tier mean. A plain
@@ -118,19 +186,68 @@ cat(sprintf("tier demeaning: %.1f%% of rows use a leave-one-out tier mean\n",
             100 * mean(v$others_n >= 30)))
 v[, y := y - t_mean]
 v[, c("t_sum", "t_n", "vt_sum", "vt_n", "others_n", "t_mean") := NULL]
+# HIERARCHICAL: STADIUM inside CITY. The effect was fitted per city, but 614
+# cities hold more than one stadium and they cover 1,929,289 marks - 53% of the
+# corpus. London has 14, Birmingham 6. Two tracks in one city can differ in
+# surface, age and exposure, and averaging them loses exactly the signal this
+# term exists to capture.
+#
+# A stadium cell is thinner than a city cell, so it is shrunk toward its OWN
+# CITY rather than toward zero. That is the right prior: absent evidence about a
+# specific track, the best guess is the city it sits in, not the world average.
+# A stadium with plenty of marks moves away from its city; one with a handful
+# stays put. Cities themselves still shrink toward zero as before.
 ve <- v[, .(n_v = .N, raw_eff = mean(y)), by = .(venue_city, family)]
-ve[, venue_adj := raw_eff * n_v / (n_v + VKAP)]            # shrink small venues
-cat(sprintf("venue effects: %s venue-family cells, shrinkage kappa %.0f\n",
+ve[, city_adj := raw_eff * n_v / (n_v + VKAP)]
+cat(sprintf("venue effects: %s city-family cells, kappa %.0f
+",
             format(nrow(ve), big.mark = ","), VKAP))
-print(ve[order(-abs(venue_adj))][1:8, .(venue_city, family, n_v,
-                                        raw = round(raw_eff, 4),
-                                        shrunk = round(venue_adj, 4))])
-c0 <- merge(c0, ve[, .(venue_city, family, venue_adj)],
-            by = c("venue_city", "family"), all.x = TRUE)
-c0[!is.finite(venue_adj), venue_adj := 0]
+# UNCONDITIONAL. The only assertion on the venue fit lived inside the
+# if (STAD_ON) branch, so with ADJ_STADIUM=0 and a degenerate fit - an
+# aggressive ADJ_MAX_YEAR or ADJ_MIN_ATH during a sweep - every row fell through
+# stadium NA, then city NA, then := 0, and the venue term was silently switched
+# off for the whole corpus with only a cheerful "venue applied: 0.0%" to show
+# for it.
+stopifnot("no venue-family cells were built - the venue term would be inert" =
+            nrow(ve) > 100)
 
-# --- 3. the adjusted mark -----------------------------------------------------
-c0[, adj_perf := perf - wind_adj - venue_adj]
+STAD_ON <- Sys.getenv("ADJ_STADIUM", "1") != "0"
+if (STAD_ON) {
+  vs <- v[!is.na(venue_stadium) & nzchar(venue_stadium)]
+  se <- vs[, .(n_s = .N, raw_s = mean(y)), by = .(venue_city, venue_stadium, family)]
+  se <- merge(se, ve[, .(venue_city, family, city_adj)], by = c("venue_city", "family"))
+  se[, w := n_s / (n_s + SKAP)]
+  se[, venue_adj := city_adj + w * (raw_s - city_adj)]
+  cat(sprintf("stadium effects: %s stadium-family cells, kappa %.0f, median weight %.2f
+",
+              format(nrow(se), big.mark = ","), SKAP, stats::median(se$w)))
+  stopifnot("no stadium cells built" = nrow(se) > 100)
+  print(se[order(-abs(venue_adj - city_adj))][seq_len(min(6L, .N)),
+        .(venue_city, venue_stadium = substr(venue_stadium, 1, 24), family, n_s,
+          city = round(city_adj, 4), stadium = round(venue_adj, 4))])
+  c0 <- merge(c0, se[, .(venue_city, venue_stadium, family, venue_adj)],
+              by = c("venue_city", "venue_stadium", "family"), all.x = TRUE)
+} else {
+  c0[, venue_adj := NA_real_]
+}
+# fall back to the city wherever no stadium estimate exists
+c0 <- merge(c0, ve[, .(venue_city, family, city_adj)], by = c("venue_city", "family"),
+            all.x = TRUE)
+.n_stad <- sum(is.finite(c0$venue_adj))
+c0[!is.finite(venue_adj), venue_adj := city_adj]
+c0[!is.finite(venue_adj), venue_adj := 0]
+c0[, city_adj := NULL]
+cat(sprintf("venue applied: %.1f%% from a specific stadium, the rest from the city
+",
+            100 * .n_stad / nrow(c0)))
+
+# --- 4. the adjusted mark -----------------------------------------------------
+# SIGN: every term is SUBTRACTED in perf space, where higher is better. The
+# indoor gap is negative for sprints (indoor is worse), so subtracting it raises
+# the corrected performance - an indoor mark is worth MORE than it looks. If that
+# is backwards the within-athlete scatter test in section 4 will get worse, which
+# is exactly how the wind sign error was caught.
+c0[, adj_perf := perf - wind_adj - venue_adj - indoor_adj]
 c0[, adj_mark := exp(fifelse(orientation == -1, -adj_perf, adj_perf))]
 c0[, adj_delta := adj_mark - mark]
 
@@ -141,7 +258,7 @@ print(c0[wind_adj != 0 | venue_adj != 0,
            p95_abs_change = round(stats::quantile(abs(adj_delta), .95), 3)),
          by = .(family, unit)][order(-performances)])
 
-# --- 4. DOES IT HELP? ----------------------------------------------------------
+# --- 5. DOES IT HELP? ----------------------------------------------------------
 # The test that matters: if these corrections remove real noise, an athlete's
 # marks should be MORE consistent after adjustment. If within-athlete scatter
 # does not fall, the corrections are moving numbers around without adding
@@ -168,7 +285,14 @@ cat(sprintf("\nOVERALL: %.5f -> %.5f (%+.2f%%)\n", overall$sd_raw, overall$sd_ad
 
 out <- c0[, .(race_key, athlete_id, event_id, discipline, sex, family, date,
               comp_name, venue_city, place, mark, adj_mark, adj_delta,
-              wind, wind_adj, venue_adj, legal, unit)]
+              wind, wind_adj, venue_adj, indoor_adj, indoor, legal, unit)]
 f <- file.path(D, AOUT)
+# THE TEST THAT MATTERS MUST GATE THE WRITE. The header calls within-athlete
+# scatter the mechanism that caught the wind sign error - it rose 6.7% in the
+# sprints while the jumps improved, and that is the only reason the flip was
+# found. It was being PRINTED and not asserted, so the same regression would
+# ship with nothing but a console line contradicting it.
+stopifnot("the corrections made athletes LESS self-consistent - a sign error, almost certainly" =
+            overall$sd_adj < overall$sd_raw)
 write_parquet(out, f)
 cat(sprintf("\nwrote %s (%s performances)\n", basename(f), format(nrow(out), big.mark = ",")))

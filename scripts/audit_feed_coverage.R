@@ -15,8 +15,9 @@
 
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_env.R"))
 
-N_COMPS <- as.integer(Sys.getenv("CITIUS_AUDIT_COMPS", "12"))
+N_COMPS <- .env_int("CITIUS_AUDIT_COMPS", "12")
 OUT <- here::here("citiusdata", "data")
 comps <- setDT(readRDS(file.path(OUT, "ath_competitions.rds")))
 # Same load-sanity guard as the harvest scripts: an empty competitions file

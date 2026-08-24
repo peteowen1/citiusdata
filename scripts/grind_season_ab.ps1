@@ -1,6 +1,6 @@
 # Grind the season A/B through in small batches, coexisting with other jobs.
 #
-# Why batches rather than one long run: this box runs a torpverse queue that
+# Why batches rather than one long run: this box runs another project queue that
 # launches multi-GB R jobs back to back. Four attempts at a single 250-meet run
 # were OOM-killed, each losing 20-30 minutes of wall clock. The kill is silent --
 # no error, no exit code, the log simply stops mid-meet.
@@ -18,7 +18,8 @@ param(
   [int]$TargetMeets = 250,
   [int]$MaxBatches = 60,
   [int]$MinFreeGB = 4,
-  [string]$LogDir = "C:\Users\peteo\AppData\Local\Temp\claude\C--dev-citiusverse\0cd9e19b-97fb-40d6-8dda-6753ef497ab6\scratchpad"
+  # Was a session scratchpad path, which ceased to exist with that session.
+  [string]$LogDir = $(if ($env:GRIND_LOG_DIR) { $env:GRIND_LOG_DIR } else { Join-Path $env:TEMP "citius-grind" })
 )
 
 Set-Location C:\dev\citiusverse

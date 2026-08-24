@@ -28,7 +28,11 @@
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D    <- here::here("citiusdata", "data")
-TAG  <- Sys.getenv("STATE_TAG", "base4")
+# DEFAULT TO THE DEPLOYED ARM. This read "base4" until 2026-08-20 - the arm that
+# happened to be current the day it was written. Nothing failed when the engine
+# moved on: the state file still existed, so this quietly scored against a
+# two-day-old state. Five scripts shared the default; only one was noticed.
+TAG  <- Sys.getenv("STATE_TAG", "final")
 SIMF <- Sys.getenv("SIM_FILE", "event_similarity_all.parquet")
 
 st <- setDT(read_parquet(file.path(D, sprintf("seqv2_state_%s.parquet", TAG))))
@@ -105,7 +109,7 @@ score <- function(sel, col, lab) {
   sel[, rk := seq_len(.N), by = event_id]
   ours <- sel[rk <= 10, .(event_id, athlete_id)]
   res <- rbindlist(lapply(unique(wa$event_id), function(EV) {
-    w10 <- wa[event_id == EV][order(wa_place)][1:min(10, .N)]
+    w10 <- wa[event_id == EV][order(wa_place)][seq_len(min(10, .N))]
     o10 <- ours[event_id == EV]
     if (!nrow(o10) || !nrow(w10)) return(NULL)
     data.table(event_id = EV, wa_n = nrow(w10),
@@ -163,7 +167,7 @@ cat("\n=== the athletes that prompted this ===\n")
 # the configuration that ties the published precision@10 while still borrowing
 # for thin records: mincor 0.30, xb 1.0, and only athletes with n_eff <= 8
 b <- blend(0.30, 1, 6L, 8)
-d <- setDT(read_parquet(file.path(D, "form_display_final.parquet")))
+d <- setDT(read_parquet(file.path(D, sprintf("form_display_%s.parquet", TAG))))
 nm <- unique(d[, .(athlete_id = as.character(athlete_id), athlete_name)])
 for (tab in list(list(t = act, k = "z", lab = "published"),
                  list(t = b,   k = "z_blend", lab = "blended 0.30/1/6, maxn 8"))) {

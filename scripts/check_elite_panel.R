@@ -11,10 +11,18 @@
 # fixed panel, and p-values are Holm-corrected for its size.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 OUT <- "C:/dev/citiusverse/citiusdata/data"
-h <- setDT(read_parquet(file.path(OUT, "seqv3_history_final.parquet")))
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
+h <- setDT(read_parquet(file.path(OUT, sprintf("seqv3_history_%s.parquet", TAG))))
 h <- h[seen == TRUE & is.finite(perf) & is.finite(r_pre)]
 h[, resid := perf - r_pre]
-d <- setDT(read_parquet(file.path(OUT, "form_display_final.parquet")))
+d <- setDT(read_parquet(file.path(OUT, sprintf("form_display_%s.parquet", TAG))))
 nm <- unique(d[, .(athlete_id, athlete_name)])
 
 cohort <- function(yr, n_panel = 15, min_finals = 6) {
@@ -32,7 +40,7 @@ cohort <- function(yr, n_panel = 15, min_finals = 6) {
   p <- merge(p, tested, by = c("athlete_id","event_id"))[finals >= min_finals]
   p <- merge(p, nm, by = "athlete_id", all.x = TRUE)
   setorder(p, -gap)
-  p <- p[1:min(n_panel, .N)]
+  p <- p[seq_len(min(n_panel, .N))]
   p[, p_holm := stats::p.adjust(p, method = "holm")]
   p[, cohort := yr][]
 }

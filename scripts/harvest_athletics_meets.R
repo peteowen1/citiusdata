@@ -29,6 +29,7 @@
 
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_env.R"))
 
 OUT <- here::here("citiusdata", "data")
 COMP_CACHE <- file.path(OUT, "ath_comp_cache")
@@ -38,8 +39,8 @@ dir.create(ATH_CACHE, recursive = TRUE, showWarnings = FALSE)
 
 # Day paging makes each competition ~12 requests, so the two stages are paced
 # separately. Keep each run short enough to finish before any runtime cap.
-MAX_COMPS <- as.integer(Sys.getenv("CITIUS_MAX_COMPS", "50"))
-MAX_ATHLETES <- as.integer(Sys.getenv("CITIUS_MAX_ATHLETES", "400"))
+MAX_COMPS <- .env_int("CITIUS_MAX_COMPS", "50")
+MAX_ATHLETES <- .env_int("CITIUS_MAX_ATHLETES", "400")
 
 # --- stage 0: discover competitions -----------------------------------------
 QUERIES <- c(

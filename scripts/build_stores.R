@@ -88,6 +88,9 @@ if (file.exists(file.path(OUT, "athletics_corpus.rds"))) {
   build("athletics_corpus.rds", "athletics_corpus_store", "Athletics corpus")
 }
 build("swimming_history_full.rds", "swimming_store", "Swimming")
+if (file.exists(file.path(OUT, "swimming_corpus.rds"))) {
+  build("swimming_corpus.rds", "swimming_corpus_store", "Swimming corpus")
+}
 if (file.exists(file.path(OUT, "athletics_history.rds"))) {
   build("athletics_history.rds", "athletics_careers_store", "Athletics careers")
 }

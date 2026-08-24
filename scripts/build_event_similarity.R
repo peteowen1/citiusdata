@@ -22,6 +22,7 @@
 # far better to learn that here than after it is wired into the engine.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D <- here::here("citiusdata", "data")
 TAG    <- Sys.getenv("STATE_TAG", "xbh_0")
 # COVER EVERY PAIR. These floors used to be 3 and 30, which silently excluded
@@ -37,8 +38,8 @@ TAG    <- Sys.getenv("STATE_TAG", "xbh_0")
 # floor is SPURIOUS correlation from a handful of shared athletes, and that is
 # handled by shrinking each correlation by its own standard error below, rather
 # than by refusing to look.
-MIN_NE <- as.numeric(Sys.getenv("MIN_NEFF", "1"))   # thin ratings shrink, not excluded
-MIN_SH <- as.integer(Sys.getenv("MIN_SHARED", "5")) # enough to estimate anything at all
+MIN_NE <- .env_num("MIN_NEFF", "1")   # thin ratings shrink, not excluded
+MIN_SH <- .env_int("MIN_SHARED", "5") # enough to estimate anything at all
 OUT    <- Sys.getenv("SIM_OUT", file.path(D, "event_similarity.parquet"))
 
 f <- file.path(D, sprintf("seqv2_state_%s.parquet", TAG))
@@ -117,7 +118,7 @@ sim <- sim[is.finite(cor)]
 #     w = (n - 3) / ((n - 3) + SIM_KAPPA),  applied to z = atanh(r)
 # n=5 -> w 0.09 (that pair falls to ~0.20 and is inert); n=167 -> 0.89;
 # n=421 -> 0.95; n=2699 -> 0.99. Coverage is kept, influence is earned.
-SIM_K <- as.numeric(Sys.getenv("SIM_KAPPA", "20"))
+SIM_K <- .env_num("SIM_KAPPA", "20")
 sim[, se := 1 / sqrt(pmax(shared - 3, 1))]           # sd of Fisher z
 sim[, w_n := pmax(shared - 3, 0) / (pmax(shared - 3, 0) + SIM_K)]
 sim[, cor_shrunk := tanh(w_n * atanh(pmin(pmax(cor, -0.999), 0.999)))]

@@ -10,8 +10,33 @@
 # predictor is available, or the comparison is between different populations.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 OUT <- "C:/dev/citiusverse/citiusdata/data"
-h <- setDT(read_parquet(file.path(OUT, "seqv3_history_final.parquet")))
+# FOLLOW FORM_TAG. Hardcoded, this scored the DEPLOYED arm no matter what it was
+# asked about: run against harvest1 it returned 78.52/78.58 and pair counts
+# identical to the previous night's `final` run, to the digit, on an arm holding
+# 28,370 more races. Identical-to-the-digit is the tell; the sibling
+# check_naive_baseline_by_family.R already did this correctly.
+TAG <- Sys.getenv("FORM_TAG", "final")
+.hf <- file.path(OUT, sprintf("seqv3_history_%s.parquet", TAG))
+stopifnot("no history for that FORM_TAG - run the engine with SEQ_TAG first" =
+            file.exists(.hf))
+cat(sprintf("scoring %s
+", basename(.hf)))
+h <- setDT(read_parquet(.hf))
 h <- h[is.finite(perf) & is.finite(place) & is.finite(r_pre)]
+# SCORE THE ORDERING VALUE. r_pre is the bare rating; r_use is that rating plus
+# the ceiling and cross-event blends, and it is what the engine actually orders
+# a field with. A benchmark asking "is the model better than sorting by season
+# best" is asking about ordering, so scoring r_pre understates it by whatever
+# those blends are worth. On 2026-08-21 that was enough to invert the hurdles
+# result outright, from -0.90 (a loss to season best, which prompted a whole
+# evening of investigation) to +0.68. Set BASELINE_PRED=r_pre to score the bare
+# rating deliberately.
+if (!"r_use" %chin% names(h)) h[, r_use := r_pre]
+h[!is.finite(r_use), r_use := r_pre]
+MODEL_COL <- Sys.getenv("BASELINE_PRED", "r_use")
+stopifnot("BASELINE_PRED names a column that does not exist" = MODEL_COL %chin% names(h))
+cat(sprintf("scoring the model as `%s`\n", MODEL_COL))
+
 h[, yr := year(date)]
 setorder(h, date, race_key)
 h[, seq := .I]
@@ -27,7 +52,7 @@ setorder(h, date, race_key)
 
 # deployed metric: only finishers placing <= 12 are scored (SEQ_MAXPLACE)
 s <- h[seen == TRUE & place <= 12]
-PRED <- c(model = "r_pre", last = "p_last", career_best = "p_best",
+PRED <- c(model = MODEL_COL, last = "p_last", career_best = "p_best",
           mean_last3 = "p_mean3", season_best = "p_seasbest")
 s <- s[complete.cases(s[, ..PRED])]          # common availability, all predictors
 s[, nf := .N, by = race_key]; s <- s[nf >= 2]

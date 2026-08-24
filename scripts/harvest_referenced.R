@@ -26,12 +26,13 @@
 #         CITIUS_REF_MAX=500 Rscript ...      (cap one run)
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_env.R"))
 OUT <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "ath_comp_cache_ref")
 dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
 
-MAXN <- as.integer(Sys.getenv("CITIUS_REF_MAX", "6000"))
-FROM_YEAR <- as.integer(Sys.getenv("CITIUS_REF_FROM", "2016"))
+MAXN <- .env_int("CITIUS_REF_MAX", "6000")
+FROM_YEAR <- .env_int("CITIUS_REF_FROM", "2016")
 
 x <- setDT(readRDS(file.path(OUT, "athletics_corpus.rds")))[!is.na(competition_id)]
 if (!nrow(x)) cli::cli_abort("athletics_corpus.rds loaded 0 rows (post competition_id filter).")

@@ -8,7 +8,15 @@
 # OTHER r_pre in the same race), so nothing conditions on the outcome.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 OUT <- "C:/dev/citiusverse/citiusdata/data"
-h <- setDT(read_parquet(file.path(OUT, "seqv3_history_final.parquet")))
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
+h <- setDT(read_parquet(file.path(OUT, sprintf("seqv3_history_%s.parquet", TAG))))
 h <- h[seen == TRUE & is.finite(perf) & is.finite(r_pre)]
 h[, resid := perf - r_pre]
 f <- h[year(date) == 2026 & rc == "final"]
@@ -29,7 +37,7 @@ print(f[, .(athlete_finals = .N, athletes = uniqueN(athlete_id),
             bias_pct = round(100*mean(resid), 3)), by = dband][order(dband)])
 
 cat("\nDUPLANTIS, race by race in 2026 (pole vault, mark in metres):\n")
-d <- setDT(read_parquet(file.path(OUT, "form_display_final.parquet")))
+d <- setDT(read_parquet(file.path(OUT, sprintf("form_display_%s.parquet", TAG))))
 aid <- d[grepl("Duplantis", athlete_name), athlete_id][1]
 du <- h[athlete_id == aid & year(date) == 2026][order(date)]
 for (i in seq_len(nrow(du)))

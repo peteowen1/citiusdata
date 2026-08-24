@@ -6,6 +6,14 @@
 # join rather than a scraper — and cold starts are 28.7% of the metric.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D <- "C:/dev/citiusverse/citiusdata/data"
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
 
 ds <- open_dataset(file.path(D, "athletics_careers_store"))
 cat(sprintf("careers store: %s rows\n", format(nrow(ds), big.mark = ",")))
@@ -18,7 +26,7 @@ cat(sprintf("usable career rows: %s | distinct athlete-events: %s\n",
             format(nrow(ca), big.mark = ","),
             format(uniqueN(ca[, .(athlete_id, event_id)]), big.mark = ",")))
 
-h <- setDT(read_parquet(file.path(D, "seqv3_history_final.parquet")))
+h <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG))))
 h[, athlete_id := as.character(athlete_id)]
 cold <- h[year(date) == 2026 & place <= 12 & seen == FALSE,
           .(first_seen = min(date)), by = .(athlete_id, event_id)]

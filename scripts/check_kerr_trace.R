@@ -15,7 +15,7 @@ D <- here::here("citiusdata", "data")
 WHO <- Sys.getenv("TRACE_NAME", "Josh Kerr")
 EV  <- Sys.getenv("TRACE_EVENT", "AT-1500Metres-M")
 
-d <- setDT(read_parquet(file.path(D, "form_display_final.parquet")))
+d <- setDT(read_parquet(file.path(D, sprintf("form_display_%s.parquet", TAG))))
 me <- d[athlete_name %like% WHO]
 stopifnot("athlete not found in the display table" = nrow(me) > 0)
 cat(sprintf("=== %s, as published ===\n", WHO))

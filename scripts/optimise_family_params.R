@@ -35,6 +35,7 @@
 # The FIRST arm listed is the incumbent - the value deployed today.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D     <- here::here("citiusdata", "data")
 PARAM <- Sys.getenv("PARAM", "")
 TUNE  <- as.integer(trimws(strsplit(Sys.getenv("TUNE_YEARS", "2025"), ",")[[1]]))
@@ -141,7 +142,7 @@ cat("what turned a real cross-event effect into \"not supported\" on 2026-08-17.
 # --- shrink toward the incumbent ---------------------------------------------
 # A family with little evidence should barely move. Same shape as the engine's
 # own shrinkage and as pool_event_params.R: w = pairs / (pairs + kappa).
-KAP <- as.numeric(Sys.getenv("FAM_KAPPA", "20000"))
+KAP <- .env_num("FAM_KAPPA", "20000")
 SHR <- Sys.getenv("FAM_SHRINK", "pairs")
 inc <- arms$value[1]
 stopifnot("FAM_SHRINK must be 'pairs' or 'effect'" = SHR %chin% c("pairs", "effect"))

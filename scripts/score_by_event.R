@@ -23,10 +23,11 @@
 # Each tag needs seqv3_history_<tag>.parquet, i.e. that arm ran with SEQ_HIST=1.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D     <- here::here("citiusdata", "data")
 tags  <- trimws(strsplit(Sys.getenv("ARMS", ""), ",")[[1]])
 YEARS <- as.integer(trimws(strsplit(Sys.getenv("YEARS", "2025,2026"), ",")[[1]]))
-MINP  <- as.integer(Sys.getenv("MIN_PAIRS", "300"))
+MINP  <- .env_int("MIN_PAIRS", "300")
 stopifnot("ARMS needs at least two tags" = length(tags) >= 2,
           "YEARS parsed to nothing" = length(YEARS) > 0 && all(is.finite(YEARS)))
 SCORE_OUT <- Sys.getenv("SCORE_OUT", "")   # optional JSON of the by-family tables
@@ -86,6 +87,15 @@ score_arm <- function(tag) {
   h <- h[seen == TRUE & is.finite(r_use) & is.finite(place) & place <= 12 &
          year(date) %in% YEARS]
   stopifnot("no rows survived the year filter" = nrow(h) > 0)
+  # Merged races excluded: race_key has no section identifier, so parallel
+  # sections collapse into one and pairs across them compare athletes who never
+  # raced. A duplicated finishing place is the proof. 9.97% of pairs on the
+  # deployed history.
+  # A shared place with DIFFERENT marks proves a merge; a shared place with the
+# SAME mark is an ordinary tie and the athletes really did compete.
+.dup <- h[, .(ath = .N, marks = uniqueN(round(perf, 9))), by = .(race_key, place)][
+          ath > 1 & marks > 1, unique(race_key)]
+  h <- h[!race_key %chin% .dup]
   h[, rid := .GRP, by = race_key]
   a <- h[, .(rid, event_id, yr = year(date), i = seq_len(.N), place, r = r_use)]
   m <- merge(a, a, by = c("rid", "event_id", "yr"), allow.cartesian = TRUE,
@@ -129,8 +139,15 @@ for (t in tags[-1]) {
   setorder(fam, -pooled)
   # Keep the measured table so a report can quote it, rather than someone
   # retyping numbers out of a console days later.
-  .score_json[[length(.score_json) + 1L]] <- list(arm = t, base = base,
-                                                 by_family = fam)
+  # Store the PER-EVENT deltas too, not only the family totals. Storing the
+  # summary alone made "do the same walk events lose on both changes, or
+  # different ones?" unanswerable without re-running every arm - which is the
+  # difference between a family property and noise. pairs and noise travel with
+  # each row so the sample behind a delta is never lost.
+  .score_json[[length(.score_json) + 1L]] <- list(
+    arm = t, base = base, by_family = fam,
+    by_event = a[, .(event_id, discipline, sex, family, pairs,
+                     delta = round(delta, 4), noise = round(noise, 4))])
   print(fam)
 
   cat("\n-- 10 biggest gains --\n")

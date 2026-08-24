@@ -28,10 +28,11 @@
 # calibration_corpus_w.rds to test wind on/off is currently a no-op.
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_env.R"))
 OUT <- here::here("citiusdata", "data")
 SUF <- Sys.getenv("CITIUS_CAL_SUFFIX", "")
 CENTRE <- Sys.getenv("CITIUS_CAL_CENTRE", "always")
-MAXIT <- as.integer(Sys.getenv("CITIUS_CAL_MAX_ITER", "400"))
+MAXIT <- .env_int("CITIUS_CAL_MAX_ITER", "400")
 if (!CENTRE %in% c("always", "auto")) stop("CITIUS_CAL_CENTRE must be always|auto")
 outfile <- function(stem) file.path(OUT, paste0(stem, SUF, ".rds"))
 t0 <- Sys.time()

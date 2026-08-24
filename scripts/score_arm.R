@@ -20,6 +20,7 @@
 # With CITIUS_SCORE_VS the comparison is arm-vs-arm; without it, arm-vs-baseline.
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_env.R"))
 source(here::here("citiusdata", "scripts", "_deployed.R"))
 OUT <- here::here("citiusdata", "data")
 
@@ -52,7 +53,7 @@ setnames(d, c("p_gold", "p_medal", "median_mark"), c("a_gold", "a_medal", "a_mar
 #
 # Same principle as withholding meet strength below five scored events: when the
 # sample is too thin, decline rather than report.
-MIN_RACES <- as.integer(Sys.getenv("CITIUS_SCORE_MIN_RACES", "200"))
+MIN_RACES <- .env_int("CITIUS_SCORE_MIN_RACES", "200")
 n_races <- uniqueN(d$race_id)
 if (n_races < MIN_RACES) {
   cli::cli_abort(c(

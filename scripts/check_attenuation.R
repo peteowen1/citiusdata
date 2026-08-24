@@ -33,9 +33,10 @@
 # part that can reorder a field.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D    <- here::here("citiusdata", "data")
 TAG  <- Sys.getenv("FORM_TAG", "final")
-MINN <- as.integer(Sys.getenv("ATT_MINFIELD", "5"))
+MINN <- .env_int("ATT_MINFIELD", "5")
 # FIT ON THE TUNE WINDOW ONLY. b is a parameter like any other; estimating it
 # over 2020-2026 and then "confirming" it on 2026 confirms nothing. The default
 # stops at 2025 so the sealed window takes no part in choosing the value.

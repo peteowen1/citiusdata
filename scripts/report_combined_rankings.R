@@ -11,8 +11,15 @@
 # is to look at the names.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D   <- here::here("citiusdata", "data")
-TAG <- Sys.getenv("STATE_TAG", "base4")
+# DEFAULT TO THE DEPLOYED ARM. This read "base4" until 2026-08-20 - the arm that
+# happened to be current the day it was written. Nothing failed when the engine
+# moved on: the state file still existed, so this quietly scored a fresh
+# simulation against a two-day-old state and called it one ranking. Five scripts
+# shared the default and only one was noticed; the others were found by asking
+# what ELSE reads this artefact.
+TAG <- Sys.getenv("STATE_TAG", "final")
 # read the DEPLOYED prior weight rather than restate it - a copied constant that
 # drifts is how a report ends up describing a ranking nobody publishes
 # Read the DEPLOYED prior weight rather than restate it - a copied constant that
@@ -28,7 +35,7 @@ TAG <- Sys.getenv("STATE_TAG", "base4")
   stopifnot("the deployed constant did not parse to a number" = is.finite(v))
   v
 }
-PW <- suppressWarnings(as.numeric(Sys.getenv("CE_PRIOR_W", "")))
+PW <- suppressWarnings(.env_num("CE_PRIOR_W", ""))
 if (!is.finite(PW)) PW <- .deployed_num("CE_PW")
 stopifnot("prior weight must be a positive number" = is.finite(PW) && PW > 0)
 CE_EVENTS <- c("AT-Decathlon-M", "AT-Heptathlon-M", "AT-Heptathlon-W", "AT-Pentathlon-W")
@@ -39,10 +46,26 @@ h   <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG))
                           col_select = c("athlete_id", "event_id", "date")))
 h[, athlete_id := as.character(athlete_id)]
 sim <- setDT(read_parquet(file.path(D, "combined_simulated.parquet")))
+# THE SIMULATION MUST COME FROM THE ARM WE ARE REPORTING. Same guard as
+# form_display_marks.R: the simulation reads component ratings from
+# seqv2_state_<STATE_TAG>, so a simulation built on one arm and a state read on
+# another compares two different models and prints one table.
+if ("state_tag" %chin% names(sim)) {
+  .st <- unique(sim$state_tag)
+  if (length(.st) != 1L || !identical(.st[1], TAG))
+    stop("combined_simulated.parquet was built from state tag '",
+         paste(.st, collapse = "/"), "' but this report is tag '", TAG,
+         "'.\n  Rebuild:  STATE_TAG=", TAG,
+         " Rscript citiusdata/scripts/build_combined_simulation.R")
+} else {
+  stop("combined_simulated.parquet predates the state_tag stamp, so the arm it\n",
+       "  was built from cannot be established. Rebuild it:  STATE_TAG=", TAG,
+       " Rscript citiusdata/scripts/build_combined_simulation.R")
+}
 sim[, athlete_id := as.character(athlete_id)]
 comp <- setDT(read_parquet(file.path(D, "combined_components.parquet")))
 comp[, athlete_id := as.character(athlete_id)]
-d   <- setDT(read_parquet(file.path(D, "form_display_final.parquet")))
+d   <- setDT(read_parquet(file.path(D, sprintf("form_display_%s.parquet", TAG))))
 nm  <- unique(d[, .(athlete_id = as.character(athlete_id), athlete_name)])
 
 .deployed <- function(nm_) {

@@ -20,8 +20,15 @@
 # over the remainder would be measuring the wrong thing.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D   <- here::here("citiusdata", "data")
-TAG <- Sys.getenv("STATE_TAG", "base4")
+# DEFAULT TO THE DEPLOYED ARM. This read "base4" until 2026-08-20 - the arm that
+# happened to be current the day it was written. Nothing failed when the engine
+# moved on: the state file still existed, so this quietly scored a fresh
+# simulation against a two-day-old state and called it one ranking. Five scripts
+# shared the default and only one was noticed; the others were found by asking
+# what ELSE reads this artefact.
+TAG <- Sys.getenv("STATE_TAG", "final")
 CE_EVENTS <- c("AT-Decathlon-M", "AT-Heptathlon-M", "AT-Heptathlon-W", "AT-Pentathlon-W")
 
 st <- setDT(read_parquet(file.path(D, sprintf("seqv2_state_%s.parquet", TAG))))
@@ -70,7 +77,7 @@ act[, z_total := (R_ceil - mean(R_ceil)) / stats::sd(R_ceil), by = event_id]
 act[is.finite(sim_mean), z_sim := (sim_mean - mean(sim_mean)) / stats::sd(sim_mean),
     by = event_id]
 # prior weight falls with how many combined events the athlete has on file
-PW <- as.numeric(Sys.getenv("CE_PRIOR_W", "2"))
+PW <- .env_num("CE_PRIOR_W", "2")
 act[, w_prior := fifelse(is.finite(z_sim), PW / (perfs + PW), 0)]
 act[, z_blend := fifelse(is.finite(z_sim), (1 - w_prior) * z_total + w_prior * z_sim, z_total)]
 cat(sprintf("\nprior weight (CE_PRIOR_W = %.1f): median %.2f over simulable athletes\n",
@@ -87,7 +94,7 @@ cat(sprintf("WA covers %d combined events, %d ranked athletes\n",
             uniqueN(wa$event_id), nrow(wa)))
 
 cat("\n=== can the simulation even see the WA top ten? ===\n")
-top <- wa[, .SD[order(wa_place)][1:min(10, .N)], by = event_id]
+top <- wa[, .SD[order(wa_place)][seq_len(min(10, .N))], by = event_id]
 top <- merge(top[, .(event_id, athlete_id = as.character(athlete_id), wa_place)],
              act[, .(event_id, athlete_id, simulable = is.finite(sim_mean), perfs)],
              by = c("event_id", "athlete_id"), all.x = TRUE)
@@ -100,7 +107,7 @@ score <- function(col, lab) {
   s[, rk := seq_len(.N), by = event_id]
   ours <- s[rk <= 10, .(event_id, athlete_id)]
   res <- rbindlist(lapply(unique(wa$event_id), function(EV) {
-    w10 <- wa[event_id == EV][order(wa_place)][1:min(10, .N)]
+    w10 <- wa[event_id == EV][order(wa_place)][seq_len(min(10, .N))]
     o10 <- ours[event_id == EV]
     if (!nrow(o10) || !nrow(w10)) return(NULL)
     data.table(event_id = EV, wa_n = nrow(w10),
@@ -159,17 +166,24 @@ cat("measured total only where it does not - the simulation WITH full coverage,\
 cat("which a pure-sim ranking cannot offer.\n")
 
 cat("\n=== where they disagree most: top 10 by each key ===\n")
-d <- setDT(read_parquet(file.path(D, "form_display_final.parquet")))
+d <- setDT(read_parquet(file.path(D, sprintf("form_display_%s.parquet", TAG))))
 nm <- unique(d[, .(athlete_id = as.character(athlete_id), athlete_name)])
 EV <- Sys.getenv("CE_SHOW", "AT-Decathlon-M")
 x <- merge(act[event_id == EV], nm, by = "athlete_id", all.x = TRUE)
-mk <- function(col) { y <- x[is.finite(get(col))][order(-get(col))][1:10]
+# seq_len, not 1:10. With fewer than ten simulable athletes this indexed past
+# the end and the loop below then printed the NA rows as if they were
+# athletes - a fabricated top ten, not a short one.
+mk <- function(col) { y <- x[is.finite(get(col))][order(-get(col))]
+                      y <- y[seq_len(min(10L, nrow(y)))]
                       paste(sprintf("%2d. %s", seq_len(nrow(y)),
                                     substr(y$athlete_name, 1, 22)), collapse = "\n") }
 cat(sprintf("\n-- %s --\nBY POINTS TOTAL%sBY SIMULATION\n", EV, strrep(" ", 12)))
 a <- strsplit(mk("z_total"), "\n")[[1]]; b <- strsplit(mk("z_sim"), "\n")[[1]]
 for (i in seq_along(a)) cat(sprintf("%-27s %s\n", a[i], b[i]))
 cat("\nsimulated scores for that top ten:\n")
-print(x[is.finite(z_sim)][order(-z_sim)][1:10,
+# seq_len, not 1:10 - the same fix applied twelve lines above and missed here.
+# A combined event can hold fewer than ten simulable athletes, and 1:10 on a
+# short table fabricates NA rows that print as athletes.
+print(x[is.finite(z_sim)][order(-z_sim)][seq_len(min(10L, .N)),
         .(athlete = substr(athlete_name, 1, 22), sim = sim_mean, sd = sim_sd,
           perfs, n_eff = round(n_eff, 1))])

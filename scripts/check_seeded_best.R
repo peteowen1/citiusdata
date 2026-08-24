@@ -16,7 +16,13 @@ suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D <- here::here("citiusdata", "data")
 # parameterised 2026-08-19 so it can be run against the CURRENT arm; it was
 # pinned to "final", which is no longer what the display is built from
-TAG <- Sys.getenv("STATE_TAG", "base4")
+# DEFAULT TO THE DEPLOYED ARM. This read "base4" until 2026-08-20 - the arm that
+# happened to be current the day it was written. Nothing failed when the engine
+# moved on: the state file still existed, so this quietly scored a fresh
+# simulation against a two-day-old state and called it one ranking. Five scripts
+# shared the default and only one was noticed; the others were found by asking
+# what ELSE reads this artefact.
+TAG <- Sys.getenv("STATE_TAG", "final")
 st <- setDT(read_parquet(file.path(D, sprintf("seqv2_state_%s.parquet", TAG))))
 st[, athlete_id := as.character(athlete_id)]
 h <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG)),
@@ -90,7 +96,7 @@ score <- function(sel, col, lab) {
   setorder(sel, event_id, -.key); sel[, rk := seq_len(.N), by = event_id]
   ours <- sel[rk <= 10, .(event_id, athlete_id)]
   res <- rbindlist(lapply(unique(wa$event_id), function(EV) {
-    w10 <- wa[event_id == EV][order(wa_place)][1:min(10, .N)]
+    w10 <- wa[event_id == EV][order(wa_place)][seq_len(min(10, .N))]
     o10 <- ours[event_id == EV]
     if (!nrow(o10) || !nrow(w10)) return(NULL)
     data.table(event_id = EV, wa_n = nrow(w10),

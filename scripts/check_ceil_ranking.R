@@ -10,10 +10,18 @@
 # top ten in an event, how many appear in ours. An outside check, not a target.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D <- here::here("citiusdata", "data")
-st <- setDT(read_parquet(file.path(D, "seqv2_state_final.parquet")))
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
+st <- setDT(read_parquet(file.path(D, sprintf("seqv2_state_%s.parquet", TAG))))
 st[, athlete_id := as.character(athlete_id)]
 stopifnot("state has no R_ceil - re-run form_ratings.R" = "R_ceil" %in% names(st))
-h <- setDT(read_parquet(file.path(D, "seqv3_history_final.parquet"),
+h <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG)),
                         col_select = c("athlete_id", "event_id", "date")))
 h[, athlete_id := as.character(athlete_id)]
 wa <- setDT(read_parquet(file.path(D, "athlete_wa_rankings.parquet")))
@@ -71,7 +79,7 @@ score <- function(sel, col, lab) {
   sel[, rk := seq_len(.N), by = event_id]
   ours <- sel[rk <= 10, .(event_id, athlete_id)]
   res <- rbindlist(lapply(unique(wa$event_id), function(EV) {
-    w10 <- wa[event_id == EV][order(wa_place)][1:min(10, .N)]
+    w10 <- wa[event_id == EV][order(wa_place)][seq_len(min(10, .N))]
     o10 <- ours[event_id == EV]
     if (!nrow(o10) || !nrow(w10)) return(NULL)
     data.table(event_id = EV, wa_n = nrow(w10),

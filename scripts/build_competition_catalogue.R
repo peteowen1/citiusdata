@@ -255,7 +255,13 @@ if (nrow(thin)) cli::cli_alert_info(
 strength[races_won < MIN_EVENTS_FOR_STRENGTH, strength := NA_real_]
 
 cat_tbl <- ch[, .(
-  comp_name   = comp_name[1],
+  # NOT comp_name[1]. Missingness here is per-ROW, not per-competition, so the
+  # first row of a meet can be blank while later rows name it perfectly well -
+  # and `class` is regex-matched on this field, so a blank name silently
+  # declassifies the meet and drops it out of T1. Take the first value that is
+  # actually there. Same trap, and same fix, as report_race_view.R.
+  comp_name   = { .v <- comp_name[!is.na(comp_name) & nzchar(comp_name)]
+                  if (length(.v)) .v[1] else NA_character_ },
   first_date  = min(date, na.rm = TRUE),
   last_date   = max(date, na.rm = TRUE),
   year        = year(min(date, na.rm = TRUE)),

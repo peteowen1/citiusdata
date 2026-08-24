@@ -97,6 +97,71 @@ KT1 <- .env_num("SEQ_KT1", 1); WINDCS <- Sys.getenv("SEQ_WINDCS","") != ""
 # 69.387 -> 69.669 sealed, favourite 52.7% -> 53.2%. SEQ_CEIL=0 is bit-identical
 # to the pre-blend engine (verified: it reproduced 69.127 / 69.387 exactly).
 CEIL <- .env_num("SEQ_CEIL", 0.30)
+# SEQ_CEIL_MODE  what "their ceiling" is measured BY. "best" (default) uses the
+# athlete's best mark so far; "quantile" uses R + SEQ_CEIL_C * sqrt(v), a high
+# point of their own fitted distribution.
+#
+# TESTED AND REFUTED 2026-08-21. KEEP "best". The quantile is worse everywhere,
+# outside the noise floor, on both windows and in both families checked:
+#
+#           hurdles 25  hurdles 26  sprint 25  sprint 26   (floors .17 .19 .11 .12)
+#   C=0.684     -0.530      -0.698     -0.503     -0.389
+#   C=0.4       -0.493      -0.653     -0.492     -0.339
+#   C=1.0       -0.642      -0.815     -0.575     -0.457
+#
+# WHICH IS THE INTERESTING PART, because the max is provably the worse estimator
+# and still wins. Two things probably explain it. An athlete who has actually
+# run the mark has DEMONSTRATED it, while sqrt(v) is estimated - and estimated
+# worst exactly where the ceiling matters most, on thin records. And the
+# race-count bias may be partly real: an athlete who races twenty times is
+# usually fit, professional and in season, and none of that is noise.
+#
+# So the defect is real and the replacement is not the fix. The bias stands
+# measured at 0.297 sd (1-2 races) to 2.008 (16-30) if anyone wants another go
+# at it - BEST_K > 1, averaging the top few rather than taking the single max,
+# is the obvious untried middle.
+#
+# BEST_K WAS THEN TRIED, 2026-08-21, AND IS ALSO WORSE. K = 2, 3 and 5 all lose
+# to the single max, monotonically in K, outside the floor on both windows and
+# in both families:
+#
+#           hurdles 25  hurdles 26  sprint 25  sprint 26
+#   K=2         -0.498      -0.535     -0.701     -0.565
+#   K=3         -0.473      -0.656     -0.762     -0.659
+#   K=5         -0.649      -0.763     -0.803     -0.768
+#
+# So all four alternatives tested - a fitted quantile at three constants, and a
+# top-K mean at three depths - lose to the plain maximum. The Kerr/Rayner
+# argument above is still a correct description of what a single max cannot
+# distinguish; it simply does not cost enough to be worth the information a
+# demonstrated mark carries. Whatever the ceiling is doing for the model, it is
+# doing it through the EXTREME, not through a level.
+#
+# WHY THIS EXISTS. A maximum is a biased estimator of ability, and the bias runs
+# in the number of races. Measured on the deployed state, the best mark sits this
+# far above the athlete's own rating, in units of their own sd:
+#
+#   1-2 races 0.297 | 3-4 0.709 | 5-8 1.191 | 9-15 1.618 | 16-30 2.008
+#
+# A SEVENFOLD spread, and it is unchanged when the comparison is made inside
+# rating deciles - so it is the race count, not that busy athletes are better.
+# At CEIL 0.30 that is roughly half a standard deviation of ordering advantage
+# handed to whoever raced most, which is a collegiate sprinter over a marathoner
+# and has nothing to do with either of them running fast.
+#
+# The quantile form is flat in n by construction: it asks how good and how
+# VARIABLE an athlete is, not how many times they rolled. Note that
+# (1-c)*r + c*(r + C*sqrt(v)) is just r + c*C*sqrt(v), so this is an additive
+# shift in units of the athlete's own spread - it still REORDERS a field,
+# because v differs between athletes, which is the whole point.
+#
+# SEQ_CEIL_C defaults to the value that puts the quantile where the median best
+# sits today, so switching modes changes the STATISTIC without changing how
+# aggressive the ceiling is. That keeps the comparison about one thing.
+CEIL_MODE <- Sys.getenv("SEQ_CEIL_MODE", "best")
+CEILC     <- .env_num("SEQ_CEIL_C", 0.684)
+stopifnot("SEQ_CEIL_MODE must be 'best' or 'quantile'" =
+            CEIL_MODE %chin% c("best", "quantile"))
 # SEQ_BEST_K   how many of an athlete's best marks the ceiling blend averages.
 #              1 keeps the original rule exactly (season best if they raced the
 #              event this year, career best otherwise).
@@ -153,6 +218,36 @@ BEST_HL <- local({
 # and MAJORS FINALS 70.84 -> 73.89 (+3.05 pp), favourite 47.1% -> 51.9%, medal
 # hits 60.5% -> 64.9%. Set SEQ_SEED=0 to turn it off.
 SEEDON <- Sys.getenv("SEQ_SEED","1") != "0"
+# SEQ_SEED_XEV  seed a debut rating from CORRELATED EVENTS when we hold no
+# same-event history. 0 = off, which is the behaviour before 2026-08-22.
+#
+# THE GAP THIS FILLS. The seed above joins on (athlete_id, event_id), so it only
+# fires when the athlete has raced this exact event before - 27.9% of cold
+# starts. The cross-event initialisation further down does use siblings, but it
+# lives in the not-seen branch of the UPDATE loop, so it sets what the athlete
+# carries OUT of their debut, not what they carry IN. Measured on sealed 2026:
+#
+#   pairs where neither side is cold   858,665   76.10%
+#   pairs where one side is cold       230,196   54.27%
+#   pairs where BOTH sides are cold     68,623   50.00%
+#
+# 50.00 exactly, because every debutant in a race carries the same rating and
+# every such pair is a tie. Cold-involved pairs are 25.8% of the metric at about
+# 53%. And prior history in another event currently buys nothing - 54.02% with
+# it against 54.58% without - because none of it reaches the debut.
+#
+# 51.9% of cold rows have raced a different event before. This uses that.
+#
+# WHY THE SIMILARITY MATRIX RATHER THAN THE FAMILY. The debut initialiser is
+# gated to `fams == z$family[1]`, and the Event Similarity Atlas has a whole
+# category for the transfer a taxonomy blocks. Correlations here are measured
+# over athletes rated in both events, shrunk toward zero by how many athletes
+# the pair rests on, and computed over SPECIALISTS - combined-event athletes are
+# excluded, because correlating ten events over a decathlete measures
+# "decathletes are good at everything" rather than transfer.
+SEED_XEV     <- Sys.getenv("SEQ_SEED_XEV", "0") != "0"
+SEED_XEV_COR <- .env_num("SEQ_SEED_XEV_MINCOR", "0.30")
+SEED_XEV_NE  <- .env_num("SEQ_SEED_XEV_NE", "0.5")   # confidence, well below a same-event seed
 # 45, not 365 (2026-08-16). Bracketed on the WEIGHTED metric: 365 -> 71.847,
 # 180 -> 71.323 (at 20/8), 45 -> 72.019, 21 -> 72.000, 10 -> 71.357 — worse on
 # both sides. +0.172 over 365 against a 0.118 pp noise floor. An earlier reading
@@ -184,6 +279,71 @@ SEEDNE <- .env_num("SEQ_SEEDNE", 5)     # cap on seeded n_eff, so it still learn
 # is the conservative side of the one failure this knob has that the metric
 # cannot see: blunting a genuine collapse. Both clearly beat off (+0.202/+0.155).
 HUBER <- .env_num("SEQ_HUBER", 3)
+# SEQ_HUBER_LO  the SAME cap, for bad days only. Defaults to SEQ_HUBER.
+#
+# TESTED AND REFUTED 2026-08-21. LEAVE IT AT THE DEFAULT. The machinery is kept
+# because it is inert when unset - proven, not assumed: the identity arm matched
+# the deployed model on 1,123,807 rows with a largest r_pre difference of
+# 0.000e+00 - and because the refutation is worth more than the code is worth
+# removing. Four arms, two windows, out-of-sample weighted concordance:
+#
+#   arm        2025 tune   2026 sealed   (floors 0.136 / 0.171)
+#   1.5 sigma    +0.081       +0.052
+#   2.0          +0.073       +0.027
+#   2.5          +0.007       -0.014
+#
+# Not one arm clears its floor on either window, so it is not shippable. But the
+# sign is CONSISTENT, which the first version of this note got wrong: it read
+# "+0.117 / -0.049, the windows disagree", because it scored `r_pre` instead of
+# `r_use`. r_pre is the pure rating; r_use is what the engine orders a field
+# with. Anything touching ordering is invisible in the first. Corrected here
+# rather than quietly - a wrong reason for a right conclusion is still wrong,
+# and the next person to try this deserves the real numbers.
+#
+# Scored on HURDLES ALONE, where the mechanism lives, it still does nothing:
+# +0.038/-0.035 (2025) and +0.006/-0.031 (2026) against floors of 0.169 and
+# 0.192. The one effect that clears any floor is HARM to the sprints, -0.147 on
+# the sealed window, which is the family with the thinnest tail and therefore
+# the most real form in the 1.5-3 sigma band being clipped away.
+#
+# WHY IT FAILED, AND THE LESSON THAT GENERALISES. The mechanism is real and
+# controlled: every hurdle event carries a fatter left tail than its own flat
+# equivalent - 110mH skew -0.818 against 100m -0.487, 3.11% of races beyond 2
+# sigma slow against 0.38% that fast - and that is genuinely why a season best,
+# being a maximum, beats a rating there. But the cap at 3 sigma already catches
+# the catastrophes, and the 1.5-3 sigma band is mostly real form rather than
+# disasters. Clipping it discards signal to remove noise that was already gone.
+#
+# Existence is not importance. A mechanism can be measured, controlled and
+# correct and still be worth nothing, and the only way to find out is to size it.
+#
+# WHY SPLIT A SYMMETRIC CAP. The clip above treats a race 3 sigma slow and one 3
+# sigma fast as equally suspect, and the data says they are not. Within-athlete
+# residuals are left-skewed in ALL NINE families (-0.33 to -0.63): athletes have
+# far more disasters than equivalent triumphs, because the things that go wrong
+# in a race - falling, clipping a barrier, a bad baton, cramp - have no mirror
+# image. Nobody accidentally runs 3 sigma fast.
+#
+# The hurdles are the extreme case and the reason this exists. Measured against
+# their own flat equivalents - same athletes, same tracks, same era, differing
+# only by the barriers - every hurdle event carries a fatter left tail: 110mH
+# skew -0.818 against 100m -0.487, and 3.11% of hurdles races land more than 2
+# sigma slow against 0.38% that fast. Eight disasters per triumph. That is
+# exactly the asymmetry a season best is immune to, being a maximum, and it is
+# why the hurdles are the one family where sorting by season best beats the
+# rating (-0.90 pp on 28,847 sealed pairs).
+#
+# THIS IS NOT THE PER-FAMILY HUBER THAT WAS REVERTED on 2026-08-18. That fitted
+# nine values on two windows and 4 of 9 "survived" against 2.25 expected by
+# chance - noise wearing the shape of structure. This is ONE global parameter
+# with a measured mechanism and a pre-registered direction, so it is one
+# hypothesis rather than nine.
+#
+# THE FAILURE IT CAN CAUSE, unchanged from the symmetric case: a fall and a
+# genuine collapse are identical in the data, and clipping harder blunts real
+# decline. check_huber_decline.R is the check that sees it, and the score cannot.
+HUBER_LO <- .env_num("SEQ_HUBER_LO", HUBER)
+SCORE_MERGED <- Sys.getenv("SEQ_SCORE_MERGED", "0") != "0"
 # See the note at the shock estimator: "mean" reproduces the original behaviour,
 # "median" makes it robust to athletes who stop racing.
 # ADOPTED 2026-08-18 as a trimmed mean at 0.20. The mean is not robust to
@@ -288,7 +448,42 @@ SLOPE_MINN <- .env_num("SEQ_SLOPE_MINN", 5)
 # from being beaten 12.19% of the time to 10.06%, i.e. it becomes a genuine 90th
 # percentile rather than one in name. Set SEQ_VPRIOR=0 to revert.
 VPRIOR <- Sys.getenv("SEQ_VPRIOR","1") != "0"
-VPADJ  <- .env_num("SEQ_VPADJ", 1.63)
+# RETUNED 1.63 -> 0.5 on 2026-08-20, on a bracketed sweep against the CALIBRATION
+# of the stated uncertainty rather than against the ordering.
+#
+# The 1.63 above is the ratio by which var(diff) exceeds the learned variance,
+# because var(diff) retains the race shock and v_pre is the shock-adjusted
+# surprise. Dividing by it puts the prior on the scale the model LEARNS on. That
+# reasoning is right for a steady-state athlete and wrong for a debutant, and the
+# prior is only ever used for debutants: a first-timer's uncertainty is not just
+# their race-to-race variation, it is that PLUS not knowing their level at all.
+# Removing the shock and then also charging nothing for unknown level made the
+# starting variance far too tight.
+#
+# Measured as the robust (MAD) scale of z = (perf - r_pre) / sqrt(v_pre + v_shock)
+# by evidence band, where 1.000 is honest. Six arms, one engine sha:
+#
+#   VPADJ   prior sd   cold <1   thin 1-3   mid 3-8   deep 8+   sealed wtd
+#   0.35     3.61%      0.912     0.920      1.018     1.065     73.422
+#   0.50     3.01%      1.044     0.968      1.037     1.067     73.414
+#   0.75     2.45%      1.207     1.020      1.056     1.069     73.403
+#   1.00     2.12%      1.329     1.055      1.067     1.069     73.405
+#   1.63     1.66%      1.547     1.109      1.082     1.070     73.393
+#   2.50     1.34%      1.741     1.153      1.093     1.071     73.388
+#
+# INTERIOR, not an edge: cold crosses 1.000 between 0.35 and 0.50, thin crosses
+# between 0.50 and 0.75, so 0.5 is bracketed on both sides rather than being the
+# lowest value anyone tried. The first sweep stopped at 1.0 and would have picked
+# it purely for being the end of the range.
+#
+# The deep band moves 1.071 -> 1.067 across the whole sweep, which is the control:
+# a prior that shifted well-evidenced records would be reaching somewhere it has
+# no business. It does not.
+#
+# COSTS NOTHING ON THE ORDERING. Sealed weighted concordance rises 73.393 ->
+# 73.414, which is inside its 0.159 pp floor and is therefore reported as "no
+# harm" rather than claimed as a gain.
+VPADJ  <- .env_num("SEQ_VPADJ", 0.5)
 VPMINA <- .env_num("SEQ_VPMINA", 20)   # min athletes before an event is trusted
 # SEQ_KPOW  scale the initial learning rate by how NOISY the event is:
 #   k0_event = k0 * (median_sd / event_sd) ^ KPOW
@@ -321,6 +516,38 @@ KPOW <- .env_num("SEQ_KPOW", 0)
 #
 # `technical` and `tactical` are already in the event registry and have never
 # been used by this model. ADJ = 0 is the current behaviour exactly.
+#
+# TESTED IN BOTH DIRECTIONS 2026-08-22 AND REFUTED. LEAVE AT 0. Six arms, two
+# windows, scored per family with the five untouched families as a control -
+# they came back exactly 0.000 everywhere, so the arms differ by this parameter
+# alone and the rest can be read.
+#
+#   ADJ           jump 25 / 26      throw 25 / 26     distance 25 / 26
+#   +0.05        -0.046 / -0.073   -0.039 / -0.032   +0.018 / -0.002
+#   +0.10        -0.085 / -0.155   -0.092 / -0.035   +0.018 / -0.007
+#   +0.15        -0.162 / -0.296   -0.149 / -0.115   +0.057 / -0.077
+#   -0.05        +0.013 / +0.008   -0.014 / -0.004   -0.038 / -0.068
+#   -0.10        -0.026 / +0.008   -0.001 / -0.020   -0.080 / -0.138
+#   -0.15        -0.048 / -0.002   -0.022 / -0.021   -0.169 / -0.191
+#
+# Raising the ceiling for technical events HURTS, consistently and
+# monotonically. Lowering it does nothing. Raising it for tactical events (which
+# is what a negative ADJ does) hurts them. CEIL = 0.30 is at or near the optimum
+# for every family and does not want to vary.
+#
+# THE MECHANISM IN THE FRAMING ABOVE IS BACKWARDS, and the reason is worth
+# keeping. A field-event mark is ALREADY a maximum: jumps store one row per
+# athlete per competition 93.5% of the time and throws 96.7%, because the
+# six-attempt series is collapsed to its best before the model sees it, while
+# sprints and hurdles carry 1.26-1.28 rows from heats and semis. So the ceiling
+# blend takes a max OF a max in exactly the families where the framing says to
+# lean on it harder - and on the noisiest measurement in the corpus, throw
+# within-athlete sd 0.05793 and jump 0.03425 against sprint 0.01902.
+#
+# That also explains an anomaly check_ceiling_bias.R could not: jumps show the
+# largest gap between best and rating (0.951 sd) on a median of only 1.9 races,
+# which is impossible under a max-of-n story and obvious once each "race" is
+# itself a best-of-six.
 CEILADJ <- .env_num("SEQ_CEILADJ", 0)
 # SEQ_SEEDHLPOW  scale the SEED half-life by how often the event is contested:
 #   hl_event = SEEDHL * (event median race gap / median across events) ^ POW
@@ -631,7 +858,66 @@ ENGINE_SRC <- local({
 })
 ENGINE_SHA <- if (file.exists(ENGINE_SRC))
   digest::digest(file = ENGINE_SRC, algo = "sha256") else "unknown"
-FROM <- as.Date("2020-01-01")
+# HOW FAR BACK THE ENGINE READS. This was a bare constant with no comment for
+# most of the project's life, and the data behind it is not missing:
+# championship_results.rds spans 1982 to 2026 and the corpus store reaches 1974.
+# The cut was a choice, not a limit, and it costs elite sample - only 95 T1
+# competitions fall after 2020, against 210 after 2010.
+#
+# Measured (check_earlier_start.R, 2026-08-22), against the 2020 baseline:
+#   from 2010   2.19x the T1 rows   1.44x the total rows
+#   from 2012   2.01x               1.40x
+#   from 2016   1.56x               1.26x
+# The T1 concordance floor falls as 1/sqrt of the elite multiplier, so 2010
+# takes it from 0.13 to about 0.088. Before 2010 the elite coverage is 1-4
+# meets a year against 9-15 after, so an earlier start buys thin years and
+# sequential work rather than sample.
+#
+# TWO SEPARATE EFFECTS, AND ONLY ONE IS A MODEL CHANGE. More history gives
+# athletes longer careers going into the races we already score - that is a
+# model change and must be tested on the pairs BOTH arms share. It also adds
+# elite pairs to measure on, which lowers the floor without the model having
+# improved at all. Do not read the second as the first.
+#
+# TESTED AND REJECTED, 2026-08-22. Arms from2010 and from2020, identical engine
+# source and identical config, differing only in this date, scored on the pairs
+# both share from 2021 on:
+#
+#   T1_elite    253,121 common pairs   75.777 -> 75.876   +0.099  (floor 0.099)
+#   T2_strong 6,350,370 common pairs   69.923 -> 69.573   -0.350  (floor 0.020)
+#
+# Neutral where it was supposed to help - exactly one noise floor at T1 - and a
+# real loss of 17.6 floors overall.
+#
+# DO NOT READ THAT AS "THE OLDER DATA IS WORTHLESS". It is not a verdict on the
+# data at all; it is the debut prior at MU below reacting to the window. Split
+# by whether the athletes carry pre-2020 history (check_from2010_where.R):
+#
+#   neither athlete has any   4,325,915 pairs   -0.412   17.2 floors
+#   one does                  1,410,050 pairs   -0.292    7.0 floors
+#   both do                     614,405 pairs   -0.046    inside the floor
+#
+# The damage lands on athletes about whom the two arms hold IDENTICAL evidence,
+# and misses the ones actually carrying a decade of extra form. That is
+# backwards from stale-form decay and forwards from an era-blind debut prior:
+# established athletes never touch MU, debutants are seeded at it. Widening the
+# window moved MU by 0.135 sd of within-race spread, and debuts are 12-20% of
+# rows a year.
+#
+# So the start date is UNRESOLVED, not rejected. Testing it honestly needs a
+# dated debut prior first - otherwise the experiment measures MU moving, not the
+# value of the data. Keeping 2020 as the default meanwhile because it is what
+# every committed result was produced under, not because 2010 was disproved.
+#
+# THE FIRST VERSION OF THIS TEST WAS CONFOUNDED and reported -0.393 / -0.992.
+# It compared from2010 against `final`, and `final` carries cross-event seeding
+# while a bare run does not - so it measured the missing seeding, not the start
+# date. The tell was that from2020, run with no options at all, came out
+# BYTE-IDENTICAL to the xev_id arm. Cross-event seeding prints "cross-event
+# seed:" and a bare run prints only "seed:", which is how the two were finally
+# told apart. When comparing arms, diff the run logs, not the arm names.
+FROM <- as.Date(Sys.getenv("SEQ_FROM", "2020-01-01"))
+stopifnot("SEQ_FROM is not a readable date" = !is.na(FROM))
 
 cat0 <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
 cat0[, competition_id := as.character(competition_id)]
@@ -718,6 +1004,15 @@ d <- d[!is.na(perf) & !is.na(date) & !is.na(race_key) & !is.na(place) & place > 
 # every aggregate check and lands squarely on a famous athlete at the top of a
 # published table.
 WRF <- file.path(OUT, "world_records.csv")
+# FAILS LOUDLY, like every sibling guard in this file. This was `if (file.exists)`
+# with no else, so a missing file skipped the whole impossible-mark check in
+# silence - and this is the guard that caught an annulled 18.90 setting 30% of a
+# published rank. The file is git-tracked, so absence means something is wrong
+# with the working directory or the checkout, which is worth stopping for.
+if (!file.exists(WRF))
+  stop("world_records.csv is missing - the impossible-mark guard cannot run.
+",
+       "  It is git-tracked; a missing copy means OUT points somewhere unexpected.")
 if (file.exists(WRF)) {
   .wr <- setDT(utils::read.csv(WRF, stringsAsFactors = FALSE))
   .wr[, wr_mark := vapply(strsplit(as.character(mark), ":", fixed = TRUE), function(q) {
@@ -743,7 +1038,16 @@ if (file.exists(WRF)) {
 guard would silently check nothing" = nrow(.wr) >= 20)
   .wr[, wr_perf := fifelse(orientation == -1, -log(wr_mark), log(wr_mark))]
   n0 <- nrow(d)
+  # DE-DUPLICATED FIRST. A repeated event_id in world_records.csv - an auto and
+  # a hand-timed row, or an appending scraper - fans this merge out and every
+  # performance in that event is counted twice in its own rating history. The
+  # drop-count check below only looks for row LOSS, so n0 - nrow(d) would go
+  # negative and satisfy "<= 200" trivially. Hand-maintained reference data is
+  # exactly where a duplicate row appears unnoticed.
+  .wr <- unique(.wr, by = "event_id")
   d <- merge(d, .wr[, .(event_id, wr_perf)], by = "event_id", all.x = TRUE)
+  stopifnot("the world-record merge changed the row count - duplicate event_id" =
+              nrow(d) == n0)
   bad <- d[is.finite(wr_perf) & perf > wr_perf]
   if (nrow(bad)) {
     cat(sprintf("[%s] IMPOSSIBLE MARKS DROPPED: %d better than their world record\n",
@@ -781,8 +1085,20 @@ wrong or mis-parsed, not the corpus" = (n0 - nrow(d)) <= 200)
 # corrections saw the sealed window. Refitted on <=2025 only: 71.803 raw
 # (+0.063, so 93% of the raw gain survives) and 73.206 weighted (+0.028, about a
 # quarter of it). The weighted metric leans on majors and T1 meets, which is
-# exactly where a venue effect fitted partly on 2026 flatters itself. Quote
-# +0.063 raw / +0.028 weighted.
+# exactly where a venue effect fitted partly on 2026 flatters itself.
+#
+# AND NEITHER FIGURE CLEARS ITS NOISE FLOOR (measured 2026-08-19). Kish
+# effective sample on the sealed window: raw 644,735 pairs, floor 0.054 pp, so
+# +0.063 is 1.17x - marginal. Tier-weighted 74,037 effective pairs, floor 0.159
+# pp, so +0.028 is 0.18x - inside the noise. The 40/12/1 weighting costs 8.7x in
+# effective sample; the note at W_MAJ below already said the floor rises to
+# 0.118 pp and nobody joined it up to the gains reported against it.
+#
+# That is a limit of the referee, not a verdict on this correction. The evidence
+# that carries it is independent of this metric: the within-athlete scatter test,
+# where corrected marks made athletes measurably more self-consistent, and which
+# is what caught the wind sign error when sprints got 6.7% WORSE. Quote the
+# sealed figures WITH their floors, or quote the scatter test instead.
 #
 # The DEPLOYED corrections still use the full corpus: for predicting 2027 more
 # data is better, and the restriction exists to make the EVALUATION honest, not
@@ -811,7 +1127,7 @@ if (ADJ) {
     stop("SEQ_ADJ is on but adjusted_marks.parquet is missing.\n",
          "  Build it:  Rscript citiusdata/scripts/build_adjusted_marks.R")
   .adj <- setDT(read_parquet(af, col_select = c("race_key", "athlete_id", "event_id",
-                                                "wind_adj", "venue_adj")))
+                                                "wind_adj", "venue_adj", "indoor_adj")))
   .adj[, athlete_id := as.character(athlete_id)]
   # SURFACE duplicates rather than absorbing them. This used to call unique()
   # straight away, which made the row-count assertion below UNFALSIFIABLE: with
@@ -842,8 +1158,15 @@ if (ADJ) {
   }
   stopifnot("more than 0.1% of performances share a key - corrections cannot be
 matched to the right mark at that rate" = .dupe_d <= 0.001 * nrow(d))
+  # indoor_adj joined the file on 2026-08-20 and was NOT summed here for its
+  # first run, so it was written and never read - the A/B came back byte-
+  # identical on both arms, which is the only reason it was caught. A column
+  # nothing consumes is the same as a column that does not exist.
+  # Tolerated as absent so older adjusted_marks files still load.
+  if (!"indoor_adj" %chin% names(.adj)) .adj[, indoor_adj := 0]
   .adj[, adj_total := fifelse(is.finite(wind_adj), wind_adj, 0) +
-                      fifelse(is.finite(venue_adj), venue_adj, 0)]
+                      fifelse(is.finite(venue_adj), venue_adj, 0) +
+                      fifelse(is.finite(indoor_adj), indoor_adj, 0)]
   n0 <- nrow(d)
   d[, athlete_id := as.character(athlete_id)]
   d <- merge(d, .adj[, .(race_key, athlete_id, event_id, adj_total)],
@@ -851,6 +1174,20 @@ matched to the right mark at that rate" = .dupe_d <= 0.001 * nrow(d))
   # a fan-out here would duplicate performances and inflate every rating
   stopifnot("joining adjusted marks changed the row count - the key is not unique" =
               nrow(d) == n0)
+  # EACH TERM SEPARATELY, not just the sum. The floor below was asserted on
+  # adj_total alone, and venue covers ~93% of performances on its own - so a
+  # TOTAL wind failure (a stale curve file, a broken join) would leave coverage
+  # comfortably above the floor while every sprint quietly lost the correction
+  # the file credits with its largest single gains. The comment beside the floor
+  # already named this failure mode for venue and never checked the mirror case.
+  for (.term in intersect(c("wind_adj", "venue_adj", "indoor_adj"), names(.adj))) {
+    .c <- .adj[[.term]]
+    cat(sprintf("[%s]   %-11s non-zero on %.1f%% of adjusted rows
+", TAG, .term,
+                100 * mean(is.finite(.c) & .c != 0)))
+    if (!any(is.finite(.c) & .c != 0))
+      stop(sprintf("%s is zero for EVERY row - that correction is not reaching the engine", .term))
+  }
   hit <- is.finite(d$adj_total) & d$adj_total != 0
   cat(sprintf("[%s] adjusted marks: %s of %s performances corrected (%.1f%%), median |adj| %.4f\n",
               TAG, format(sum(hit), big.mark = ","), format(nrow(d), big.mark = ","),
@@ -879,7 +1216,166 @@ cat(sprintf("[%s] %s rows | %s races | %s athlete-events\n", TAG,
     format(nrow(d), big.mark=","), format(uniqueN(d$race_key), big.mark=","),
     format(uniqueN(paste(d$athlete_id, d$event_id)), big.mark=",")))
 
+# THE DEBUT PRIOR, AND IT IS ERA-BLIND. Every athlete with no prior rating in an
+# event is seeded at exactly this value (see the `is.null(v)` branch in the
+# sweep), so MU is the starting rating for 12-20% of rows every year. It is a
+# flat mean over the WHOLE loaded corpus, which makes it sensitive to the
+# corpus's own composition rather than to what a debutant is currently worth:
+# measured 2026-08-22, the 2020+ mean sits 0.135 sd of within-race spread from
+# the 2010+ mean, and the 2024+ mean a further 0.154 sd from the 2020+ one, in
+# 56 of 59 events in the same direction. Recent years carry more T2 meets, so
+# the mean drifts with coverage as much as with the sport.
+#
+# That makes MU stale for a current debutant even at the deployed window, and it
+# is what sank the from2010 arm (see SEQ_FROM above) - not the age of the data.
+# A dated prior - the event mean over a trailing window ending before the race -
+# is the obvious fix and is untested. Anything that changes the corpus span must
+# be judged against a dated prior, or it just measures this line moving.
 MU <- d[, .(mu = mean(perf)), by = event_id]; MUv <- setNames(MU$mu, MU$event_id)
+
+# ---- REPLACEMENT-LEVEL DEBUT PRIOR -----------------------------------------
+# SEQ_DEBUT_PRIOR: mean | replacement | replacement_tier   (default mean = the
+# old behaviour, so every committed arm reproduces byte-for-byte).
+#
+#   mean              seed a debutant at MU, the population mean. Biased: MU is
+#                     dominated by established athletes, and a debutant runs
+#                     1.553 sd of within-race spread below it in 55 of 56
+#                     events, on 17.3% of rows.
+#   replacement       seed at the mean of DEBUT performances in the event.
+#   replacement_tier  the same, split by the tier of the meet they debut at.
+#                     Measured gap: T1 debut -0.512 sd against the old prior,
+#                     T2 debut -1.705.
+#   replacement_field the same, split by the SIZE of the field they debut in,
+#                     which is known before the race and varies across every
+#                     debut rather than a rare few.
+#
+# AN EARLIER VERSION OF THIS COMMENT SAID FIELD SIZE "CARRIES NOTHING (-1.59 to
+# -1.75 across every size band)". That was wrong, and wrong because the script
+# behind it counted race_key inside a table already filtered to debut rows - so
+# it measured how many DEBUTANTS shared a race, typically 0 to 2, while every
+# label said field size. Counted over the whole field instead:
+#     2-4 starters   30,647 debuts   -2.141 sd
+#     5-8            98,043          -1.784
+#     9-16           68,931          -1.596
+#     17+            30,543          -1.236
+# Monotonic, a 0.905 sd spread, and it applies to all 228,164 debuts.
+#
+# AND CONDITIONING ON IT STILL MAKES THINGS WORSE. Arm dp_field against the
+# deployed replacement prior, same config otherwise: one-side-cold pairs
+# 59.991 -> 59.614, -0.378 on a floor of 0.044, so 8.6 floors in the wrong
+# direction, and sealed weighted 74.040 -> 74.009. So the gradient above is real
+# and the conditioner is still wrong.
+#
+# The reason is that field size is a RACE-level variable, and the rating is used
+# to order athletes WITHIN a race. Shifting every debutant in a race by the same
+# amount cancels out of debutant-versus-debutant comparisons and moves them all
+# against the ESTABLISHED athletes in that same race. Big fields do contain
+# better debutants, but they contain better established athletes too, so lifting
+# only the debutants counts the field's quality twice. This is the same shape as
+# the rule at the top of the verse: something shared by a whole field cannot
+# change finishing order, it only moves absolute marks.
+#
+# The original comment here said field size "carries nothing", which was based
+# on a measurement that counted debutants per race rather than starters per
+# race. That was wrong, the gradient is real, and the conclusion it supported
+# happened to be right anyway. Both errors are recorded because "right answer,
+# wrong reason" is the state that survives review and then breaks the next
+# decision built on it.
+#
+# The tier split is larger per athlete (1.2 sd) but T1 debuts are 588 of
+# 228,164, and it too failed on test. Plain replacement is what ships.
+#
+# WALK-FORWARD BY CONSTRUCTION. The level for a race in year Y is built only
+# from debuts in years STRICTLY EARLIER than Y, so a debut never contributes to
+# its own prior. The first year of the corpus therefore has nothing to learn
+# from and falls back to MU, which is correct rather than unfortunate - the
+# alternative is a prior fitted on the races it is scored against.
+# MEASURED 2026-08-22, arms dp_id / dp_rep / dp_tier, common pairs from 2021.
+# The identity arm first: with SEQ_DEBUT_PRIOR=mean the engine is BYTE-IDENTICAL
+# to the pre-change build - same sha256, same 83,502,864 bytes - so everything
+# below is the prior and nothing else.
+#
+# By how much of each pair is cold, the only slice a debut prior can reach:
+#   neither cold  4,637,002 pairs  77.230 -> 77.230   0.000
+#   one side cold 1,476,510 pairs  54.590 -> 60.754  +6.165   150 floors
+#   both cold       489,979 pairs  50.000 -> 50.000   0.000
+#
+# The two zeros were written down as predictions before the run and are
+# mechanically necessary, not lucky: a debutant is seeded with n_eff = 0, so the
+# prior carries NO weight in the posterior update. It changes the prediction for
+# the debut race and never propagates - hence established athletes untouched to
+# the last decimal, and two debutants still tying. That last point retires an
+# earlier claim: both-cold scoring exactly 50.00 was reported as "the honest
+# expectation for two unknown athletes" when it is an artefact of them sharing a
+# seed. It is still 50.00 here, and still an artefact.
+#
+# By tier, which decides what this is worth:
+#   T2_strong  6,350,370 pairs  69.923 -> 71.359  +1.436   72 floors
+#   T1_elite     253,121 pairs  75.777 -> 75.711  -0.067   inside the floor
+#   weighted sealed             72.820 -> 73.862  +1.042   about 6.5 floors
+#
+# A large correctness win across the corpus and a NON-EVENT at elite level. T1
+# debuts are 588 of 228,164 - championship fields are established athletes, so
+# there is almost nothing here for a debut prior to act on. Adopt it because the
+# old prior was wrong by 1.553 sd on 17.3% of rows, not because it improves
+# championship ordering, which it does not.
+#
+# replacement_tier is NOT adopted: within noise of plain replacement everywhere
+# (T2 +1.475 vs +1.436, T1 -0.126 vs -0.067) and slightly worse on the deployed
+# weighted metric. The 1.2 sd gap between T1 and T2 debut levels that motivated
+# it is real, but acts on 0.26% of debuts - the effect was sized without
+# weighting it by the population it applies to.
+DEBUT_PRIOR <- Sys.getenv("SEQ_DEBUT_PRIOR", "mean")
+stopifnot("SEQ_DEBUT_PRIOR must be mean, replacement, replacement_tier or replacement_field" =
+            DEBUT_PRIOR %chin% c("mean", "replacement", "replacement_tier",
+                                 "replacement_field"))
+RLT <- new.env(hash = TRUE, parent = emptyenv())   # event|tier|year
+RLE <- new.env(hash = TRUE, parent = emptyenv())   # event|year
+RLF <- new.env(hash = TRUE, parent = emptyenv())   # event|fieldband|year
+# ONE definition of the bands, used to build the table and to look it up. Two
+# copies of a cut() call is how a lookup silently misses every key.
+.fld_band <- function(n) as.character(cut(n, c(0, 4, 8, 16, Inf),
+                                          labels = c("2-4", "5-8", "9-16", "17+")))
+if (DEBUT_PRIOR != "mean") {
+  .fd <- d[, .(first_date = min(date)), by = .(athlete_id, event_id)]
+  .db <- merge(d[, .(athlete_id, event_id, date, perf, meet_tier, race_key)], .fd,
+               by = c("athlete_id", "event_id"))
+  .db <- .db[date == first_date & is.finite(perf)]
+  .db[, yr := year(date)]
+  stopifnot("no debut rows found - the first_date join is wrong" = nrow(.db) > 0)
+
+  # expanding mean over strictly earlier years, per event and per event-tier
+  .mk <- function(dd, by_cols, env) {
+    g <- dd[, .(s = sum(perf), n = .N), by = c(by_cols, "yr")]
+    setorderv(g, c(by_cols, "yr"))
+    g[, `:=`(cs = cumsum(s) - s, cn = cumsum(n) - n), by = by_cols]
+    g <- g[cn > 0]
+    g[, rl := cs / cn]
+    if (!nrow(g)) return(invisible(0L))
+    ks <- do.call(paste, c(lapply(c(by_cols, "yr"), function(cc) g[[cc]]), sep = "|"))
+    for (i in seq_len(nrow(g))) assign(ks[i], g$rl[i], envir = env)
+    nrow(g)
+  }
+  .n1 <- .mk(.db[!is.na(meet_tier)], c("event_id", "meet_tier"), RLT)
+  .n2 <- .mk(.db,                    "event_id",                 RLE)
+  # field size counted over the WHOLE race, from d, not over the debut subset -
+  # counting inside the debut rows gives the number of debutants sharing a race
+  # and is the error that produced the "field size carries nothing" claim.
+  .fs <- d[, .(nf = .N), by = race_key]
+  .db <- merge(.db, .fs, by = "race_key", all.x = TRUE)
+  .db[, fband := .fld_band(nf)]
+  .n3 <- .mk(.db[!is.na(fband)], c("event_id", "fband"), RLF)
+  cat(sprintf("[%s] debut prior '%s': %s debut rows | tier-year %s | event-year %s | field-year %s\n",
+              TAG, DEBUT_PRIOR, format(nrow(.db), big.mark = ","),
+              format(.n1, big.mark = ","), format(.n2, big.mark = ","),
+              format(.n3, big.mark = ",")))
+  # SAY SO IF IT WILL DO NOTHING. An empty lookup falls through to MU on every
+  # race and the arm then reproduces the baseline exactly, which reads as "the
+  # feature does not help" rather than "the feature never ran".
+  if (.n1 + .n2 + .n3 == 0)
+    cat(sprintf("[%s] WARNING: debut prior tables are EMPTY - every seed will fall back to MU\n", TAG))
+  rm(.fd, .db, .fs)
+}
 # variance prior: within-race spread per event (median of race-level var), the
 # broadest honest starting uncertainty -- narrows only with an athlete's own evidence
 VP <- d[, .(v = var(perf)), by = .(event_id, race_key)][is.finite(v),
@@ -915,6 +1411,9 @@ if (VPRIOR) {
 }
 KFLOORv <- .ev_vec("kfloor", KFLOOR, names(MUv))
 HUBERv  <- .ev_vec("huber",  HUBER,  names(MUv))
+# Per-event overrides of the bad-day cap fall back to that event's own huber,
+# so an event tuned for `huber` keeps a symmetric clip unless asked otherwise.
+HUBLOv  <- .ev_vec("huberlo", HUBER_LO, names(MUv))
 XBLENDv <- .ev_vec("xblend", XBLEND, names(MUv))
 # Added 2026-08-18 so the family optimiser can actually SHIP what it finds.
 # These three were swept per family and could not be applied, which made the
@@ -1146,6 +1645,109 @@ if (SEEDON) {
     if (BEST_K > 1) { BKV[[K]] <- sg$best0[i]; BKD[[K]] <- as.numeric(sg$last0[i]) }
   }
   n_seeded <- nrow(sg)
+
+  # ---- CROSS-EVENT SEEDING, for debuts with no same-event history -----------
+  n_seeded_xev <- 0L
+  if (SEED_XEV) {
+    simf <- file.path(SC, "event_similarity_spec.parquet")
+    if (!file.exists(simf)) {
+      cat(sprintf("[%s] SEQ_SEED_XEV is on but %s is missing - skipping\n",
+                  TAG, basename(simf)))
+    } else {
+      sm <- setDT(arrow::read_parquet(simf))
+      simcol <- intersect(c("cor_use", "cor_shrunk", "cor"), names(sm))[1]
+      stopifnot("similarity table has no correlation column" = !is.na(simcol))
+      # stored one row per unordered pair, so mirror it - an event must find its
+      # siblings whichever side of the pair it sits on
+      sim <- rbindlist(list(sm[, .(event_id = e1, sib = e2, cr = get(simcol))],
+                            sm[, .(event_id = e2, sib = e1, cr = get(simcol))]))
+      sim <- sim[is.finite(cr) & cr >= SEED_XEV_COR & event_id != sib]
+      # SAY SO IF THE GATE LETS NOTHING THROUGH. An adversarial review found this
+      # falls through to zero seeds in silence when nothing clears
+      # SEED_XEV_COR - so a mistyped threshold or a renamed correlation column
+      # would show only as a suspiciously round zero in the results line, which
+      # reads as "the feature did nothing" rather than "the feature never ran".
+      if (!nrow(sim))
+        cat(sprintf("[%s] NOTE: no event pair clears SEQ_SEED_XEV_MINCOR=%.2f - no cross-event seeds will be made\n",
+                    TAG, SEED_XEV_COR))
+
+      # the debuts that got NOTHING from the same-event seed
+      need <- fd[!sg[, .(athlete_id, event_id)], on = .(athlete_id, event_id)]
+      if (nrow(need) && nrow(sim)) {
+        # every career row for those athletes, in any OTHER event
+        cx <- ca[need[, .(athlete_id, target = event_id, first_date)],
+                 on = .(athlete_id), allow.cartesian = TRUE, nomatch = NULL]
+        # STRICTLY BEFORE the debut, exactly as the same-event seed requires -
+        # a seed built from a race after the one being predicted is leakage,
+        # and it would flatter this experiment precisely where it is weakest.
+        cx <- cx[date < first_date & event_id != target]
+        cx <- merge(cx, sim, by.x = c("target", "event_id"),
+                    by.y = c("event_id", "sib"), allow.cartesian = TRUE)
+        if (nrow(cx)) {
+          # PUT THE SIBLING MARK ON THE TARGET EVENT'S SCALE before averaging.
+          # perf is not comparable between events - a 100m perf and a shot put
+          # perf are different units on different scales - so centre on the
+          # sibling's mean and re-centre on the target's. Same mapping the
+          # in-loop initialiser uses.
+          cx[, mu_sib := MUv[event_id]]
+          cx[, mu_tgt := MUv[target]]
+          cx <- cx[is.finite(mu_sib) & is.finite(mu_tgt)]
+          cx[, mapped := (perf - mu_sib) + mu_tgt]
+          # RECENCY WEIGHT, computed here rather than reused. `w` is created on
+          # sd0, the same-event join, and does not exist on these rows - reusing
+          # the name would have been a silent NA rather than an error. Decay uses
+          # the TARGET event's half-life, because the question is how stale this
+          # evidence is for predicting THAT event.
+          cx[, hl_x := hl_ev[target]]
+          cx[!is.finite(hl_x), hl_x := SEEDHL]
+          cx[, w := 2^(-as.numeric(first_date - date) / hl_x)]
+          # and weight by how correlated the events are, so a distant sibling
+          # contributes less than a close one. cr^2 rather than cr because the
+          # shared-variance reading is what the sibling weighting uses elsewhere.
+          cx[, wx := w * cr^2]
+          # nsib BEFORE the by-clause renames anything. Writing
+          # `by = .(athlete_id, event_id = target)` makes `event_id` inside j
+          # refer to the GROUP - which is target - so uniqueN(event_id) was 1 by
+          # construction and reported "1.0 siblings each" no matter what the
+          # data held. The seeds themselves were always fine; only the number
+          # printed beside them was wrong, which is the more dangerous kind of
+          # bug because it invites the wrong diagnosis.
+          cx[, sib_ev := event_id]
+          sgx <- cx[, .(r0 = sum(wx * mapped) / sum(wx),
+                        ne0 = min(sum(wx), SEED_XEV_NE),
+                        last0 = max(date), nsib = uniqueN(sib_ev)),
+                    by = .(athlete_id, event_id = target)]
+          sgx <- sgx[is.finite(r0) & is.finite(ne0) & ne0 > 0]
+          # ANCHOR, the same one the same-event seed uses. A cross-event seed is
+          # a mark mapped onto this event's scale, so it must land near this
+          # event's mean. A systematic offset means the mapping is wrong, and a
+          # wrong mapping would be invisible in the score until it had quietly
+          # mis-rated every debutant.
+          if (nrow(sgx)) {
+            sgx[, dev := r0 - MUv[event_id]]
+            cat(sprintf("[%s] cross-event seed: %s athlete-events from %.1f siblings each | median dev %+.4f (|dev|>1 in %.2f%%)\n",
+                TAG, format(nrow(sgx), big.mark = ","), mean(sgx$nsib),
+                stats::median(sgx$dev), 100 * mean(abs(sgx$dev) > 1)))
+            stopifnot("cross-event seeds do not land near the target event mean - the scale mapping is wrong" =
+                        abs(stats::median(sgx$dev)) < 0.5)
+            kx <- key(sgx$athlete_id, sgx$event_id)
+            for (i in seq_len(nrow(sgx))) {
+              K <- kx[i]
+              # NEVER overwrite a same-event seed. `need` already excludes them,
+              # so this is belt and braces against the join changing shape.
+              if (!is.null(R[[K]])) next
+              R[[K]] <- sgx$r0[i]; NE[[K]] <- sgx$ne0[i]
+              LD[[K]] <- as.numeric(sgx$last0[i])
+            }
+            n_seeded_xev <- nrow(sgx)
+          }
+          rm(cx, sgx)
+        }
+        rm(need)
+      }
+      rm(sm, sim); invisible(gc())
+    }
+  }
   rm(ca, sd0, sg); invisible(gc())
 }
 # All i<j index pairs where the two placings differ. Replaces
@@ -1331,12 +1933,28 @@ for (r_ in seq_along(starts)) {
   dt0n <- Vdaten[i1]; yr <- Vyr[i1]
   a <- z$athlete_id; ev <- z$event_id[1]; kk <- key(a, ev); dt0 <- z$date[1]
   mu <- MUv[[ev]]
+  # The value an athlete with NO prior rating starts at. Under the default this
+  # is mu, exactly as before. Note this branch is reached only when the seeding
+  # steps above left nothing in R for this athlete-event, i.e. a genuine unknown
+  # rather than someone seeded from a sibling event.
+  mu_debut <- mu
+  if (DEBUT_PRIOR != "mean") {
+    .rl <- NULL
+    if (DEBUT_PRIOR == "replacement_tier" && !is.na(z$meet_tier[1]))
+      .rl <- RLT[[paste(ev, z$meet_tier[1], yr, sep = "|")]]
+    # length(a) IS the field size for this race - the sweep slice is the race,
+    # so this needs no extra join and cannot disagree with the table above.
+    if (DEBUT_PRIOR == "replacement_field")
+      .rl <- RLF[[paste(ev, .fld_band(length(a)), yr, sep = "|")]]
+    if (is.null(.rl)) .rl <- RLE[[paste(ev, yr, sep = "|")]]
+    if (!is.null(.rl) && is.finite(.rl)) mu_debut <- .rl
+  }
   r_pre <- numeric(length(a)); n_eff <- numeric(length(a)); seen <- logical(length(a))
   fam1 <- z$family[1]
   agef <- if (AGEF && !is.na(fam1)) agefun[[fam1]] else NULL
   for (m in seq_along(a)) {
     v <- R[[kk[m]]]
-    if (is.null(v)) { r_pre[m] <- mu; n_eff[m] <- 0; next }
+    if (is.null(v)) { r_pre[m] <- mu_debut; n_eff[m] <- 0; next }
     seen[m] <- TRUE
     gap <- dt0n - LD[[kk[m]]]
     if (!is.null(agef) && !is.na(z$age[m])) {
@@ -1423,6 +2041,15 @@ for (r_ in seq_along(starts)) {
     # athlete carrying a best mark, which is nearly all of them: XBLEND 0, 1, 2
     # and 3 all returned byte-identical scores because the feature never
     # survived to be measured.
+    if (CEIL_MODE == "quantile") {
+      # A HIGH POINT OF THE ATHLETE'S OWN DISTRIBUTION, not their luckiest draw.
+      # Falls back to the event's variance when the athlete has none of their
+      # own, which is the same fallback the update below uses - so a debutant is
+      # treated identically in both modes rather than silently skipped.
+      vv <- V[[kk[m]]]
+      if (is.null(vv) || !is.finite(vv)) vv <- stats::var(z$perf)
+      if (is.finite(vv) && vv > 0) b <- r_use[m] + CEILC * sqrt(vv) else b <- NULL
+    }
     if (!is.null(b)) r_use[m] <- (1 - ceil_e) * r_use[m] + ceil_e * b
   }
   vp0 <- VPv[[ev]]; if (is.null(vp0) || !is.finite(vp0)) vp0 <- stats::var(z$perf)
@@ -1440,6 +2067,39 @@ for (r_ in seq_along(starts)) {
     hix <- ix          # filled again below, once the update is actually known
   }
   slot <- if (yr == 2025L) "y25" else if (yr == 2026L) "y26" else NA
+  # DO NOT SCORE A MERGED RACE. race_key is competition|event|round|date and
+  # carries no section identifier, so parallel sections of one round collapse
+  # into a single race - one 60m "final" holds eight athletes all placed 1st.
+  # A duplicated finishing position proves it: two athletes cannot both be third.
+  #
+  # .pairs() already drops pairs with EQUAL places, which is why this went
+  # unnoticed - the damage is the pairs that look legitimate, first in section A
+  # against second in section B, comparing athletes who never met. Measured on
+  # the deployed history: 8,994 of 168,006 scored races, carrying 9.97% of all
+  # concordance pairs.
+  #
+  # The race still updates ratings. A blended shock across sections is noisier
+  # but not biased, which is the same argument the corpus builder makes for
+  # partial fields - whereas scoring it is simply wrong. Set SEQ_SCORE_MERGED=1
+  # to restore the old behaviour for comparison.
+  # A DUPLICATED PLACE IS NOT PROOF OF A MERGE - it is usually a TIE. In the
+  # vertical jumps two athletes clearing 2.04 share second and there is no third;
+  # they really did compete. The first version of this test flagged any repeated
+  # place and threw away 8,076 legitimate races, 25.4% of all jump races, cutting
+  # 9.97% of pairs when the real figure is 1.10%.
+  #
+  # What proves a merge is a place shared by DIFFERENT MARKS: two athletes cannot
+  # both win the same race with different times. Sort by (place, perf) once and
+  # look for adjacent rows on the same place with different performances.
+  if (!is.na(slot) && !SCORE_MERGED) {
+    .ok <- is.finite(z$place) & is.finite(z$perf)
+    if (sum(.ok) > 1L) {
+      .o  <- order(z$place[.ok], z$perf[.ok])
+      .pl <- z$place[.ok][.o]; .pf <- z$perf[.ok][.o]
+      .n  <- length(.pl)
+      if (any(.pl[-1L] == .pl[-.n] & .pf[-1L] != .pf[-.n])) slot <- NA
+    }
+  }
   if (!is.na(slot)) {
     # All i<j pairs as plain integer vectors. CJ() cost ~0.4ms per call in fixed
     # data.table dispatch overhead regardless of field size (measured: 79x at
@@ -1604,8 +2264,15 @@ for (r_ in seq_along(starts)) {
     kv <- kv * fac
   }
   hub_e <- HUBERv[[ev]]; if (is.null(hub_e) || !is.finite(hub_e)) hub_e <- HUBER
-  if (hub_e > 0) {
-    lim <- hub_e * sqrt(v_pre)
+  hlo_e <- HUBLOv[[ev]]; if (is.null(hlo_e) || !is.finite(hlo_e)) hlo_e <- hub_e
+  if (hub_e > 0 || hlo_e > 0) {
+    # ONE limit per DIRECTION. surprise > 0 is a better race than the rating
+    # expected, < 0 a worse one, and the left tail is the fat one - see
+    # SEQ_HUBER_LO above. With SEQ_HUBER_LO unset, hlo_e == hub_e and this is
+    # arithmetically the symmetric clip it replaces, which the identity arm of
+    # the experiment checks rather than assumes.
+    hv  <- fifelse(surprise < 0, hlo_e, hub_e)
+    lim <- hv * sqrt(v_pre)
     ex <- is.finite(lim) & lim > 0 & abs(surprise) > lim
     if (any(ex)) kv[ex] <- kv[ex] * (lim[ex] / abs(surprise[ex]))
   }
@@ -1651,6 +2318,29 @@ for (r_ in seq_along(starts)) {
     # which is backwards, and it reached the page as a 10,558-point decathlon
     # and a sub-world-record 100m. Leaving V unset keeps the event prior until
     # there is a real surprise to learn from.
+    # `V` IS A LEARNING VARIANCE, NOT A PREDICTIVE ONE. Read that before using it
+    # to put an interval on anything. It is an EWMA of SURPRISE squared, and
+    # surprise is the residual AFTER the shared race shock has been removed, so
+    # it measures the athlete's own race-to-race variability. That is the right
+    # quantity for the update below and the wrong one for predicting a mark:
+    #
+    #   perf - r_pre = surprise + shock          (verified exactly in the stored
+    #                                             history, max gap 2.8e-17)
+    #
+    # so a predictive variance needs v PLUS the race-conditions variance, which
+    # is stored per event in predictive_variance.json (pooled shock sd 0.926%,
+    # ranging 0.55% in sprints to 1.78% in throws). Standardising a raw residual
+    # by sqrt(v) alone gives sd 2.03 instead of 1; adding the shock term takes it
+    # to 1.58, and the remainder is a genuinely fat tail rather than a scale
+    # error - robustly measured the scale is 1.04-1.09 for any athlete with real
+    # evidence, while |z| > 5 occurs 1.1% of the time against a normal's
+    # 0.00006%. Do not rescale v to chase sd(z) = 1; quote intervals from
+    # empirical quantiles, which is what the peak-mark column already does.
+    #
+    # NOTE the learning rate: kv here has already been reduced by the Huber clip
+    # for large surprises, so an extreme race moves the variance less than its
+    # size warrants. That is deliberate for the RATING and is a known
+    # conservatism in the variance. See check_predictive_variance.R.
     if (seen[m])
       V[[kk[m]]] <- max(v_pre[m] + kv[m] * (surprise[m]^2 - v_pre[m]), 0.04 * vp0)
     NE[[kk[m]]] <- n_eff[m] + 1
@@ -1696,7 +2386,10 @@ res <- data.table(tag = TAG,
   # race set, which is what it is for.
   brier25 = if (WINP && acc$y25["npred"] > 0) acc$y25["brier"]/acc$y25["npred"] else NA_real_,
   brier26 = if (WINP && acc$y26["npred"] > 0) acc$y26["brier"]/acc$y26["npred"] else NA_real_,
-  maxplace = MAXPLACE, ceil = CEIL, seeded = n_seeded, huber = HUBER,
+  maxplace = MAXPLACE, ceil = CEIL, ceil_mode = CEIL_MODE, ceil_c = CEILC,
+             seeded = n_seeded, seeded_xev = if (exists("n_seeded_xev")) n_seeded_xev else 0L,
+             huber = HUBER,
+             huber_lo = HUBER_LO,
   seedhl = SEEDHL, seedhlpow = SEEDHLPOW, seedne = SEEDNE, k0 = K0, kappa = KAPPA, kfloor = KFLOOR,
   kpow = KPOW, ceiladj = CEILADJ, xblend = XBLEND,
   xb_fam = paste(XB_FAM, collapse = "+"),
@@ -1787,12 +2480,19 @@ if (HIST) {
   # parquets, same schema, same row count, silently incomparable, with nothing
   # in the output saying so. score_by_event.R reads this stamp and refuses to
   # difference arms built by different engines.
+  # Sys.getenv(character(0)) does NOT return empty -- it falls back to the
+  # no-argument form and returns the WHOLE environment. With no SEQ_* vars set
+  # (the normal case) this silently dumped every secret in the shell --
+  # CLOUDFLARE_API_TOKEN, CLERK_SECRET_KEY included -- into a "SEQ_* knobs used"
+  # field. Never reached git (data/ is gitignored, confirmed no meta JSON was
+  # ever committed), but the guard belongs here regardless.
+  seq_env_names <- grep("^SEQ_", names(Sys.getenv()), value = TRUE)
   meta <- list(tag = TAG,
                written = format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
                engine = basename(ENGINE_SRC),
                engine_sha = ENGINE_SHA,
                rows = nrow(hd),
-               env = as.list(Sys.getenv(grep("^SEQ_", names(Sys.getenv()), value = TRUE))))
+               env = if (length(seq_env_names)) as.list(Sys.getenv(seq_env_names)) else list())
   writeLines(jsonlite::toJSON(meta, auto_unbox = TRUE, pretty = TRUE),
              file.path(SC, sprintf("seqv3_meta_%s.json", TAG)))
   cat(sprintf("[%s] engine sha %s\n", TAG, substr(ENGINE_SHA, 1, 12)))

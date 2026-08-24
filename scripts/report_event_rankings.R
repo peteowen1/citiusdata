@@ -12,10 +12,19 @@
 # reference rather than another view of the same rating.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D    <- here::here("citiusdata", "data")
-TOPN <- as.integer(Sys.getenv("TOPN", "10"))
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
 
-d <- setDT(read_parquet(file.path(D, "form_display_final.parquet")))
+TOPN <- .env_int("TOPN", "10")
+
+d <- setDT(read_parquet(file.path(D, sprintf("form_display_%s.parquet", TAG))))
 stopifnot("display table has no rank_mark - re-run form_display_marks.R" =
             "rank_mark" %in% names(d))
 reg <- as.data.table(citius::citius_events())[, .(event_id, discipline, sex, family, orientation)]

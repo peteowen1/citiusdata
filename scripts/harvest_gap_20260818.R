@@ -41,16 +41,17 @@
 # never triggered as a side effect of a harvest).
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 
 ns <- asNamespace("citius")
 orig_get_json <- ns$citius_get_json
-THROTTLE <- as.numeric(Sys.getenv("CITIUS_THROTTLE", "2.0"))
+THROTTLE <- .env_num("CITIUS_THROTTLE", "2.0")
 patched <- function(url, max_tries = 4L, throttle = THROTTLE) orig_get_json(url, max_tries = max_tries, throttle = throttle)
 assignInNamespace("citius_get_json", patched, ns = "citius")
 
 OUT <- here::here("citiusdata", "data")
 t_start <- Sys.time()
-BUDGET_MIN <- as.numeric(Sys.getenv("CITIUS_BUDGET_MIN", "25"))
+BUDGET_MIN <- .env_num("CITIUS_BUDGET_MIN", "25")
 time_left <- function() BUDGET_MIN - as.numeric(difftime(Sys.time(), t_start, units = "mins"))
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), sprintf(...), "\n", sep = "")
 

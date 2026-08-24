@@ -19,13 +19,14 @@
 #   CITIUS_COAST_MIN_HEATS / CITIUS_COAST_SHRINK_K  fitter settings
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_env.R"))
 OUT <- here::here("citiusdata", "data")
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), ..., "\n", sep = "")
 
 BASE <- Sys.getenv("CITIUS_COAST_BASE", "calibration_corpus_csigma_ctrA.rds")
 DEST <- Sys.getenv("CITIUS_COAST_OUT", "calibration_corpus_csigma_coast.rds")
-MIN_HEATS <- as.integer(Sys.getenv("CITIUS_COAST_MIN_HEATS", "2"))
-SHRINK_K <- as.numeric(Sys.getenv("CITIUS_COAST_SHRINK_K", "5.0"))
+MIN_HEATS <- .env_int("CITIUS_COAST_MIN_HEATS", "2")
+SHRINK_K <- .env_num("CITIUS_COAST_SHRINK_K", "5.0")
 
 base_path <- file.path(OUT, BASE)
 if (!file.exists(base_path)) stop("base calibration not found: ", base_path)

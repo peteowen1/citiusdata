@@ -108,7 +108,7 @@ cat(sprintf("\nadding %s half marathons\n", format(nrow(add), big.mark = ",")))
 print(add[, .(competitions = .N, first = min(date), last = max(date)),
           by = .(class, meet_tier)])
 cat("\nnamed competitions being added (top 25 by edition count):\n")
-print(add[, .N, by = competition][order(-N)][1:min(25, .N)])
+print(add[, .N, by = competition][order(-N)][seq_len(min(25, .N))])
 
 # Carry the NAME across. Without this every row this script adds lands with
 # comp_name NA, which is why 203 of 203 road_label rows in the live catalogue

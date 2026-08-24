@@ -28,17 +28,18 @@
 #    demeaning is a level, not a trajectory.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 stopifnot("mgcv is required" = requireNamespace("mgcv", quietly = TRUE))
 D      <- here::here("citiusdata", "data")
-MINN   <- as.integer(Sys.getenv("WIND_MIN_MARKS", "3"))   # marks per athlete-event
-WLO    <- as.numeric(Sys.getenv("WIND_LO", "-6"))
-WHI    <- as.numeric(Sys.getenv("WIND_HI", "8"))
-K      <- as.integer(Sys.getenv("WIND_K", "8"))
+MINN   <- .env_int("WIND_MIN_MARKS", "3")   # marks per athlete-event
+WLO    <- .env_num("WIND_LO", "-6")
+WHI    <- .env_num("WIND_HI", "8")
+K      <- .env_int("WIND_K", "8")
 # FIT WINDOW. The corrections are nuisance parameters, not fits to concordance,
 # but they are applied to marks the engine is then SCORED on - so fitting them
 # over the sealed window is not clean. WIND_MAX_YEAR caps the fit; the resulting
 # curve is still applied to every year.
-WMAXY  <- as.integer(Sys.getenv("WIND_MAX_YEAR", "9999"))
+WMAXY  <- .env_int("WIND_MAX_YEAR", "9999")
 WOUT   <- Sys.getenv("WIND_OUT", "wind_effect_curves.json")
 
 EVENTS <- c("AT-100Metres-M","AT-100Metres-W","AT-200Metres-M","AT-200Metres-W",

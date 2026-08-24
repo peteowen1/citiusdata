@@ -20,29 +20,19 @@
 # athlete usually does in that event.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_env.R"))
 D     <- here::here("citiusdata", "data")
-MINV  <- as.integer(Sys.getenv("VENUE_MIN_MARKS", "200"))  # marks per venue
-MINA  <- as.integer(Sys.getenv("VENUE_MIN_ATH", "3"))      # marks per athlete-event
+MINV  <- .env_int("VENUE_MIN_MARKS", "200")  # marks per venue
+MINA  <- .env_int("VENUE_MIN_ATH", "3")      # marks per athlete-event
 
 # A short, checkable reference set. Elevations in metres, rounded; these are used
 # ONLY to validate the empirical effect, never to build it.
-ALT <- data.table(venue_city = c(
-  "Mexico City","Toluca","Bogota","Bogotá","Quito","La Paz","Cochabamba",
-  "Addis Ababa","Nairobi","Eldoret","Iten","Asmara",
-  "Johannesburg","Pretoria","Potchefstroom","Bloemfontein",
-  "Denver","Colorado Springs","Albuquerque","Provo","Flagstaff","Boulder","El Paso",
-  "Sestriere","Font-Romeu","Ifrane",
-  "London","Eugene","Tokyo","Doha","Roma","Rome","Monaco","Paris","Bruxelles",
-  "Brussels","Stockholm","Oslo","Budapest","Birmingham","Glasgow","Zürich","Zurich"),
-  alt_m = c(
-  2240, 2660, 2640, 2640, 2850, 3640, 2560,
-  2355, 1795, 2100, 2400, 2325,
-  1753, 1339, 1350, 1395,
-  1609, 1839, 1619, 1387, 2106, 1655, 1140,
-  2035, 1800, 1665,
-  11, 130, 40, 10, 21, 21, 5, 35, 13,
-  13, 28, 23, 102, 140, 26, 408, 408))
-ALT <- unique(ALT, by = "venue_city")
+# Elevations come from the shared loader, which prefers the 3,101 geocoded
+# venues and falls back LOUDLY to the hand-typed 43. Previously this file
+# carried its own copy of those 43, which is why the geocoded table sat
+# unread after it was built.
+source(here::here("citiusdata", "scripts", "_venue_elevation.R"))
+ALT <- venue_elevation()[, .(venue_city, alt_m)]
 
 SPRINT <- c("AT-100Metres-M","AT-100Metres-W","AT-200Metres-M","AT-200Metres-W",
             "AT-400Metres-M","AT-400Metres-W","AT-LongJump-M","AT-LongJump-W",

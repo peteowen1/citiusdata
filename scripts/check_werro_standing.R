@@ -6,9 +6,17 @@
 #    Test it head to head against TYPICAL on 2026 finals.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 OUT <- "C:/dev/citiusverse/citiusdata/data"
-h <- setDT(read_parquet(file.path(OUT, "seqv3_history_final.parquet")))
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
+h <- setDT(read_parquet(file.path(OUT, sprintf("seqv3_history_%s.parquet", TAG))))
 h <- h[seen == TRUE & is.finite(perf) & is.finite(r_pre)]
-d <- setDT(read_parquet(file.path(OUT, "form_display_final.parquet")))
+d <- setDT(read_parquet(file.path(OUT, sprintf("form_display_%s.parquet", TAG))))
 nm <- unique(d[, .(athlete_id, athlete_name)])
 
 first26 <- h[year(date) == 2026][order(date), .SD[1], by = .(athlete_id, event_id)]
@@ -18,7 +26,10 @@ first26[, standing := seq_len(.N), by = event_id]
 w <- merge(first26[event_id == "AT-800Metres-W"], nm, by = "athlete_id")
 setorder(w, standing)
 cat("800m W standing as at END-2025 (top 8), before any 2026 result:\n")
-for (i in 1:8) cat(sprintf("  %d. %-24s %s\n", w$standing[i],
+# seq_len, not 1:8. On an empty or short `w` this indexed past the end and
+# printed fully-formed rows of NA - eight of them - which read as real output.
+stopifnot("the 800m W merge produced no rows" = nrow(w) > 0)
+for (i in seq_len(min(8L, nrow(w)))) cat(sprintf("  %d. %-24s %s\n", w$standing[i],
     substr(ifelse(is.na(w$athlete_name[i]),"?",w$athlete_name[i]),1,24),
     sprintf("%d:%05.2f", floor(exp(-w$r_end2025[i])/60), exp(-w$r_end2025[i]) %% 60)))
 ws <- w[grepl("Werro", athlete_name)]$standing

@@ -4,7 +4,15 @@
 suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D <- "C:/dev/citiusverse/citiusdata/data"
-d <- setDT(read_parquet(file.path(D, "form_display_final.parquet")))
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
+d <- setDT(read_parquet(file.path(D, sprintf("form_display_%s.parquet", TAG))))
 reg <- as.data.table(citius::citius_events())[, .(event_id, discipline, sex, family)]
 d <- merge(d, reg, by = "event_id", all.x = TRUE)
 dep <- d[, .(rated = .N, lead_n = round(max(n_eff[rk == 1]), 1)), by = .(event_id, discipline, sex, family)]

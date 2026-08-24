@@ -10,11 +10,19 @@
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D <- here::here("citiusdata", "data")
+# ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
+# against any other arm silently re-checked the DEPLOYED model and reported a
+# result about a file the arm had never touched. On 2026-08-21 that returned a
+# concordance figure identical to the previous run to two decimal places, for an
+# arm holding 28,370 more races, and a 127/127 medallist pass on the wrong
+# display. Swept across every script that reads a tagged artefact.
+TAG <- Sys.getenv("FORM_TAG", "final")
+
 AID <- Sys.getenv("SIB_ATHLETE", "14533464")     # Josh Kerr
 EV  <- Sys.getenv("SIB_EVENT", "AT-1500Metres-M")
 XB_MAXN <- 8; XB_MINCOR <- 0.80; XBLEND <- 1     # the deployed settings
 
-st <- setDT(read_parquet(file.path(D, "seqv2_state_final.parquet")))
+st <- setDT(read_parquet(file.path(D, sprintf("seqv2_state_%s.parquet", TAG))))
 me <- st[athlete_id == AID]
 stopifnot("athlete not in state" = nrow(me) > 0)
 secs <- function(p) exp(-p)
@@ -32,7 +40,7 @@ sib <- merge(me[event_id != EV, .(other = event_id, R, n_eff)], cors, by = "othe
 setorder(sib, -cor)
 
 # the event means the engine maps through
-h <- setDT(read_parquet(file.path(D, "seqv3_history_final.parquet"),
+h <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG)),
                         col_select = c("event_id", "perf")))
 mu <- h[, .(mu = mean(perf)), by = event_id]
 sib <- merge(sib, mu, by.x = "other", by.y = "event_id", all.x = TRUE)

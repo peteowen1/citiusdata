@@ -8,6 +8,7 @@
 #         CITIUS_GAP_FROM=2016 Rscript ...       (backtest era only)
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_env.R"))
 OUT <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "ath_comp_cache_gap")
 dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
@@ -22,7 +23,7 @@ cc[, harvested := competition_id %in% unique(ch$competition_id)]
 if (!"has_results" %in% names(cc)) cc[, has_results := TRUE]
 cc[is.na(has_results), has_results := TRUE]
 gap <- cc[has_results == TRUE & !harvested]
-FROM <- suppressWarnings(as.integer(Sys.getenv("CITIUS_GAP_FROM", "0")))
+FROM <- suppressWarnings(.env_int("CITIUS_GAP_FROM", "0"))
 if (!is.na(FROM) && FROM > 0) gap <- gap[suppressWarnings(as.integer(substr(start, 1, 4))) >= FROM]
 cli::cli_h2("Gap: {nrow(gap)} competition{?s} with results and no data")
 
