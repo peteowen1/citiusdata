@@ -97,9 +97,16 @@ print(new[, .(results = .N, races = uniqueN(race_key), athletes = uniqueN(athlet
                                           !grepl("semi", round, ignore.case = TRUE)])),
           by = .(competition_id)][order(-results)])
 
-cat("\nTO MERGE (deliberate, changes a shared input every arm reads):\n")
-cat("  ch <- rbind(readRDS('championship_results.rds'),\n")
-cat("              readRDS('championship_results_majors.rds'), fill = TRUE)\n")
-cat("  saveRDS(unique(ch, by = c('competition_id','race_key','athlete_id')),\n")
-cat("          'championship_results.rds')\n")
+# TO MERGE (deliberate, changes a shared input every arm reads): do NOT
+# hand-roll this. `unique(ch, by = c('competition_id','race_key','athlete_id'))`
+# looks like a dedup but is NOT unique for multi-attempt field events (three
+# throws by one athlete in one race collapse to one row) -- this exact snippet,
+# copy-pasted as printed instructions, silently dropped 21,440 rows from
+# championship_results.rds on 2026-08-29 before being caught. The correct
+# pattern -- drop whole COMPETITIONS already present, never row-level dedup,
+# assert the row count after -- lives in merge_referenced.R. Use that script
+# (point it at championship_results_majors.rds) or, once available,
+# citius::store_championship_results(conn, new, mode = "merge").
+cat("\nTO MERGE: run merge_referenced.R against championship_results_majors.rds\n")
+cat("  (do not hand-roll a dedup here -- see comment above).\n")
 cat("  then: build_athletics_corpus.R, build_stores.R, recalibrate_corpus.R\n")
