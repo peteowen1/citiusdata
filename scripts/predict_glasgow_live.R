@@ -85,7 +85,17 @@ entries <- tryCatch({
   e[, event_id := match_event(sub("^(Men's|Women's|Mixed)\\s+", "", event), sex)]
   e <- e[!is.na(event_id)]
   norm <- function(z) gsub("[^A-Z]", "", toupper(z))
-  src <- if (!is.null(champs)) champs else readRDS(file.path(OUT, "championship_results.rds"))
+  src <- if (!is.null(champs)) champs else {
+    d <- tryCatch(
+      with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+      error = function(e) {
+        cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+        NULL
+      }
+    )
+    if (is.null(d) || !nrow(d)) d <- readRDS(file.path(OUT, "championship_results.rds"))
+    d
+  }
   lk <- unique(as.data.table(src)[!is.na(athlete_name) & !is.na(athlete_id),
                                   .(key = norm(athlete_name), athlete_id = as.character(athlete_id))])
   lk <- lk[, .(athlete_id = athlete_id[1]), by = key]

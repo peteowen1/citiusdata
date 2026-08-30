@@ -396,7 +396,14 @@ who <- who[!is.na(who)]
 # this would blank every athlete's name on every per-athlete page and nothing
 # would fail. The ratings table is model-facing and joins on athlete_id, which
 # is why it moved to the corpus and this did not.
-hist <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+hist <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(hist) || !nrow(hist)) hist <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 hist <- hist[as.character(athlete_id) %in% who]
 for (nm in setdiff(HIST_COLS, names(hist))) hist[, (nm) := NA]
 hist <- hist[, ..HIST_COLS]
@@ -564,7 +571,15 @@ names_src <- if ("athlete_name" %in% names(clean_all)) clean_all else {
   # immediately narrowed to the Glasgow athletes and to HIST_COLS, while the name
   # lookup needs every athlete who can reach a rating. Do not "simplify" this
   # into a reuse of `hist` -- it would blank the name of anyone outside that meet.
-  data.table::setDT(readRDS(file.path(OUT, "championship_results.rds")))
+  d2 <- tryCatch(
+    with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+    error = function(e) {
+      cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+      NULL
+    }
+  )
+  if (is.null(d2) || !nrow(d2)) d2 <- data.table::setDT(readRDS(file.path(OUT, "championship_results.rds")))
+  d2
 }
 names_lk <- unique(names_src[!is.na(athlete_name),
                              .(athlete_id = as.character(athlete_id), athlete_name)]

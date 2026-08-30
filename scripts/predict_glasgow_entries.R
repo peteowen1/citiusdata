@@ -30,7 +30,17 @@ N_SIMS <- 20000L
 
 # The entry list is resolved to athlete ids by NAME, so the competition harvest
 # is still read for its name -> id lookup. It is no longer the model's history.
-champs      <- readRDS(file.path(OUT, "championship_results.rds"))
+# Sourced from citius.duckdb first (kept in sync by merge_referenced.R /
+# build_athletics_corpus.R as of 2026-08-30), falling back to the RDS export
+# on any DuckDB problem -- same pattern as build_stores.R.
+champs <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(champs) || !nrow(champs)) champs <- readRDS(file.path(OUT, "championship_results.rds"))
 calibration <- deployed_calibration(OUT)
 aging       <- deployed_aging(OUT)
 
