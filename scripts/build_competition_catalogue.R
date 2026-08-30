@@ -9,7 +9,11 @@
 # GW across its own results, which classify as high, mid, low and top. 117
 # competitions hold more than one tier code. Diamond League marks -- set by
 # exactly the athletes we care about -- are routinely labelled low tier and then
-# given a -1.69% upward context adjustment as though run at a slow meet.
+# given a -1.223% upward context adjustment as though run at a slow meet
+# (deployed offset; -1.69% was a stale 2026-07-29/30 vintage -- see
+# .scratch/athletics-calendar/issues/03-diamond-league-tier-defect.md). The
+# scale is also not monotonic: "mid" corrects harder (-1.432%) than "low"
+# (-1.223%), which is the real defect, not the size of either number.
 #
 # So this script builds two things the feed does not provide:
 #
@@ -27,7 +31,14 @@ suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
 OUT <- here::here("citiusdata", "data")
 
-ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+ch <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(ch) || !nrow(ch)) ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 ch[, athlete_id := as.character(athlete_id)]
 cat(sprintf("harvest: %s results | %s competitions\n",
             format(nrow(ch), big.mark = ","), format(uniqueN(ch$competition_id), big.mark = ",")))

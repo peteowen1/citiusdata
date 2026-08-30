@@ -63,13 +63,27 @@ if (n_races < MIN_RACES) {
            small a sample is genuinely what you want."))
 }
 
-ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+ch <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(ch) || !nrow(ch)) ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 ch[, athlete_id := as.character(athlete_id)]
 act <- ch[!is.na(mark) & !is.na(race_key) & !is.na(place) & place > 0,
           .(race_id = race_key, athlete_id, actual = mark, event_id, date, competition_id)]
 d <- merge(d, act, by = c("race_id", "athlete_id"))
 d <- merge(d, as.data.table(citius_events())[, .(event_id, orientation, family)], by = "event_id")
 cat_tbl <- setDT(arrow::read_parquet(file.path(OUT, "competition_catalogue.parquet")))
+# competition_id round-trips through parquet as character while the harvest
+# holds an integer -- the same trap documented at backtest_athletics.R:254-257
+# and build_calibration_mtier.R:31-32. Uncaught here it aborts the merge
+# outright rather than silently matching nothing, which is at least loud, but
+# it means score_arm.R has never actually completed this join.
+d[, competition_id := as.character(competition_id)]
+cat_tbl[, competition_id := as.character(competition_id)]
 d <- merge(d, cat_tbl[, .(competition_id, class, strength, meet_tier)],
            by = "competition_id", all.x = TRUE)
 

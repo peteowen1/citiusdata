@@ -42,7 +42,14 @@ FROM <- suppressWarnings(.env_int("CITIUS_PARTIAL_FROM", "2023"))
 MAXN <- suppressWarnings(.env_int("CITIUS_PARTIAL_MAX", "0"))
 PAUSE <- .env_num("CITIUS_PARTIAL_PAUSE", "0.15")
 
-x <- setDT(readRDS(file.path(OUT, "athletics_corpus.rds")))
+x <- tryCatch(
+  with_citius_db_connection(function(conn) load_athletics_corpus(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to athletics_corpus.rds.")
+    NULL
+  }
+)
+if (is.null(x) || !nrow(x)) x <- setDT(readRDS(file.path(OUT, "athletics_corpus.rds")))
 if (!nrow(x)) stop("athletics_corpus.rds loaded 0 rows.", call. = FALSE)
 say(sprintf("athletics_corpus.rds: %s rows, %s..%s", format(nrow(x), big.mark = ","),
             min(x$date, na.rm = TRUE), max(x$date, na.rm = TRUE)))

@@ -30,7 +30,14 @@ files <- setdiff(files, c("backtest_cache"))
 # Actual marks, deduplicated. championship_results carries a row per performance
 # and ties can duplicate an athlete within a race; keeping both would weight
 # those races twice.
-truth <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+truth <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(truth) || !nrow(truth)) truth <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 truth <- unique(truth[!is.na(race_key) & !is.na(mark) & mark > 0,
                       .(race_id = race_key, athlete_id = as.character(athlete_id),
                         actual = mark, event_id)],

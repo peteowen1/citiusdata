@@ -74,7 +74,14 @@ md <- report("p_medal", "hit_medal", "medal")
 # Marks must NOT move: this is pre-registered as a placings-only change, so a
 # significant shift in MAE means the arm changed something it should not have.
 cat("\n=== MARKS (must stay flat) ===\n")
-champs <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+champs <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(champs) || !nrow(champs)) champs <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 champs[, athlete_id := as.character(athlete_id)]
 act <- champs[!is.na(mark) & !is.na(race_key), .(race_id = race_key, athlete_id, actual = mark)]
 mk <- function(f) {

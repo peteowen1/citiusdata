@@ -45,7 +45,14 @@ if (nrow(probed)) {
 }
 if (!"has_results" %in% names(cc)) cc[, has_results := TRUE]
 cc[is.na(has_results), has_results := TRUE]
-ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+ch <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(ch) || !nrow(ch)) ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 have <- unique(ch$competition_id)
 
 # The senior global championships, and nothing that merely mentions one.

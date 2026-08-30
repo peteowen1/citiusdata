@@ -34,10 +34,25 @@ dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
 MAXN <- .env_int("CITIUS_REF_MAX", "6000")
 FROM_YEAR <- .env_int("CITIUS_REF_FROM", "2016")
 
-x <- setDT(readRDS(file.path(OUT, "athletics_corpus.rds")))[!is.na(competition_id)]
+x <- tryCatch(
+  with_citius_db_connection(function(conn) load_athletics_corpus(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to athletics_corpus.rds.")
+    NULL
+  }
+)
+if (is.null(x) || !nrow(x)) x <- setDT(readRDS(file.path(OUT, "athletics_corpus.rds")))
+x <- x[!is.na(competition_id)]
 if (!nrow(x)) cli::cli_abort("athletics_corpus.rds loaded 0 rows (post competition_id filter).")
 cli::cli_alert_info("athletics_corpus.rds: {format(nrow(x), big.mark = ',')} row{?s}, {min(x$date, na.rm = TRUE)}..{max(x$date, na.rm = TRUE)}")
-ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+ch <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(ch) || !nrow(ch)) ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 if (!nrow(ch)) cli::cli_abort("championship_results.rds loaded 0 rows.")
 cli::cli_alert_info("championship_results.rds: {format(nrow(ch), big.mark = ',')} row{?s}, {min(ch$date, na.rm = TRUE)}..{max(ch$date, na.rm = TRUE)}")
 have <- unique(ch$competition_id)

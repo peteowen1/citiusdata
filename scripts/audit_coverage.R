@@ -21,7 +21,14 @@ line <- function(fmt, ...) cat(sprintf(paste0("  ", fmt, "\n"), ...))
 
 # ---------------------------------------------------------------- athletics --
 hdr("ATHLETICS")
-ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+ch <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(ch) || !nrow(ch)) ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 comps <- setDT(readRDS(file.path(OUT, "ath_competitions.rds")))
 line("harvested : %s results | %s meets | %s athletes",
      format(nrow(ch), big.mark = ","), uniqueN(ch$competition_id),

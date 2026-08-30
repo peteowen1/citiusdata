@@ -47,7 +47,14 @@ e[, dob_d := as.Date(dob, "%d %b %Y")]
 cli::cli_alert_info("{nrow(e)} modellable entr{?y/ies}, {uniqueN(e$event_id)} event{?s}.")
 
 # --- candidate ids ------------------------------------------------------------
-champs <- setDT(readRDS(file.path(D, "championship_results.rds")))
+champs <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(champs) || !nrow(champs)) champs <- setDT(readRDS(file.path(D, "championship_results.rds")))
 norm <- function(x) gsub("[^A-Z]", "", toupper(x))
 champs[, aid := as.character(athlete_id)]
 champs[, bd  := as.Date(birthdate)]

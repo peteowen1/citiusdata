@@ -16,7 +16,14 @@ dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
 cc <- setDT(readRDS(file.path(OUT, "ath_competitions.rds")))
 if (!nrow(cc)) cli::cli_abort("ath_competitions.rds loaded 0 rows.")
 cli::cli_alert_info("ath_competitions.rds: {nrow(cc)} row{?s}, {min(cc$start, na.rm = TRUE)}..{max(cc$start, na.rm = TRUE)}")
-ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+ch <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(ch) || !nrow(ch)) ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 if (!nrow(ch)) cli::cli_abort("championship_results.rds loaded 0 rows.")
 cli::cli_alert_info("championship_results.rds: {format(nrow(ch), big.mark = ',')} row{?s}, {min(ch$date, na.rm = TRUE)}..{max(ch$date, na.rm = TRUE)}")
 cc[, harvested := competition_id %in% unique(ch$competition_id)]

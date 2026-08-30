@@ -28,7 +28,14 @@ OUT <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "ath_athlete_cache")
 dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
 
-ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+ch <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(ch) || !nrow(ch)) ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 ch[, aid := suppressWarnings(as.integer(athlete_id))]
 ch <- ch[!is.na(aid)]
 
