@@ -47,7 +47,11 @@ grep -L "_deployed" scripts/predict_*.R scripts/score_*.R scripts/export_*.R
 `quick_compare.R`, `model_scoreboard.R`, `diagnose_marks.R`,
 `diagnose_backtest.R`, `evaluate_prereg.R`, `audit_evidence.R`,
 `audit_history.R`, `audit_coverage.R`, `audit_feed_coverage.R`,
-`validate_*.R`, `verify_season_arm_fired.R`, `harvest_status.R`.
+`audit_data_integrity.R` (duplicates, schema/coverage completeness,
+implausible-mark rate, systematic tier-vs-strength mislabeling, RDS-vs-
+citius.duckdb cross-store consistency, known-athlete spot check — run
+routinely, not just after an incident), `validate_*.R`,
+`verify_season_arm_fired.R`, `harvest_status.R`.
 
 ## Experiment arms (one-off; NOT the deployed model; keep for provenance)
 
@@ -78,3 +82,56 @@ runners (`overnight_*`, `queue_*`, `resume_run`, `grind_season_ab`,
 
 `backtest_swimming.R`, `build_swimming_corpus.R`, `harvest_swim*.R`,
 `harvest_swimming_*.R`, `assemble_swim*.R`, `predict_glasgow_swimming.R`.
+
+## Form ratings (`seqv2`/`seqv3`) — live, and until 2026-08-30 undocumented here
+
+Found during a 2026-08-30 data-directory survey: this pipeline is **65% of
+`citiusdata/data/` by size** (the arm-tagged files below) and feeds the
+shipping path directly, but had never been added to this file. It has two
+tags, not one, and they mean different things:
+
+- `SEQ_TAG` (default `"baseline"`) — `form_ratings.R` / `form_ratings_swimming.R`
+  write `seqv2_state_$SEQ_TAG.parquet`, `seqv3_history_$SEQ_TAG.parquet`,
+  `seqv3_majors_$SEQ_TAG.parquet`, `seqv3_meta_$SEQ_TAG.json`. Run once per
+  arm being evaluated — this is the experiment-arm layer, ~97
+  `check_*`/`score_*`/`build_*`/`optimise_*` scripts read these by tag.
+- `FORM_TAG` (default `"final"`) — `form_display_marks.R` /
+  `form_display_marks_swimming.R` READ `seqv2_state_$FORM_TAG.parquet` /
+  `seqv3_history_$FORM_TAG.parquet` (i.e. someone must have run `form_ratings.R`
+  with `SEQ_TAG=final` first) and WRITE `form_display_$FORM_TAG.parquet` /
+  `form_display_$FORM_TAG_calib.json`. **`export_athletics_blog.R` hard-requires
+  `form_display_final_calib.json` and aborts without it** — this is the
+  shipping-path end of the chain, belongs in "Shipping path" above by
+  function, listed here instead so the whole chain reads as one story.
+
+Shipping chain: `form_ratings.R` (`SEQ_TAG=final`) → `seqv2_state_final.parquet`
++ `seqv3_history_final.parquet` + `seqv3_majors_final.parquet` +
+`seqv3_meta_final.json` → `form_display_marks.R` (`FORM_TAG=final`) →
+`form_display_final.parquet` + `form_display_final_calib.json` →
+`export_athletics_blog.R`.
+
+## Data directory hygiene (added 2026-08-30, after a week that needed it)
+
+`citiusdata/data/` has no retention policy beyond `.gitignore`'s `data/*` (it
+is not git-tracked at all, except three hand-maintained CSVs — `git ls-files
+data/` to confirm which). A 2026-08-30 survey found 1,424 top-level entries,
+22 GB, with five different naming idioms for "this is a backup" and zero
+cleanup mechanism — directly implicated in how long that week's
+`championship_results.rds` recovery took, since nothing on disk said which of
+14+ backup variants was current. Going forward:
+
+- **Backups get one pattern**: `<file>.bak-<YYYYMMDD>[-<reason>]`, and they
+  live in `citiusdata/_archive/`, never in `data/` itself.
+- **Experiment arms get one naming scheme**: `backtest_cache_$arm` (env-driven
+  via `CITIUS_BT_CACHE`, already what the six queue-runner `.ps1` scripts
+  write). The older `bt_*` prefix is retired — do not add new `bt_*`
+  directories.
+- **Retention is 90 days, deleted by a human, never by a script** — matching
+  this repo's standing caution around destructive/irreversible actions.
+- **New scripts should resolve data file paths through
+  `citiusdata/scripts/_paths.R`'s `citius_data_path()`**, not a literal
+  filename spliced onto `D`/`OUT`. Existing scripts are not being
+  mass-migrated (see the DuckDB migration plan's own phased-adoption
+  precedent) — but a literal `citiusdata/data/<filename>` string in a *new*
+  script is exactly the pattern that made a future reorg cost 43-51 script
+  edits per file this time; don't add to that bill.
