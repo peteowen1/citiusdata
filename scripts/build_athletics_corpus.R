@@ -325,3 +325,21 @@ atomic_write(function(p) saveRDS(all, p), file.path(D, "athletics_corpus.rds"))
 atomic_write(function(p) arrow::write_parquet(all, p),
              file.path(D, "athletics_corpus.parquet"))
 say("\nwrote athletics_corpus.{rds,parquet}")
+
+# citius.duckdb MUST be refreshed on the same cadence as the RDS/parquet
+# above, or build_stores.R (which now sources the shipping Arrow store from
+# DuckDB, 2026-08-30) silently builds it from a stale corpus with no error
+# anywhere in the chain. This is a full rebuild every run (mode = "replace"),
+# same as the RDS/parquet writes above.
+tryCatch({
+  citius::with_citius_db_connection(function(conn) {
+    citius::store_athletics_corpus(conn, all, mode = "replace")
+  })
+  say("citius.duckdb athletics_corpus updated to match.")
+}, error = function(e) {
+  cli::cli_warn(c(
+    "Failed to update citius.duckdb: {conditionMessage(e)}",
+    "!" = "athletics_corpus.rds is correct; DuckDB is now BEHIND it.",
+    "i" = "build_stores.R falls back to RDS when DuckDB is stale, but fix this before relying on that."
+  ))
+})

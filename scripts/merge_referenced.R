@@ -105,6 +105,28 @@ say("merged -> ", format(nrow(ch), big.mark = ","), " rows / ",
     format(uniqueN(ch$competition_id), big.mark = ","), " comps",
     "  (previous store kept at championship_results_premerge.rds)")
 
+# citius.duckdb MUST move with the RDS file, not just get rebuilt from it
+# later. build_stores.R now sources the shipping Arrow store from DuckDB
+# (2026-08-30) -- if this script updated only the RDS, DuckDB would silently
+# fall behind on the very next merge, and build_stores.R would build the
+# store every downstream prediction reads from off stale data with no error
+# anywhere in the chain. `new` is the SAME already-deduped rows just written
+# above; store_championship_results() does its own idempotent
+# competition-level dedup against whatever DuckDB already holds, so this is
+# safe to re-run.
+tryCatch({
+  citius::with_citius_db_connection(function(conn) {
+    citius::store_championship_results(conn, new, mode = "merge")
+  })
+  say("citius.duckdb updated to match.")
+}, error = function(e) {
+  cli::cli_warn(c(
+    "Failed to update citius.duckdb: {conditionMessage(e)}",
+    "!" = "championship_results.rds is correct; DuckDB is now BEHIND it.",
+    "i" = "build_stores.R falls back to RDS when DuckDB is stale, but fix this before relying on that."
+  ))
+})
+
 if (nzchar(Sys.getenv("CITIUS_MERGE_ONLY"))) {
   say("CITIUS_MERGE_ONLY set; skipping the rebuild chain.")
   quit(save = "no")

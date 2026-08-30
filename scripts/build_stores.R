@@ -9,8 +9,12 @@
 # 118x, because every query in this pipeline filters on event_id, so partition
 # pruning skips all but a handful of files without opening them. Costs ~2x disk.
 #
-# The .rds files are KEPT. They are the harvest output and the stores are a
-# derived read layer; rebuilding a store is cheap, re-harvesting is not.
+# The .rds files are KEPT as a compat export for scripts not yet migrated
+# off them. As of 2026-08-30 the athletics stores below source from
+# citius.duckdb, not readRDS() -- the .rds files are no longer this
+# script's input for athletics, only a byproduct other scripts still read.
+# Swimming is unchanged, still RDS-sourced; it hasn't been migrated.
+# Rebuilding a store is cheap either way, re-harvesting is not.
 
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
@@ -30,10 +34,18 @@ CAT_TBL <- {
   } else NULL
 }
 
-build <- function(src, dest, label, join_tier = FALSE) {
-  f <- file.path(OUT, src)
-  if (!file.exists(f)) { cli::cli_alert_warning("{label}: {src} not found, skipping."); return(invisible()) }
-  d <- setDT(readRDS(f))
+build <- function(src, dest, label, join_tier = FALSE, data = NULL) {
+  if (is.null(data)) {
+    f <- file.path(OUT, src)
+    if (!file.exists(f)) { cli::cli_alert_warning("{label}: {src} not found, skipping."); return(invisible()) }
+    d <- setDT(readRDS(f))
+  } else {
+    # Pre-loaded (from citius.duckdb -- see the athletics calls below).
+    # `src` is kept only as a label for the "not found" branch above; a
+    # DuckDB-sourced call never takes it.
+    d <- data.table::copy(setDT(data))
+    if (!nrow(d)) { cli::cli_alert_warning("{label}: 0 rows in citius.duckdb, skipping."); return(invisible()) }
+  }
   # flag_implausible() MUST run before partitioning, not after reading.
   #
   # It is a GLOBAL operation: the Hampel filter takes a median and MAD per event
@@ -122,13 +134,76 @@ build <- function(src, dest, label, join_tier = FALSE) {
 # mismatch, not a fix. The machinery is kept (tested, correct) for whenever a
 # same-source calibration is adopted; until then it must stay off. Reverted
 # 2026-08-30.
-build("championship_results.rds", "athletics_store", "Athletics competitions", join_tier = FALSE)
+#
+# SOURCE: citius.duckdb, not readRDS(), as of 2026-08-30. The two athletics
+# RDS files remain a compat export for the 40+ scripts that still read them
+# directly (retiring those is separate, larger, out of scope here) -- but
+# this store-building step, which is what deployed_history() actually reads
+# through, no longer depends on them. Read-only connection: this script only
+# loads, store_championship_results()/store_athletics_corpus() elsewhere own
+# the writes.
+#
+# TWO SAFETY NETS, both required, neither optional:
+#
+# (1) The load itself can fail outright -- citius.duckdb missing entirely
+#     (a fresh checkout only gets the .rds files from the release; the DB is
+#     gitignored and never published), a table not yet populated, or locked
+#     by a concurrent writer. The old readRDS() branch degraded to a warning
+#     on a missing file; a hard abort here would be a regression, and would
+#     also block the unrelated swimming builds later in this same script.
+#     Falls back to `data = NULL` (the original readRDS() path) per table.
+#
+# (2) Even a SUCCESSFUL load can be silently stale: merge_referenced.R and
+#     build_athletics_corpus.R now write to citius.duckdb alongside the RDS
+#     files (2026-08-30), but that write can itself fail (network, lock,
+#     bug) while the RDS write still succeeds -- both scripts warn on that
+#     but do not abort, by design, so the RDS file stays authoritative. A
+#     silently-behind DuckDB would otherwise build a store from data that
+#     looks perfectly well-formed and is simply missing recent meets. Falls
+#     back to `data = NULL` for whichever table is behind, not both.
+.athletics <- tryCatch(
+  with_citius_db_connection(function(conn) {
+    list(championship_results = load_championship_results(conn),
+         athletics_corpus     = load_athletics_corpus(conn))
+  }, read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn(c(
+      "citius.duckdb unavailable: {conditionMessage(e)}",
+      "i" = "Falling back to readRDS() for both athletics stores."
+    ))
+    list(championship_results = NULL, athletics_corpus = NULL)
+  }
+)
+
+.stale_check <- function(duck, rds_file, label) {
+  if (is.null(duck)) return(NULL)
+  f <- file.path(OUT, rds_file)
+  if (!file.exists(f)) return(duck)  # nothing to compare against; trust DuckDB
+  rds <- setDT(readRDS(f))
+  behind_rows <- nrow(duck) < nrow(rds)
+  behind_comps <- "competition_id" %in% names(duck) && "competition_id" %in% names(rds) &&
+    uniqueN(duck$competition_id) < uniqueN(rds$competition_id)
+  if (behind_rows || behind_comps) {
+    cli::cli_warn(c(
+      "citius.duckdb's {label} is BEHIND {rds_file}: {nrow(duck)} vs {nrow(rds)} rows{if (behind_comps) paste0(', ', uniqueN(duck$competition_id), ' vs ', uniqueN(rds$competition_id), ' competitions') else ''}.",
+      "i" = "Falling back to the .rds file for this store -- check why the DuckDB write-through didn't keep up (merge_referenced.R / build_athletics_corpus.R)."
+    ))
+    return(NULL)
+  }
+  duck
+}
+.athletics$championship_results <- .stale_check(.athletics$championship_results,
+  "championship_results.rds", "championship_results")
+.athletics$athletics_corpus <- .stale_check(.athletics$athletics_corpus,
+  "athletics_corpus.rds", "athletics_corpus")
+
+build("championship_results.rds", "athletics_store", "Athletics competitions",
+      join_tier = FALSE, data = .athletics$championship_results)
 # The UNIFIED corpus -- 4.99M rows against the competition harvest's 308k. Without
 # a store the backtest filters it in memory once per meet, 900 times, which is
 # what made the corpus arm 16x slower than the harvest arms rather than equal.
-if (file.exists(file.path(OUT, "athletics_corpus.rds"))) {
-  build("athletics_corpus.rds", "athletics_corpus_store", "Athletics corpus", join_tier = FALSE)
-}
+build("athletics_corpus.rds", "athletics_corpus_store", "Athletics corpus",
+      join_tier = FALSE, data = .athletics$athletics_corpus)
 build("swimming_history_full.rds", "swimming_store", "Swimming")
 if (file.exists(file.path(OUT, "swimming_corpus.rds"))) {
   build("swimming_corpus.rds", "swimming_corpus_store", "Swimming corpus")
