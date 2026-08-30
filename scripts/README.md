@@ -135,3 +135,105 @@ cleanup mechanism — directly implicated in how long that week's
   precedent) — but a literal `citiusdata/data/<filename>` string in a *new*
   script is exactly the pattern that made a future reorg cost 43-51 script
   edits per file this time; don't add to that bill.
+
+## DuckDB store (`citius.duckdb`) — added 2026-08-30
+
+`citius/R/duckdb_store.R` + `citius/R/db_schema.R` (in the `citius` package,
+not here) give `championship_results` and `athletics_corpus` a transactional,
+schema-guarded home: `store_championship_results()` / `store_athletics_corpus()`
+to write, `load_championship_results()` / `load_athletics_corpus()` to read,
+both wrapping `citius.duckdb` via `with_citius_db_connection()`. The schema
+guard aborts on an unexpected extra column (would silently drop data) and
+warns on a missing one; merge mode drops whole competitions already present
+rather than row-level dedup, matching `merge_referenced.R`'s pre-existing
+correct pattern. Built after a 2026-08-29 incident where a hand-rolled dedup
+key silently collapsed 21,440 rows — see git history on both repos for the
+full incident chain and the two follow-on bugs the store itself turned up
+under real use (a schema-guard hole for a missing dedup key, and a
+replace-mode NA-sentinel guard that broke `athletics_corpus` — both fixed
+and tested).
+
+**RDS is a kept compat export, not a legacy leftover.** Every migrated
+script tries `citius.duckdb` first and falls back to the RDS file, warning,
+if the DB is unavailable, stale, or a table is missing — same discipline
+`build_stores.R` established first. Migration status as of 2026-08-30:
+
+- **Write side**: `merge_referenced.R`, `build_athletics_corpus.R` write to
+  `citius.duckdb` alongside their existing RDS write. `harvest_gap_20260818.R`
+  deliberately not touched — a dated, already-executed one-off, not part of
+  the recurring chain.
+- **Shipping path**: all 14 scripts above either already went through
+  `deployed_history()`/the Arrow parquet store (9 of them — no change
+  needed) or were migrated directly (`predict_glasgow_entries.R`,
+  `predict_glasgow_live.R`, `score_glasgow2026.R`, `export_blog_data.R`,
+  `audit_anchors.R`).
+- **Data pipeline + Measurement harness**: 16 scripts migrated —
+  `build_competition_catalogue.R`, `build_crosswalk.R`, `rebaseline_chain.R`,
+  `resolve_birmingham_athletes.R`, `score_arm.R`, `quick_compare.R`,
+  `model_scoreboard.R`, `diagnose_marks.R`, `evaluate_prereg.R`,
+  `audit_coverage.R`, `validate_world_records.R`, `harvest_athlete_histories.R`,
+  `harvest_gap.R`, `harvest_missing_majors.R`, `harvest_partial_races.R`,
+  `harvest_referenced.R`.
+- **Deliberately still RDS-only**, not an oversight: `backtest_athletics.R`
+  and `validate_data.R` take `Sys.getenv()`-configurable input filenames to
+  compare frozen arm snapshots against each other — DuckDB's single
+  current-state table can't represent that, and these scripts specifically
+  want a frozen input. `audit_history.R` by design audits `flag_implausible()`
+  across several raw files side by side, including `athletics_history.rds`/
+  `swimming_history_full.rds`, which this migration doesn't touch. Every
+  **Experiment arms** script — per this file's own existing convention that
+  arm output is one-off/disposable — is untouched.
+
+## World Athletics discovery functions — built 2026-08-30, NOT yet in the harvest workflow
+
+`athletics_find_competition()` (the existing wrapper route) and
+`harvest_missing_majors.R`'s discovery list are a **keyword search sweep** —
+they can only find a competition someone already thought to search a name
+for. Found live 2026-08-30: this missed two current Diamond League legs
+(Xiamen, Shanghai — later confirmed both are 2027-dated, not actually a gap,
+but the discovery method itself had no way to know that without a manual
+check) and had real, measured gaps against the calendar `worldathletics.org`
+itself serves.
+
+Four new `citius` functions, all fetching data embedded in
+`worldathletics.org`'s own server-rendered pages (`window.__NEXT_DATA__`),
+confirmed fetchable via plain `httr2`, no browser needed:
+
+- `athletics_calendar()` / `athletics_calendar_all()` — a real,
+  date-range-queryable, paginated competition list (39,290 measured
+  2026-08-30, spanning recorded history through scheduled future events).
+- `athletics_athlete_official_profile()` — authoritative registered name/
+  birthdate/country by `athlete_id`, sidestepping name-string guessing
+  (the corpus stores "Armand Duplantis", not "Mondo Duplantis"; "Sydney
+  Mclaughlin", not "McLaughlin" — a name-grep sanity check missed both
+  before this existed).
+- `athletics_calendar_results(competition_id)` — full competition results
+  direct from `worldathletics.org`, bypassing the `worldathletics.nimarion.de`
+  wrapper entirely. Used to recover 22 of 26 competitions the wrapper
+  consistently 500'd on.
+- `map_calendar_results_to_championship_schema()` — translates that output
+  onto `CITIUS_DB_SCHEMA$championship_results`'s shape. **Not a drop-in
+  replacement** — its own roxygen `@section` documents real, irreducible
+  gaps (no `race_key` equivalent, no structured discipline/venue split, none
+  of this package's derived columns, race-level dates frequently missing).
+
+**None of these four are wired into any routine harvest script.** They were
+used today for a one-off backfill (26 competitions the wrapper couldn't
+serve; 22 recovered and merged into `championship_results.rds`) and proven
+against real data, but `harvest_missing_majors.R`'s keyword sweep is still
+the standing discovery method. Wiring them in as the default is a real,
+separate follow-on decision, not something this work already did.
+
+## Known permanent gaps (2026-08-30)
+
+- **4 competitions are broken on World Athletics' own backend, not just our
+  access to it**: 7189491, 7189494, 7204909, 7213160. Confirmed via a real,
+  branded WA "Error 500" page in a browser, not a bot-block — retrying
+  further will not fix this from citius's side.
+- **T3_development (minor/local meets) has a ~20,000-competition gap**
+  against its own catalogue population (28,269 total, only 8,263 confirmed
+  present as of 2026-08-30). A bounded 2026-only pilot (1,262 competitions,
+  ≥20 results) ran at ~7.5 competitions/minute with a ~0.4% failure rate —
+  the full gap would take roughly 44 hours of cumulative fetching, in
+  chunks (nothing here survives longer than about an hour unattended). Not
+  started; a real time-cost decision, not a blocker.
