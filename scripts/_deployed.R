@@ -150,6 +150,17 @@ deployed_history <- function(dir, events, from, to) {
   )
   ok <- tryCatch({
     d <- flag_implausible(data.table::setDT(readRDS(src)))
+    # A meet_tier join was added here 2026-08-29 to switch this fallback onto
+    # the catalogue's per-competition tier, matching a fix that was then
+    # PROPERLY TESTED and REJECTED (.scratch/athletics-calendar/issues/
+    # 03-diamond-league-tier-defect.md addendum, 2026-08-29): T1 elite
+    # regressed +3.15% (p=3e-15) against the deployed feed-tier calibration.
+    # DEPLOYED$calibration is still fitted on the feed's `tier`, not
+    # `meet_tier` -- joining meet_tier here without a matching calibration
+    # refit would silently apply the wrong offsets to every rescue rebuild.
+    # Reverted 2026-08-30 to keep this fallback consistent with the deployed
+    # calibration until a same-source refit is adopted (see build_stores.R's
+    # matching join_tier = FALSE for the same reason).
     keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "round",
               "tier", "competition_id", "comp_start", "place", "race_key",
               "sex", "discipline", "wind", "indoor", "comp_name")

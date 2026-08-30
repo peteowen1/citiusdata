@@ -16,7 +16,21 @@ suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
 OUT <- here::here("citiusdata", "data")
 
-build <- function(src, dest, label) {
+# The catalogue's meet_tier is per-COMPETITION and anchor-guarded (see
+# build_competition_catalogue.R), unlike the feed's `tier`, which is
+# per-RESULT and non-monotonic once fitted (mid corrects harder than low --
+# .scratch/athletics-calendar/issues/03-diamond-league-tier-defect.md). Loaded
+# once here; only athletics stores join it (join_tier = TRUE below).
+CAT_TBL <- {
+  f <- file.path(OUT, "competition_catalogue.parquet")
+  if (file.exists(f)) {
+    ct <- setDT(arrow::read_parquet(f))[, .(competition_id, meet_tier)]
+    ct[, competition_id := as.character(competition_id)]
+    ct
+  } else NULL
+}
+
+build <- function(src, dest, label, join_tier = FALSE) {
   f <- file.path(OUT, src)
   if (!file.exists(f)) { cli::cli_alert_warning("{label}: {src} not found, skipping."); return(invisible()) }
   d <- setDT(readRDS(f))
@@ -30,6 +44,24 @@ build <- function(src, dest, label) {
   # Storing raw data and cleaning on read produced 22 extra rows and materially
   # different abilities (max shrinkage difference 0.96) against the .rds path.
   d <- flag_implausible(d)
+
+  if (join_tier) {
+    if (is.null(CAT_TBL)) {
+      cli::cli_abort("{label}: join_tier = TRUE but competition_catalogue.parquet is missing.")
+    }
+    # The documented trap (ticket 03): competition_id round-trips through
+    # parquet as character while the harvest/corpus holds it as integer. A
+    # silent type mismatch here leaves every meet_tier NA -- which looks
+    # exactly like "the fix did nothing" rather than an error. Coerce and
+    # ASSERT coverage rather than trust the join.
+    d[, competition_id := as.character(competition_id)]
+    d <- merge(d, CAT_TBL, by = "competition_id", all.x = TRUE)
+    cov <- 100 * mean(!is.na(d$meet_tier))
+    cli::cli_alert_info("  {label}: meet_tier attached to {round(cov, 1)}% of rows.")
+    if (cov <= 50) {
+      cli::cli_abort("{label}: meet_tier coverage {round(cov, 1)}% -- join is broken, refusing to ship it silently.")
+    }
+  }
 
   # Store the columns the models read, sorted by partition then date. Both
   # matter, and both were measured:
@@ -49,7 +81,7 @@ build <- function(src, dest, label) {
   # promotion. It is low-cardinality (~200 codes) and the rows are already
   # sorted by event and date, so dictionary encoding keeps the cost small.
   keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "round",
-            "tier", "competition_id", "comp_start", "place", "race_key",
+            "tier", "meet_tier", "competition_id", "comp_start", "place", "race_key",
             "sex", "discipline", "wind", "indoor", "comp_name", "venue_country")
   present <- intersect(keep, names(d))
   dropped <- setdiff(names(d), present)
@@ -80,12 +112,22 @@ build <- function(src, dest, label) {
   invisible()
 }
 
-build("championship_results.rds", "athletics_store", "Athletics competitions")
+# join_tier stays OFF for both athletics stores below. It was switched on
+#2026-08-29 for a meet_tier fix that was then properly tested and REJECTED
+# (.scratch/athletics-calendar/issues/03-diamond-league-tier-defect.md
+# addendum): T1 elite regressed +3.15% (p=3e-15) on full-history confirmation,
+# against DEPLOYED's feed-tier-fitted calibration. Turning join_tier back on
+# here without ALSO promoting a meet_tier-fitted calibration would silently
+# feed meet_tier labels through offsets fitted on the feed's tier -- a
+# mismatch, not a fix. The machinery is kept (tested, correct) for whenever a
+# same-source calibration is adopted; until then it must stay off. Reverted
+# 2026-08-30.
+build("championship_results.rds", "athletics_store", "Athletics competitions", join_tier = FALSE)
 # The UNIFIED corpus -- 4.99M rows against the competition harvest's 308k. Without
 # a store the backtest filters it in memory once per meet, 900 times, which is
 # what made the corpus arm 16x slower than the harvest arms rather than equal.
 if (file.exists(file.path(OUT, "athletics_corpus.rds"))) {
-  build("athletics_corpus.rds", "athletics_corpus_store", "Athletics corpus")
+  build("athletics_corpus.rds", "athletics_corpus_store", "Athletics corpus", join_tier = FALSE)
 }
 build("swimming_history_full.rds", "swimming_store", "Swimming")
 if (file.exists(file.path(OUT, "swimming_corpus.rds"))) {
