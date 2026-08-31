@@ -26,20 +26,60 @@ OUT <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "ath_comp_cache_majors")
 dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
 
-# The discovery list is a KEYWORD SWEEP, not the feed's catalogue, so it can
-# only contain meets someone thought to search for. Probe the feed directly for
-# the major names as well, and union the two.
+# The base discovery list is a KEYWORD SWEEP, not the feed's catalogue, so it
+# can only contain meets someone thought to search for. Probe worldathletics.org's
+# own calendar endpoint (athletics_calendar(), citius/R/source_athletics_calendar.R)
+# for the major names too, and union the two -- NOT the wrapper's
+# athletics_find_competition() any more. Confirmed 2026-08-31 on the actual
+# probe terms below: the calendar-endpoint probe is a STRICT SUPERSET of the
+# old wrapper probe (0 lost, +198 gained on this exact term set) -- every
+# competition the old method found, the new one found too, plus more. The
+# extra hits are mostly minor meets (school/inter-city championships,
+# "F"/"E"/"B" ranking_category) that the MAJOR/NOT regex below already
+# filters out, same as it always has -- this is a pure discovery upgrade,
+# not a change to what counts as a "major".
 cc <- setDT(readRDS(file.path(OUT, "ath_competitions.rds")))
 if (!nrow(cc)) cli::cli_abort("ath_competitions.rds loaded 0 rows.")
 cli::cli_alert_info("ath_competitions.rds: {nrow(cc)} row{?s}, {min(cc$start, na.rm = TRUE)}..{max(cc$start, na.rm = TRUE)}")
 probe_terms <- c("World Championships in Athletics", "IAAF World Championships",
                  "Olympic Games", "Commonwealth Games", "World Indoor Championships")
-probed <- rbindlist(lapply(probe_terms, function(t)
-  tryCatch(setDT(athletics_find_competition(t)), error = function(e) NULL)), fill = TRUE)
+# athletics_calendar() caps at 100 rows/page and does not paginate itself --
+# for a broad, decades-spanning term like "Olympic Games" the true hit count
+# can exceed that once every Trials/Qualifier/Youth variant that substring-
+# matches is counted, silently dropping the overflow with no warning. Use
+# athletics_calendar_all() (it loops on offset until `complete`) and check
+# both fetch_ok (a WAF/bot-detection block returns HTTP 200 with no real
+# payload -- same zero-row shape as a genuine zero-hit term, see that
+# function's own docs) and `complete` per term, warning rather than silently
+# treating either failure mode as "this term found nothing." Found in review
+# 2026-08-31, the day after the identical fetch_ok gap was fixed in the
+# functions themselves.
+probed <- rbindlist(lapply(probe_terms, function(t) {
+  r <- tryCatch(athletics_calendar_all(query = t), error = function(e) NULL)
+  if (is.null(r)) return(NULL)
+  if (!isTRUE(attr(r, "fetch_ok") %||% TRUE)) {
+    cli::cli_warn("Probe term {.val {t}}: fetch unconfirmed (WAF/interstitial?) -- results may be incomplete, not a genuine zero-hit.")
+  }
+  if (!isTRUE(attr(r, "complete"))) {
+    cli::cli_warn("Probe term {.val {t}}: pagination did not complete -- results may be truncated.")
+  }
+  r
+}), fill = TRUE)
 if (nrow(probed)) {
-  idc <- intersect(c("competition_id", "id"), names(probed))[1]
-  if (!is.null(idc) && idc != "competition_id") setnames(probed, idc, "competition_id")
   keepc <- intersect(names(cc), names(probed))
+  # athletics_calendar()'s start_date maps onto cc's start column when the
+  # two tables are unioned below -- rename before the rbind, not after, so
+  # `keepc` (computed from names BEFORE this rename) still lines both frames
+  # up correctly rather than silently dropping the date column on one side.
+  if ("start_date" %in% names(probed) && "start" %in% names(cc) && !"start" %in% keepc) {
+    setnames(probed, "start_date", "start")
+    keepc <- intersect(names(cc), names(probed))
+  }
+  # An unparseable id would otherwise collapse every such row into one
+  # NA-keyed group at the dedup below -- the same bug shape fixed in
+  # athletics_calendar_all() itself the day before (2026-08-30). Drop, don't
+  # merge, before the dedup.
+  probed <- probed[!is.na(competition_id)]
   cc <- unique(rbind(cc, probed[, ..keepc], fill = TRUE), by = "competition_id")
   cli::cli_alert_info("Feed probe added {nrow(probed)} row{?s}; list now {nrow(cc)} competitions.")
 }
