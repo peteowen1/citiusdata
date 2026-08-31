@@ -180,6 +180,90 @@ artefacts <- list(
   "birmingham2026-events.parquet"       = ev,
   "birmingham2026-nations.parquet"      = nations)
 
+# --- Diamond League / finals-only cards ---------------------------------------
+# Birmingham's block above assumes a multi-round feed entry list: a round
+# structure csv, a nations parquet, derived heat counts. A Diamond League final
+# has none of that -- one race per event, no heats, no qualifying, no
+# advancement. So these cards publish a SUBSET of Birmingham's artefacts rather
+# than fabricating empty rounds data to fit a shape the meet does not have.
+#
+# THE SITE IS THE CONTRACT. athletics/meet.qmd and athletics/event.qmd are both
+# query-param driven and otherwise meet-agnostic; between them they fetch three
+# objects per meet, so three is what a card must publish:
+#   <meet>-predictions.parquet   the card (meet.qmd + event.qmd)
+#   <meet>-events.parquet        one row per event (meet.qmd's table)
+#   <meet>-rounds.parquet        see below -- required even with no rounds
+#
+# The rounds object is NOT optional and NOT padding. event.qmd deliberately
+# separates "this event genuinely has one round" from "the rounds file did not
+# load", and on a null fetch prints "Round detail is unavailable right now" --
+# which for a one-day meet would report an outage that is not happening. One
+# honest row per event (round_index 1, "Final", one race, nothing advancing)
+# states the true shape instead. `counts_source` is deliberately NOT "derived":
+# that value is what triggers event.qmd's Technical-Delegates note explaining
+# how heat counts were guessed, and there are no heats here to explain.
+DL_MEETS <- c("brussels2026")   # budapest2026 joins this once its card is built
+
+for (mid in DL_MEETS) {
+  cf <- file.path(D, sprintf("%s_pretournament.rds", mid))
+  if (!file.exists(cf)) { cli::cli_alert_info("{mid}: no card built yet, skipping."); next }
+
+  # Same gate Birmingham gets: the card is only publishable if its own sanity
+  # script passes, run here rather than trusting that someone remembered.
+  dl_sanity <- file.path(VERSE, "citiusdata", "scripts", "sanity_diamond_league_card.R")
+  rc_dl <- system2("Rscript", c(shQuote(dl_sanity), shQuote(mid)),
+                   stdout = FALSE, stderr = FALSE)
+  if (!identical(rc_dl, 0L)) {
+    cli::cli_abort(c("sanity_diamond_league_card.R FAILED for {mid} (exit {rc_dl}) - nothing published.",
+                     i = "Run it directly to see which check failed."))
+  }
+  cli::cli_alert_success("{mid}: sanity checks passed; the card is publishable.")
+
+  dp <- setDT(readRDS(cf))
+
+  # p_final is STRUCTURAL here, not estimated: in a straight final, being in the
+  # field IS being in the final. event.qmd already knows this -- it prints a
+  # structural 1 as "100%" while refusing to print 100% for any estimate -- but
+  # it needs the column to exist to say so. predict_diamond_league_final.R does
+  # not emit it (there is no round to reach), so it is set here, where the
+  # reason it equals 1 is a property of the meet shape rather than a model
+  # output being rounded up.
+  dp[, p_final := 1]
+
+  dcard <- dp[, intersect(KEEP, names(dp)), with = FALSE]
+  dcard[, meet_id := mid]
+
+  dcard <- merge(dcard, orient, by = "event_id", all.x = TRUE)
+  dcard[, c("pred_mark", "mark_unit") := predicted_mark(ability, orientation)]
+  dcard[, c("orientation", "family") := NULL]
+  stopifnot("every predicted mark must format" = !any(is.na(dcard$pred_mark)))
+
+  setorder(dcard, event_id, -p_gold)
+  dcard[, rank_gold := seq_len(.N), by = event_id]
+
+  # One row per event, same columns Birmingham's events table carries. n_rounds
+  # comes off the card rather than a round structure file, because for these
+  # meets the card is the only thing that knows it.
+  dev <- as.data.table(citius_events())[event_id %in% unique(dcard$event_id),
+           .(event_id, discipline, sex, family, orientation)]
+  dev <- merge(dev, dcard[, .(field = .N, favourite = athlete[1],
+                              p_favourite = p_gold[1],
+                              n_rounds = n_rounds[1]), by = event_id],
+               by = "event_id", all.x = TRUE)
+
+  dlab <- dcard[, .(round_index = 1L, round = "Final", races = 1L,
+                    advance = NA_integer_, fastest_losers = NA_integer_,
+                    counts_source = "single_final"), by = event_id]
+
+  for (x in list(dcard, dev, dlab)) if (is.data.table(x)) x[, generated_at := NOW]
+
+  artefacts[[sprintf("%s-predictions.parquet", mid)]] <- dcard
+  artefacts[[sprintf("%s-rounds.parquet", mid)]]      <- dlab
+  artefacts[[sprintf("%s-events.parquet", mid)]]      <- dev
+  cli::cli_alert_success(
+    "{mid}: {nrow(dcard)} athlete-event{?s} across {uniqueN(dcard$event_id)} event{?s}.")
+}
+
 for (nm in names(artefacts)) {
   write_parquet(artefacts[[nm]], file.path(BLOG, nm))
   cli::cli_alert_success("{nm}: {nrow(artefacts[[nm]])} row{?s}")
