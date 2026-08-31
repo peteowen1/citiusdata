@@ -89,9 +89,20 @@ lab <- st[, .(event_id, round_index, round, races, advance, fastest_losers,
 # hardcoded in the page (so a wrong claim is fixed in one place) -- which only
 # works if the caveat survives this select.
 #
+# `nation_code` is here for the same class of reason, found the same way. The
+# DL cards' entry list gives nationality as free text, mixing bare codes
+# ("USA") with 19-character full names ("Trinidad and Tobago"), and the site
+# renders it into a badge sized for three characters. add_nation_codes.R
+# fetches authoritative codes and patches the card -- but until this list
+# carried the column, that whole step ended here: the card had nation_code at
+# 100% coverage and the exported artefact had none of it, on a correctly
+# ordered run. An enrichment step with no path to a reader. Found in review
+# 2026-08-31, again before anything shipped.
+#
 # intersect() below means a column absent for a given meet just doesn't appear:
 # Birmingham gains field_type = "official_entry_list" and skips the rest.
 KEEP <- c("event_id", "discipline", "sex", "athlete_id", "athlete", "nation",
+          "nation_code",
           "p_gold", "p_medal", "p_final", "p_reach_r2", "p_reach_r3",
           "ability", "sigma", "ability_se", "n_rounds", "field_modelled",
           "generated_at", "cutoff", "config", "counts_source",
@@ -202,7 +213,13 @@ artefacts <- list(
 # states the true shape instead. `counts_source` is deliberately NOT "derived":
 # that value is what triggers event.qmd's Technical-Delegates note explaining
 # how heat counts were guessed, and there are no heats here to explain.
-DL_MEETS <- c("brussels2026")   # budapest2026 joins this once its card is built
+# budapest2026 is the same finals-only shape and publishes the same three
+# objects, despite a materially better field source (World Athletics' own
+# qualification standings, IDs pre-resolved) than Brussels' third-party
+# compilation. The shape of the meet, not the provenance of its field, is what
+# decides which artefacts a card needs -- so both belong in this one loop, and
+# the difference in provenance is carried by field_type/field_source per row.
+DL_MEETS <- c("brussels2026", "budapest2026")
 
 for (mid in DL_MEETS) {
   cf <- file.path(D, sprintf("%s_pretournament.rds", mid))

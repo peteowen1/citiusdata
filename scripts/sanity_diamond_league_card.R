@@ -11,7 +11,10 @@
 #      "official_entry_list", which would misrepresent the provenance to
 #      anyone reading the site.
 #   5. No duplicate athlete-event rows; every row has an athlete and nation;
-#      the stamped field_modelled must equal the rows actually present.
+#      the stamped field_modelled must equal the rows actually present; and
+#      nation_code must be populated, which is how the pipeline enforces that
+#      add_nation_codes.R ran AFTER predict_* rather than trusting a human to
+#      remember an ordering that fails silently.
 #   6. EVERY qualified entrant is accounted for -- on the card, or named in
 #      <meet>_unmodelled_entrants.csv with a reason. A finalist can legitimately
 #      be unmodellable (no history in the event, so estimate_ability() emits no
@@ -84,14 +87,52 @@ cat("\n4. provenance\n")
 say(length(unique(p$config)) == 1L && unique(p$config)[1] == DEPLOYED$stamp,
     sprintf("config stamp is DEPLOYED's ('%s'), not a literal", DEPLOYED$stamp))
 say(all(!is.na(p$generated_at)), "every row carries generated_at")
-say(all(p$field_type == "third_party_qualifier_list_unofficial"),
-    "field_type is honestly stamped as an UNOFFICIAL third-party list, not official_entry_list")
+# The point of this check is NOT "field_type equals one specific string" -- the
+# first version asserted Brussels' literal value, which would have failed
+# Budapest for the crime of having a better (official) source. What must hold
+# is that the stamp is (a) one of the values this pipeline knows how to mean,
+# (b) the one this particular meet is entitled to, and (c) never
+# "official_entry_list", which neither DL-shaped meet has: Brussels' field is a
+# third-party compilation and Budapest's is a provisional qualification
+# standing, and a card claiming a settled official entry list would misrepresent
+# both to a reader.
+KNOWN_FIELD_TYPES <- c(brussels2026 = "third_party_qualifier_list_unofficial",
+                       budapest2026 = "official_qualification_standings_provisional")
+expected <- KNOWN_FIELD_TYPES[[MEET]] %||% NA_character_
+say(length(unique(p$field_type)) == 1L && !is.na(expected) &&
+      unique(p$field_type)[1] == expected,
+    sprintf("field_type is the value this meet is entitled to ('%s'), stamped uniformly",
+            expected %||% "UNKNOWN MEET"))
+say(!any(p$field_type == "official_entry_list", na.rm = TRUE),
+    "field_type does not claim 'official_entry_list' (neither DL-shaped meet has one)")
 say(all(!is.na(p$field_source) & nzchar(p$field_source)),
     "every row carries a field_source note (where the entry list actually came from)")
 
 cat("\n5. row integrity\n")
 say(p[is.na(athlete) | !nzchar(athlete), .N] == 0, "every row has an athlete name")
 say(p[is.na(nation) | !nzchar(nation), .N] == 0, "every row has a nation")
+# nation_code is the enforcement point for a run-ORDER hazard, not a style
+# preference. predict_diamond_league_final.R rewrites the card from scratch, so
+# running it after add_nation_codes.R silently drops the column -- and
+# add_nation_codes.R's own header could only ask a human to remember the order.
+# It was argued this was uncatchable here because a missing code is "a display
+# concern, not a modelling one". That reasoning does not survive contact with
+# how this script is actually used: export_athletics_blog.R runs it as a HARD
+# PUBLISH GATE (cli_abort, "nothing published"), and it already blocks on
+# things less visible to a reader than a 19-character country name jammed into
+# a badge sized for three. If the pipeline can refuse to publish over an empty
+# field_source, it can refuse over this.
+#
+# 0.9, not 1.0: the realistic failure is binary -- the step ran (~100%) or it
+# did not (column absent, 0%) -- and a hard 1.0 would make the gate brittle
+# against a single athlete genuinely absent from World Athletics' competitor
+# records, which is a real possibility and not a pipeline error.
+# add_nation_codes.R already reports partial coverage in its own right.
+has_nc <- "nation_code" %in% names(p)
+nc_cov <- if (has_nc) mean(!is.na(p$nation_code) & nzchar(p$nation_code)) else 0
+say(has_nc && nc_cov > 0.9,
+    sprintf("nation_code present and populated (%.1f%%)%s", 100 * nc_cov,
+            if (!has_nc) " -- COLUMN ABSENT: run add_nation_codes.R AFTER predict_*" else ""))
 say(p[, .N, by = .(athlete_id, event_id)][N > 1, .N] == 0, "no duplicate athlete-event rows")
 # field_modelled is stamped from nrow(proj) -- the field the simulation was
 # handed -- while the rows here are what came back out of medal_probs(). They

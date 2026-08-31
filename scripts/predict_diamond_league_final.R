@@ -37,14 +37,45 @@ if (!nrow(row)) cli::cli_abort("{.val {MEET}} is not in athletics_calendar.csv."
 MEET_START <- as.Date(row$date_start[1])
 CUT <- as.Date(row$prediction_cutoff[1])
 if (!(CUT < MEET_START)) cli::cli_abort("prediction_cutoff does not precede date_start.")
-# The calendar's wa_competition_id is blank for brussels2026/budapest2026
-# (never wired up, since these meets never had a working pipeline before) --
-# COMPETITION_ID here is the id this session's own athletics_calendar()
-# lookup found live (Brussels: "Allianz Memorial van Damme", 7214029).
-# Hardcoded per meet rather than trusted from the stale calendar column.
-COMPETITION_ID <- switch(MEET,
-  brussels2026 = 7214029L,
-  cli::cli_abort("No known competition_id for {.val {MEET}} -- look it up via athletics_calendar(query=...) before running."))
+# READ FROM THE CALENDAR, not a switch(). The first version of this hardcoded
+# 7214029 for Brussels because the calendar's wa_competition_id column was
+# blank for both DL-shaped meets -- but a hardcoded id in a script parameterised
+# by meet is a contradiction, and it made Budapest abort on a meet the pipeline
+# was explicitly built to also serve. Both ids were filled in on 2026-08-31
+# (Brussels 7214029 "Allianz Memorial van Damme", Budapest 7212925), each
+# verified against athletics_calendar(). The calendar is the single source of
+# truth for meet metadata everywhere else in this pipeline; this is no longer
+# an exception.
+COMPETITION_ID <- suppressWarnings(as.integer(row$wa_competition_id[1]))
+if (is.na(COMPETITION_ID)) {
+  cli::cli_abort(c(
+    "{.val {MEET}} has no wa_competition_id on the calendar.",
+    i = "Look it up with {.code athletics_calendar(query = ...)} and fill the column in -- do not hardcode it here."))
+}
+
+# PROVENANCE IS PER-MEET AND MUST BE HONEST PER-MEET. Brussels and Budapest
+# have genuinely different field sources and the card has to say which is
+# which: Brussels' field is a third-party compilation (World Athletics
+# publishes nothing machine-readable for a DL final -- no entry list, and the
+# championship-qualification endpoint 500s for DL competition ids), while
+# Budapest's comes from World Athletics' own qualification standings. Stamping
+# them identically would either overclaim Brussels or underclaim Budapest.
+#
+# Budapest is OFFICIAL BUT PROVISIONAL, which is a third thing again: the
+# world-rankings window closed 2026-09-01 and the Brussels DL Final (Sep 4-5)
+# awards auto-qualifying slots that displace some current bottom-ranked
+# qualifiers. Saying "official" without "provisional" would be its own kind of
+# wrong.
+FIELD <- switch(MEET,
+  brussels2026 = list(
+    type = "third_party_qualifier_list_unofficial",
+    source = "etusuora.com post-Zurich Diamond League qualifier compilation, 2026-08-31"),
+  budapest2026 = list(
+    type = "official_qualification_standings_provisional",
+    source = "World Athletics championship-qualification standings (competition 7212925), fetched 2026-08-31. Official but PROVISIONAL: the world-rankings window closed 2026-09-01 and Diamond League Final winners (Sep 4-5) take auto-qualifying slots that will displace some current qualifiers."),
+  cli::cli_abort(c(
+    "No field provenance recorded for {.val {MEET}}.",
+    i = "Add an entry to FIELD saying where this meet's entry list came from -- a card must never publish without one.")))
 
 ids_all <- fread(file.path(D, paste0(MEET, "_athlete_ids.csv")))
 # fread() auto-detects athlete_id as numeric since every value looks
@@ -222,11 +253,13 @@ setnames(pred, "country", "nation")
 pred <- merge(pred, as.data.table(citius_events())[, .(event_id, discipline, sex)], by = "event_id", all.x = TRUE)
 pred[, `:=`(
   generated_at = Sys.time(), cutoff = CUT, meet = MEET, competition_id = COMPETITION_ID,
-  # THE HONEST STAMP. Birmingham/Glasgow both say "official_entry_list" here --
-  # this field genuinely is not that, and the site's own caveat convention
-  # (caveats live in the data, not the qmd) needs this to render differently.
-  field_type = "third_party_qualifier_list_unofficial",
-  field_source = "etusuora.com post-Zurich Diamond League qualifier compilation, 2026-08-31",
+  # THE HONEST STAMP, per meet -- see FIELD above for why these differ between
+  # Brussels and Budapest. Birmingham/Glasgow both say "official_entry_list";
+  # neither DL-shaped meet can honestly claim that, and they cannot claim the
+  # same thing as each other either. The site's caveat convention (caveats live
+  # in the data, not the qmd) is what renders this to a reader.
+  field_type = FIELD$type,
+  field_source = FIELD$source,
   half_life = DEPLOYED$half_life, config = DEPLOYED$stamp,
   counts_source = "derived", combined_rows_excluded = n_combined_excluded,
   n_rounds = 1L, field_modelled = n)]
