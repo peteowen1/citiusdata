@@ -71,11 +71,32 @@ lab <- st[, .(event_id, round_index, round, races, advance, fastest_losers,
               counts_source)]
 
 # Trim to what a page actually needs. Everything else is weight on the wire.
+#
+# `field_type`/`field_source` and the field_entrants/field_unmodelled pair are
+# in this list for a reason that is LATENT for Birmingham and load-bearing for
+# the Diamond League cards. Birmingham's field is an official entry list, so its
+# provenance caveat has never mattered and the columns were simply never carried.
+# The Brussels/Budapest cards are built on a field that is NOT an official entry
+# list (World Athletics has published none), and predict_diamond_league_final.R
+# stamps `field_type = "third_party_qualifier_list_unofficial"` plus a
+# `field_source` note on every row to say so. Without these here, the first
+# person to wire a DL card into this export would silently drop that caveat at
+# exactly the moment it matters most -- the same shape as the staleness column
+# this file's own header warns not to tidy away. Found in review 2026-08-31,
+# BEFORE a DL card was wired in, so it never actually shipped mis-stamped.
+#
+# This project's convention is that caveats live in the published data, not
+# hardcoded in the page (so a wrong claim is fixed in one place) -- which only
+# works if the caveat survives this select.
+#
+# intersect() below means a column absent for a given meet just doesn't appear:
+# Birmingham gains field_type = "official_entry_list" and skips the rest.
 KEEP <- c("event_id", "discipline", "sex", "athlete_id", "athlete", "nation",
           "p_gold", "p_medal", "p_final", "p_reach_r2", "p_reach_r3",
           "ability", "sigma", "ability_se", "n_rounds", "field_modelled",
           "generated_at", "cutoff", "config", "counts_source",
-          "combined_rows_excluded")
+          "combined_rows_excluded",
+          "field_type", "field_source", "field_entrants", "field_unmodelled")
 card <- pred[, intersect(KEEP, names(pred)), with = FALSE]
 card[, meet_id := "birmingham2026"]
 
