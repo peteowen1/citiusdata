@@ -21,7 +21,12 @@ source(here::here("citiusdata", "scripts", "_deployed.R"))
 OUT <- here::here("citiusdata", "data")
 HOLDOUT <- as.Date("2023-01-01")
 
-b <- readRDS(file.path(OUT, "backtest_ctrl_now.rds"))
+# Which arm to score. Defaults to the arm this script was written against, so
+# behaviour is unchanged for an existing caller; set CITIUS_MARKS_ARM to point
+# it at another arm's output (added 2026-09-01 for the project_tier A/B).
+ARM <- Sys.getenv("CITIUS_MARKS_ARM", "backtest_ctrl_now.rds")
+cli::cli_alert_info("Scoring marks baselines against {.file {ARM}}")
+b <- readRDS(file.path(OUT, ARM))
 d <- merge(as.data.table(b$predictions)[, .(race_id, athlete_id = as.character(athlete_id),
                                             a_mark = median_mark)],
            as.data.table(b$outcomes)[, .(race_id, athlete_id = as.character(athlete_id))],
