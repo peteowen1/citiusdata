@@ -1109,7 +1109,16 @@ if (N_WORKERS > 1L) {
                     # works (lexical scoping) and every PSOCK worker dies with
                     # "object 'TIER_SHRINK' not found" -- so parallel mode was
                     # silently broken for exactly the arms it was needed for.
-                    "TIER_SHRINK", "ROUND_SHRINK")
+                    "TIER_SHRINK", "ROUND_SHRINK",
+                    # FAMILY_DEBIAS must be exported UNCONDITIONALLY, unlike the
+                    # three names below it -- run_meet()'s `if (FAMILY_DEBIAS &&
+                    # ...)` check runs on every worker regardless of the flag's
+                    # value, so a worker needs the (possibly FALSE) binding to
+                    # exist at all. Conditioning this export on `if (FAMILY_DEBIAS)`
+                    # meant every FAMILY_DEBIAS=FALSE parallel arm died with
+                    # "object 'FAMILY_DEBIAS' not found" -- latent all day because
+                    # every earlier parallel arm happened to run with it TRUE.
+                    "FAMILY_DEBIAS")
   # `clean` is the in-memory fallback corpus, potentially gigabytes -- exporting
   # it would copy that to every worker. Only export it when it will actually be
   # read (no store), which is exactly the case the memory cost is unavoidable.
@@ -1126,7 +1135,7 @@ if (N_WORKERS > 1L) {
   # with it, so the closure's free variables must be exported by name too, or
   # every worker dies with "object '.fp' not found" the moment the function is
   # actually called -- one call site, four names, all four required.
-  if (FAMILY_DEBIAS) export_vars <- c(export_vars, "FAMILY_DEBIAS", "family_pool_offset",
+  if (FAMILY_DEBIAS) export_vars <- c(export_vars, "family_pool_offset",
                                       ".fp", ".fp_fs_by_event")
   parallel::clusterExport(cl, export_vars, envir = environment())
   # parLapply schedules statically -- a worker's whole chunk runs before ANY of
