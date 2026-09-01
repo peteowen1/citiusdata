@@ -31,8 +31,8 @@ load_arm <- function(fn) {
   list(d = d, meta = b$meta)
 }
 
-ctrl <- load_arm("backtest_tierctrl.rds")
-fix  <- load_arm("backtest_tier05fd.rds")
+ctrl <- load_arm(Sys.getenv("CITIUS_FD_CTRL", "backtest_tierctrl.rds"))
+fix  <- load_arm(Sys.getenv("CITIUS_FD_FIX",  "backtest_tier05fd.rds"))
 say("ctrl arm: %s", ctrl$meta$calibration)
 say("fix  arm: %s", fix$meta$calibration)
 
@@ -45,7 +45,10 @@ say("shared (race, athlete) rows: %s", format(nrow(mc), big.mark = ","))
 stopifnot("no shared rows -- the arms do not cover the same races" = nrow(mc) > 500)
 moved <- mean(abs(mc$mm_ctrl - mc$mm_fix) > 1e-9)
 say("rows where the prediction actually moved: %.1f%%", 100 * moved)
-stopifnot("arms are identical -- a flag did not take effect" = moved > 0.5)
+# Not >0.5: with the apply-date gate in place a debias arm differs from its
+# tier-only control ONLY on post-holdout meets, which are a minority of the
+# span. The era table below is the real check on which rows moved.
+stopifnot("arms are identical -- a flag did not take effect" = moved > 0.001)
 
 ch <- setDT(readRDS(file.path(D, "championship_results.rds")))
 ch[, `:=`(competition_id = as.character(competition_id), athlete_id = as.character(athlete_id))]
