@@ -11,7 +11,10 @@
 # Chunked with a resume loop because a long background Rscript on this machine
 # has been killed mid-run before with no explanation; each chunk resumes from
 # the cache, so a kill costs one chunk rather than the run.
-$ErrorActionPreference = "Stop"
+# was "Stop": native Rscript stderr chatter (e.g. R-version package warnings)
+# gets treated as a terminating error under Stop, killing the job on benign
+# output -- confirmed 2026-09-01 via two real backtest kills traced to this.
+$ErrorActionPreference = "Continue"
 Set-Location "C:\dev\citiusverse"
 
 $MEETS_PER_CHUNK = 300

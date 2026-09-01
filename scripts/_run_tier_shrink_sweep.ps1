@@ -9,7 +9,10 @@
 # required for this to be the same arm family as ctrl/tier05.
 #
 # Usage:  pwsh citiusdata\scripts\_run_tier_shrink_sweep.ps1
-$ErrorActionPreference = "Stop"
+# was "Stop": native Rscript stderr chatter (e.g. R-version package warnings)
+# gets treated as a terminating error under Stop, killing the job on benign
+# output -- confirmed 2026-09-01 via two real backtest kills traced to this.
+$ErrorActionPreference = "Continue"
 Set-Location "C:\dev\citiusverse"
 
 $MEETS_PER_CHUNK = 300

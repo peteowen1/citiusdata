@@ -9,7 +9,10 @@
 # guard against reading the control's cached meets back as the tier arm's.
 #
 # Usage:  pwsh _run_tier_arms.ps1
-$ErrorActionPreference = "Stop"
+# was "Stop": native Rscript stderr chatter (e.g. R-version package warnings)
+# gets treated as a terminating error under Stop, killing the job on benign
+# output -- confirmed 2026-09-01 via two real backtest kills traced to this.
+$ErrorActionPreference = "Continue"
 Set-Location "C:\dev\citiusverse"
 
 # MEASURED 2026-09-01: a 3-meet invocation took 222s wall, of which the timing
