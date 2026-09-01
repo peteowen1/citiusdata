@@ -13,7 +13,21 @@ OUT <- here::here("citiusdata", "data")
 BT_CACHE <- file.path(OUT, Sys.getenv("CITIUS_BT_CACHE", "backtest_cache"))
 dir.create(BT_CACHE, recursive = TRUE, showWarnings = FALSE)
 
-N_SIMS <- 10000L
+# 10,000 is the CONFIRMATION value -- reduce it for fast iteration, not to
+# change what's deployed. The ability refit is ~2.5s/meet; simulation is what
+# "dominates" (see the run-budget comment ~30s/meet below), and it scales
+# roughly linearly in N_SIMS since it is Monte Carlo, not closed-form (the
+# scaled-t, heterogeneous-sigma/df noise model has no known analytic order-
+# statistic solution, so drawing and ranking IS the method, same shape as
+# check_finals_sigma_gain.R's own NSIM_FIT=2000 for its out-of-sample sweep).
+# Lower N_SIMS raises Monte Carlo noise on EVERY probability by roughly
+# sqrt(10000/N_SIMS) -- e.g. 2500 sims quadruples it. The fixed seed=11L in
+# every simulate_event() call means that noise is highly CORRELATED between
+# arms sharing the same N_SIMS, so an arm-vs-arm comparison (score_arm.R with
+# CITIUS_SCORE_VS) stays mostly protected even at low N_SIMS; an arm-vs-last5
+# comparison is not, because last-5 draws its own independent noise. Screen at
+# 2000-3000, confirm the number you're about to act on at 10000.
+N_SIMS <- .env_int("CITIUS_BT_NSIMS", "10000")
 MAX_PER_RUN <- .env_int("CITIUS_BT_MEETS", "25")
 # History depth per refit. TWELVE YEARS, and do not shorten it on the argument
 # that old marks carry negligible weight.
