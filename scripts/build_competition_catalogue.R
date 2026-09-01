@@ -425,13 +425,28 @@ oly <- cat_tbl[class == "olympics" & !is.na(meet_tier)]
 wch <- cat_tbl[class == "world_champs" & !is.na(meet_tier)]
 dl  <- cat_tbl[class == "diamond_league" & !is.na(meet_tier)]
 age <- cat_tbl[class == "age_group" & !is.na(meet_tier)]
-ok1 <- anchor("every Olympic Games is T1", all(oly$meet_tier == "T1_elite"),
+
+# POPULATION-SIZE ANCHORS, checked BEFORE the property anchors below.
+# `all(logical(0))` is TRUE in R, so a property anchor over an empty selection
+# reports PASS with nothing actually checked. This is exactly how "every
+# Olympic Games is T1" passed on 2026-08-21 while every Olympics sat in T2 --
+# the majors had lost their `class` upstream (see the IAAF-naming comment
+# above), the selector matched zero rows, and the alarm was disabled by the
+# precise condition it existed to detect. Floors are real facts about the
+# corpus (there have been at least this many of each by 2026), not tuned to
+# today's counts.
+p1 <- anchor("olympics population is non-empty", nrow(oly) >= 8, sprintf("%d rows", nrow(oly)))
+p2 <- anchor("world_champs population is non-empty", nrow(wch) >= 8, sprintf("%d rows", nrow(wch)))
+p3 <- anchor("diamond_league population is non-empty", nrow(dl) >= 20, sprintf("%d rows", nrow(dl)))
+p4 <- anchor("age_group population is non-empty", nrow(age) >= 20, sprintf("%d rows", nrow(age)))
+
+ok1 <- anchor("every Olympic Games is T1", p1 && all(oly$meet_tier == "T1_elite"),
               paste(sort(unique(oly$meet_tier)), collapse = "/"))
-ok2 <- anchor("every senior World Championships is T1", all(wch$meet_tier == "T1_elite"),
+ok2 <- anchor("every senior World Championships is T1", p2 && all(wch$meet_tier == "T1_elite"),
               paste(sort(unique(wch$meet_tier)), collapse = "/"))
-ok3 <- anchor("most Diamond League is T1", mean(dl$meet_tier == "T1_elite") > 0.6,
+ok3 <- anchor("most Diamond League is T1", p3 && mean(dl$meet_tier == "T1_elite") > 0.6,
               sprintf("%.0f%%", 100 * mean(dl$meet_tier == "T1_elite")))
-ok4 <- anchor("no age-group meet is T1", !any(age$meet_tier == "T1_elite"),
+ok4 <- anchor("no age-group meet is T1", p4 && !any(age$meet_tier == "T1_elite"),
               sprintf("%d of %d", sum(age$meet_tier == "T1_elite"), nrow(age)))
 
 # NEGATIVE anchors. The set above only said what must be IN, which is why a

@@ -216,6 +216,122 @@ if (ADJUST_RACE) cli::cli_alert_info(
 # League "low". Off by default so it is measured as its own arm.
 USE_MEET_TIER <- nzchar(Sys.getenv("CITIUS_BT_MEET_TIER", ""))
 
+# THE MISSING COUNTERPARTS OF project_championship().
+#
+# estimate_ability(adjust_context = TRUE) SUBTRACTS the round and tier offsets
+# from every historical mark, so the ability it returns describes a FINAL at the
+# TOP tier. project_championship() adds the championship half back for the race
+# being forecast (below, once per meet). The tier and round halves were never
+# added back, so a club meet and a Diamond League final are both predicted as
+# though they were top-tier finals. See context.R's own docs on both functions.
+#
+# Empty = OFF, so the control path is byte-identical to the behaviour before
+# this arm existed. A value sets the shrink factor:
+#   CITIUS_BT_PROJECT_TIER=0.5   project_tier()'s measured default (its docs
+#                                carry the lambda sweep that produced it)
+#   CITIUS_BT_PROJECT_ROUND=1    project_round() has NO measured shrink -- its
+#                                own docs say 1 is the honest unshrunk default,
+#                                not a validated choice.
+#
+# MEASURED BEFORE RUNNING (2026-09-01, on backtest_ctrl_now.rds's scored set):
+# all 1,084 scored races classify as round "final", and calibration$round's
+# offset for "final" is exactly 0. So PROJECT_ROUND is provably a NO-OP on a
+# finals-only backtest -- it is wired for correctness and for future arms that
+# score heats, not because it can move this population's numbers.
+PROJECT_TIER  <- Sys.getenv("CITIUS_BT_PROJECT_TIER", "")
+PROJECT_ROUND <- Sys.getenv("CITIUS_BT_PROJECT_ROUND", "")
+parse_shrink <- function(x, nm) {
+  if (!nzchar(x)) return(NA_real_)
+  v <- suppressWarnings(as.numeric(x))
+  if (!is.finite(v)) cli::cli_abort(
+    "{.envvar {nm}} must be a number (the shrink factor), got {.val {x}}.")
+  v
+}
+TIER_SHRINK  <- parse_shrink(PROJECT_TIER,  "CITIUS_BT_PROJECT_TIER")
+ROUND_SHRINK <- parse_shrink(PROJECT_ROUND, "CITIUS_BT_PROJECT_ROUND")
+if (!is.na(TIER_SHRINK)) cli::cli_alert_info(
+  "project_tier ON: shrink {.val {TIER_SHRINK}}, applied to the tier of each scored race.")
+if (!is.na(ROUND_SHRINK)) cli::cli_alert_info(
+  "project_round ON: shrink {.val {ROUND_SHRINK}} (no-op on a finals-only pool).")
+
+# SELECTION SHRINKAGE -- the OTHER half of the marks bias, and a different
+# mechanism from project_tier/project_round above.
+#
+# Measured 2026-09-01 across 33 event x sex groups: per-event marks bias
+# correlates +0.706 (p=4.5e-06) with calibration$events$sigma_within, and
+# sigma_within is the ONLY survivor in a multivariate model against tier lift,
+# venue spread and venue concentration (t=3.80, p=0.0007). It also predicts the
+# NAIVE last-5 baseline's bias (t=4.28, p=0.00017); cor(model bias, last-5
+# bias) = +0.884, so 78% of the model's per-event bias is a gradient BOTH
+# predictors share. That is the signature of regression to the mean under
+# SELECTION -- athletes reach a T1 final partly on a lucky recent result, so any
+# past-performance predictor over-rates them, scaled by their own noise. Throws
+# sigma_within 0.0506 against sprint 0.0146 matches the family ordering.
+#
+# Four alternatives were tested and refuted: venue effect and venue
+# concentration (both OPPOSITE sign; javelin is the least venue-concentrated
+# event in the corpus), foul rate (opposite sign; distance has the highest foul
+# rate and the lowest bias), tier mix (arithmetically insufficient -- the lift
+# actually applied spans 0.71-1.08% against a 5.21pp gradient), and the
+# `tactical` registry flag (splits sharply but is 800m-and-up, so it restates
+# the gradient rather than explaining it).
+#
+# THE TARGET IS prior_mu, NOT THE FIELD MEAN, and that is not a detail.
+# Shrinking toward the field mean cannot correct a LEVEL bias at all: with a
+# shrink factor constant across the field -- which per-event sigma gives, since
+# every athlete in a race shares one event -- mean(F + (1-c)(pred - F)) == F
+# exactly. The field's mean prediction is unchanged and only its spread
+# compresses. prior_mu is the event-population mean the field was SELECTED
+# FROM, sits below the selected field, and so moves the level in the direction
+# the defect actually requires.
+#
+#   CITIUS_BT_SEL_SHRINK=1.4   lambda. Empty = OFF, so control is
+#                              byte-identical. SCALE: bias spans ~5.2pp over a
+#                              sigma range of ~0.036, so lambda near 1.0-1.5 is
+#                              the order the measurement implies. This is NOT a
+#                              validated default -- it needs its own sweep, the
+#                              way project_tier()'s 0.5 got one.
+#   CITIUS_BT_SEL_SIGMA=event  which sigma scales the shrink. "event" (default)
+#                              is calibration$events$sigma_within, the quantity
+#                              the +0.706 was actually measured on. "athlete"
+#                              is estimate_ability()'s per-athlete `sigma`,
+#                              closer to the mechanism but UNMEASURED -- a
+#                              variant to sweep, never the default.
+SEL_SHRINK <- parse_shrink(Sys.getenv("CITIUS_BT_SEL_SHRINK", ""), "CITIUS_BT_SEL_SHRINK")
+SEL_SIGMA  <- tolower(Sys.getenv("CITIUS_BT_SEL_SIGMA", "event"))
+if (!SEL_SIGMA %in% c("event", "athlete")) cli::cli_abort(
+  "{.envvar CITIUS_BT_SEL_SIGMA} must be {.val event} or {.val athlete}, got {.val {SEL_SIGMA}}.")
+if (!is.na(SEL_SHRINK)) cli::cli_alert_info(
+  "selection shrinkage ON: lambda {.val {SEL_SHRINK}} on {.val {SEL_SIGMA}} sigma, toward prior_mu.")
+
+# FAMILY-POOL DEBIAS. Offsets fit OFFLINE by fit_family_pool_offsets.R and read
+# here as a fixed lookup, not refit per meet -- same "single global correction"
+# shape as TIER_SHRINK/ROUND_SHRINK above and SEL_SHRINK below, if applied.
+FAMILY_DEBIAS <- nzchar(Sys.getenv("CITIUS_BT_FAMILY_DEBIAS", ""))
+if (FAMILY_DEBIAS) {
+  .fp_path <- here::here("citiusdata", "data", "family_pool_offsets.rds")
+  if (!file.exists(.fp_path)) cli::cli_abort(
+    "{.envvar CITIUS_BT_FAMILY_DEBIAS} is set but {.file {.fp_path}} does not ",
+    "exist. Run {.file fit_family_pool_offsets.R} first.")
+  .fp <- readRDS(.fp_path)
+  .fp_ev_by <- as.data.table(citius_events())[, .(event_id, fs = paste(family, sex, sep = "|"))]
+  .fp_fs_by_event <- setNames(.fp_ev_by$fs, .fp_ev_by$event_id)
+  # Scalar lookup: ev_map (event-level, already shrunk toward its family x sex)
+  # first, else the family x sex map, else the grand mean -- the same fallback
+  # chain fit_family_pool_offsets.R used when FITTING, so an event absent from
+  # both here and there behaves identically to one absent from the fit alone.
+  family_pool_offset <- function(event_id) {
+    ev <- .fp$ev_map[event_id]
+    if (!is.na(ev)) return(unname(ev))
+    fsv <- .fp_fs_by_event[event_id]
+    fsm <- if (!is.na(fsv)) .fp$fs_map[fsv] else NA_real_
+    if (!is.na(fsm)) return(unname(fsm))
+    .fp$mu0
+  }
+  cli::cli_alert_info(
+    "family-pool debias ON: offsets fit on {.file {(.fp$fit_arm)}}, fit holdout {.val {format((.fp$fit_holdout))}}.")
+}
+
 # Restrict the SCORED MEETS to given tiers. Decisions are made on T1 (see
 # OPTIMISATION-FRAMEWORK.md), but the arm was scoring every tier: of 367 meets,
 # 105 are T1 and 262 are T2/T3 -- so 72% of a 90-minute run went to populations
@@ -416,7 +532,11 @@ arm_fingerprint <- list(
   tier_filter = TIER_FILTER, elite_history = ELITE_HISTORY,
   history_days = HISTORY_DAYS, n_sims = N_SIMS, cohort = COHORT,
   athletes = ATHLETES, peak_gamma = PEAK_GAMMA,
-  robust_location = ROBUST_LOCATION, decouple_peak = DECOUPLE_PEAK)
+  robust_location = ROBUST_LOCATION, decouple_peak = DECOUPLE_PEAK,
+  # Without these two, a tier arm would read the control's cached meets back as
+  # its own predictions and the A/B would come back a dead heat -- the exact
+  # failure this fingerprint exists to prevent.
+  project_tier = PROJECT_TIER, project_round = PROJECT_ROUND)
 
 # A cache that predates this check is stamped by the first run after it, which
 # is the best that can be done retrospectively -- an existing directory carries
@@ -561,10 +681,29 @@ NOFAM <- new.env(parent = emptyenv())
 NOFAM$rows <- 0L; NOFAM$meets <- 0L; NOFAM$events <- character()
 
 n <- min(nrow(todo), MAX_PER_RUN)
-for (i in seq_len(n)) {
+
+# Embarrassingly parallel across meets: every iteration reads its own history
+# window, refits, simulates and would write its own cache file -- no meet
+# depends on another, and the eventual scoring step rebuilds everything from
+# per-meet cache files regardless (see "assemble and score" below), never from
+# in-loop state. TIMING/AGE_WARN/NOFAM used to be mutated in place, which only
+# works within a single process; run_meet() now RETURNS its own counts and the
+# driver sums them after the loop, which is correct for one process or many, so
+# there is one code path rather than a serial one and a separate parallel one.
+run_meet <- function(i) {
   cid <- todo$competition_id[i]
   cut_date <- todo$comp_start[i]
   block <- finals[competition_id == cid]
+
+  local_timing <- list(read = 0, ability = 0, sim = 0)
+  tick <- function(slot, expr) {
+    t0 <- Sys.time()
+    out <- force(expr)
+    local_timing[[slot]] <<- local_timing[[slot]] + as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    out
+  }
+  local_age_warn <- 0L
+  local_nofam <- list(rows = 0L, is_nofam_meet = FALSE, events = character())
 
   # Two restrictions make the per-meet refit ~10x cheaper without changing a
   # single prediction:
@@ -604,8 +743,11 @@ for (i in seq_len(n)) {
     if (i == 1L) cli::cli_alert_info(
       "meet_tier attached to {round(100*mean(!is.na(past$meet_tier)))}% of history rows.")
   }
-  TIMING$rows <- TIMING$rows + nrow(past)
-  if (nrow(past) < 2000L) { saveRDS(list(), file.path(BT_CACHE, paste0(cid, ".rds"))); next }
+  rows <- nrow(past)
+  if (rows < 2000L) {
+    return(list(cid = cid, out = list(), rows = rows, timing = local_timing,
+                age_warn = local_age_warn, nofam = local_nofam))
+  }
   ability <- if (is.null(hl_map)) {
     tick("ability", estimate_ability(past, as_of = cut_date,
                                      half_life = half_life,
@@ -630,9 +772,9 @@ for (i in seq_len(n)) {
     # them the global half-life, which is exactly the single-half-life branch
     # above, and count them (see NOFAM above; reported once, and stamped).
     if (anyNA(pf$family)) {
-      NOFAM$rows <- NOFAM$rows + sum(is.na(pf$family))
-      NOFAM$meets <- NOFAM$meets + 1L
-      NOFAM$events <- union(NOFAM$events, unique(pf$event_id[is.na(pf$family)]))
+      local_nofam$rows <- sum(is.na(pf$family))
+      local_nofam$is_nofam_meet <- TRUE
+      local_nofam$events <- unique(pf$event_id[is.na(pf$family)])
       pf[is.na(family), family := ""]
     }
     tick("ability", data.table::rbindlist(lapply(split(pf, pf$family), function(g) {
@@ -718,12 +860,86 @@ for (i in seq_len(n)) {
         proj <- withCallingHandlers(
           project_ability(ok, aging),
           warning = function(w) {
-            AGE_WARN$n <- AGE_WARN$n + 1L
-            AGE_WARN$last <- conditionMessage(w)
+            local_age_warn <<- local_age_warn + 1L
             invokeRestart("muffleWarning")
           })
         entrants[proj, on = "athlete_id", ability := i.ability]
       }
+    }
+    # Put ability onto the CONTEXT OF THE RACE BEING PREDICTED -- the tier and
+    # round halves of the correction that estimate_ability() removed from
+    # history and only project_championship() ever put back. Both offsets are
+    # uniform across the field (they are properties of the race, not of the
+    # athlete), so applying them here rather than before condition_prior() gives
+    # the same answer: shrinking toward a field mean that has itself shifted by
+    # the same constant leaves the constant intact. Placed after aging for the
+    # same reason -- a uniform additive shift commutes with all of it.
+    # MODE, not [1]. The feed's `tier` is per-RESULT and a single meet is
+    # documented to carry up to four different grades across its own results
+    # (.scratch/athletics-calendar/issues/03-diamond-league-tier-defect.md), so
+    # the first row is an arbitrary pick where the race disagrees with itself.
+    # A scalar is required rather than the vector: project_tier() recycles with
+    # rep_len() against the ability rows, and `entrants` is in ability order
+    # while `field` is not -- passing the vector would misalign tier to athlete.
+    .mode1 <- function(x) {
+      x <- x[!is.na(x)]
+      if (!length(x)) return(NA_character_)
+      names(sort(table(as.character(x)), decreasing = TRUE))[1]
+    }
+    # SELECTION SHRINKAGE, applied BEFORE the projections below. The order is
+    # load-bearing: prior_mu is on the top-tier-final footing that
+    # estimate_ability(adjust_context = TRUE) produced, and project_tier() moves
+    # `ability` OFF that footing onto the race's own. Shrinking afterwards would
+    # pull ability toward a target on a DIFFERENT footing, injecting a bias of
+    # (tier offset x shrink weight). Running first keeps ability and prior_mu on
+    # one footing, and the projections are uniform additive shifts applied after
+    # -- the same commuting argument the block below already makes for aging.
+    #
+    # Unlike those projections this is NOT uniform across the field: the shift is
+    # cw * (prior_mu - ability), so an athlete further above the event prior is
+    # discounted more. That is the selection story, and it means this arm can
+    # move the ordering-sensitive metrics (Brier, logloss, favourite-wins) as
+    # well as the marks metrics. Read those in the scorecard, not just MAE.
+    if (!is.na(SEL_SHRINK) && nrow(entrants)) {
+      if (!"prior_mu" %chin% names(entrants)) cli::cli_abort(
+        "selection shrinkage needs {.field prior_mu}, absent from the ability table.")
+      sig <- if (SEL_SIGMA == "athlete") {
+        if (!"sigma" %chin% names(entrants)) cli::cli_abort(
+          "{.envvar CITIUS_BT_SEL_SIGMA=athlete} needs {.field sigma} on the ability table.")
+        entrants$sigma
+      } else {
+        .evs <- data.table::as.data.table(calibration$events)
+        if (!all(c("event_id", "sigma_within") %chin% names(.evs))) cli::cli_abort(
+          "selection shrinkage needs {.field calibration$events$sigma_within}.")
+        .evs[data.table::data.table(event_id = entrants$event_id),
+             on = "event_id", x.sigma_within]
+      }
+      # An event with no fitted sigma shrinks by zero rather than erroring, so a
+      # thin event cannot abort a 200-meet run. Coverage is asserted ONCE before
+      # the run instead -- see run_marks_arm_matrix.ps1 -- which is the right
+      # place for a precondition: loudly, up front, not counted in a hot loop
+      # where a partial arm would look like a completed one.
+      cw <- pmin(pmax(SEL_SHRINK * sig, 0), 1)
+      cw[!is.finite(cw)] <- 0
+      entrants[, ability := ability + cw * (prior_mu - ability)]
+    }
+    if (!is.na(TIER_SHRINK)) {
+      entrants <- project_tier(entrants, .mode1(field$tier), calibration,
+                               shrink = TIER_SHRINK)
+    }
+    if (!is.na(ROUND_SHRINK)) {
+      entrants <- project_round(entrants, .mode1(field$round), calibration,
+                                shrink = ROUND_SHRINK)
+    }
+    # FAMILY-POOL DEBIAS, applied LAST -- after aging and the tier/round
+    # projections, immediately before simulation. Order matters less here than
+    # for selection shrinkage: this offset was fit against the FINAL predicted
+    # mark of whatever arm produced the fit data, so it is a residual correction
+    # meant to sit after everything else, not a footing-sensitive one.
+    # UNITS: the table is "100 x oriented log mark" (the %-of-mark convention
+    # used throughout this file), `ability` is NOT scaled by 100 -- divide.
+    if (FAMILY_DEBIAS && nrow(entrants)) {
+      entrants[, ability := ability - family_pool_offset(ev) / 100]
     }
     sim <- tick("sim", simulate_event(entrants, n_sims = N_SIMS,
                                       calibration = calibration, seed = 11L))
@@ -785,8 +1001,103 @@ for (i in seq_len(n)) {
         hit_medal = mp$athlete_id %in% as.character(field[place <= 3L]$athlete_id),
         merged = .merged))
   }
-  saveRDS(out, file.path(BT_CACHE, paste0(cid, ".rds")))
-  cli::cli_alert("  {i}/{n}: {cid} -> {length(out)} race{?s}  [read {round(TIMING$read)}s ability {round(TIMING$ability)}s sim {round(TIMING$sim)}s]")
+  list(cid = cid, out = out, rows = rows, timing = local_timing,
+       age_warn = local_age_warn, nofam = local_nofam)
+}
+
+# CITIUS_BT_WORKERS=1 (default) is byte-for-byte the original single-process
+# loop -- same function, called the same number of times, on the same inputs.
+# >1 sends run_meet() to a PSOCK cluster instead. setDTthreads(1) per worker
+# stops data.table's OWN internal threading from oversubscribing on top of the
+# process-level parallelism -- N processes x M internal threads on a 24-core
+# box is the usual way "parallel" makes something slower, not faster.
+N_WORKERS <- .env_int("CITIUS_BT_WORKERS", "1")
+t_loop0 <- Sys.time()
+if (N_WORKERS > 1L) {
+  cli::cli_alert_info("Parallel mode: {N_WORKERS} workers across {n} meet{?s}.")
+  cl <- parallel::makeCluster(N_WORKERS)
+  parallel::clusterEvalQ(cl, {
+    suppressMessages(devtools::load_all(here::here("citius")))
+    library(data.table)
+    data.table::setDTthreads(1)
+  })
+  export_vars <- c("todo", "finals", "STORE", "USE_STORE", "STORE_COLS", "HISTORY_DAYS",
+                    "dev_ids", "elite_ids", "USE_MEET_TIER", "calibration", "PRIOR_WEIGHT",
+                    "mom_eff", "aging", "N_SIMS", "hl_map", "half_life", "ADJUST_CONTEXT",
+                    "ADJUST_RACE", "SIGMA_MODE", "SIGMA_PARTS", "PEAK_GAMMA",
+                    "ROBUST_LOCATION", "DECOUPLE_PEAK",
+                    # run_meet() reads these at the project_tier()/
+                    # project_round() calls. Without them here the serial path
+                    # works (lexical scoping) and every PSOCK worker dies with
+                    # "object 'TIER_SHRINK' not found" -- so parallel mode was
+                    # silently broken for exactly the arms it was needed for.
+                    "TIER_SHRINK", "ROUND_SHRINK")
+  # `clean` is the in-memory fallback corpus, potentially gigabytes -- exporting
+  # it would copy that to every worker. Only export it when it will actually be
+  # read (no store), which is exactly the case the memory cost is unavoidable.
+  if (USE_MEET_TIER) export_vars <- c(export_vars, "ctl")
+  if (!USE_STORE) export_vars <- c(export_vars, "clean")
+  # Same TIER_SHRINK trap again: run_meet() reads SEL_SHRINK/SEL_SIGMA at the
+  # selection-shrinkage call. Caught before running this time, not after a
+  # crashed parallel arm -- the pattern from earlier today generalises.
+  export_vars <- c(export_vars, "SEL_SHRINK", "SEL_SIGMA")
+  # Same TIER_SHRINK trap, same day: run_meet() calls family_pool_offset(),
+  # whose closure reads `.fp`/`.fp_fs_by_event` from this script's top-level
+  # environment. clusterExport() re-homes an exported function's environment
+  # to each worker's OWN globalenv rather than copying the sender's bindings
+  # with it, so the closure's free variables must be exported by name too, or
+  # every worker dies with "object '.fp' not found" the moment the function is
+  # actually called -- one call site, four names, all four required.
+  if (FAMILY_DEBIAS) export_vars <- c(export_vars, "FAMILY_DEBIAS", "family_pool_offset",
+                                      ".fp", ".fp_fs_by_event")
+  parallel::clusterExport(cl, export_vars, envir = environment())
+  # parLapply schedules statically -- a worker's whole chunk runs before ANY of
+  # its results come back, so there is no way to print per-meet as it happens.
+  # Silence here is expected; it was NOT expected on the serial path below,
+  # which is why that one stays a plain for-loop instead of reusing this batch
+  # shape for both.
+  results <- tryCatch(parallel::parLapply(cl, seq_len(n), run_meet),
+                      finally = parallel::stopCluster(cl))
+  cli::cli_alert_info(
+    "Loop wall time: {round(as.numeric(difftime(Sys.time(), t_loop0, units = 'secs')))}s for {n} meet{?s}.")
+  for (i in seq_len(n)) {
+    r <- results[[i]]
+    saveRDS(r$out, file.path(BT_CACHE, paste0(r$cid, ".rds")))
+    TIMING$rows <- TIMING$rows + r$rows
+    TIMING$read <- TIMING$read + r$timing$read
+    TIMING$ability <- TIMING$ability + r$timing$ability
+    TIMING$sim <- TIMING$sim + r$timing$sim
+    AGE_WARN$n <- AGE_WARN$n + r$age_warn
+    if (isTRUE(r$nofam$is_nofam_meet)) {
+      NOFAM$rows <- NOFAM$rows + r$nofam$rows
+      NOFAM$meets <- NOFAM$meets + 1L
+      NOFAM$events <- union(NOFAM$events, r$nofam$events)
+    }
+    cli::cli_alert("  {i}/{n}: {r$cid} -> {length(r$out)} race{?s}")
+  }
+} else {
+  # Serial path stays a plain for-loop, printing as each meet finishes -- byte-
+  # for-byte the original script's live feedback, just calling run_meet() for
+  # the body instead of inlining it. A resumed run (most meets already cached)
+  # can otherwise sit silent for the whole remaining batch, which reads exactly
+  # like a hang and cost real debugging time before this comment existed.
+  for (i in seq_len(n)) {
+    r <- run_meet(i)
+    saveRDS(r$out, file.path(BT_CACHE, paste0(r$cid, ".rds")))
+    TIMING$rows <- TIMING$rows + r$rows
+    TIMING$read <- TIMING$read + r$timing$read
+    TIMING$ability <- TIMING$ability + r$timing$ability
+    TIMING$sim <- TIMING$sim + r$timing$sim
+    AGE_WARN$n <- AGE_WARN$n + r$age_warn
+    if (isTRUE(r$nofam$is_nofam_meet)) {
+      NOFAM$rows <- NOFAM$rows + r$nofam$rows
+      NOFAM$meets <- NOFAM$meets + 1L
+      NOFAM$events <- union(NOFAM$events, r$nofam$events)
+    }
+    cli::cli_alert("  {i}/{n}: {r$cid} -> {length(r$out)} race{?s}  [cumulative read {round(TIMING$read)}s ability {round(TIMING$ability)}s sim {round(TIMING$sim)}s]")
+  }
+  cli::cli_alert_info(
+    "Loop wall time: {round(as.numeric(difftime(Sys.time(), t_loop0, units = 'secs')))}s for {n} meet{?s}.")
 }
 
 cli::cli_h3("Timing")
