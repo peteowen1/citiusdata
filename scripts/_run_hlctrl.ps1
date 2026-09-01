@@ -1,0 +1,24 @@
+# Control for the hurdles half-life test: project_tier + family debias, NO
+# sigma scale (irrelevant to marks, already flagged unready), default
+# half-life (road=1095, walk=730 only -- the deployed defaults).
+$ErrorActionPreference = "Continue"
+Set-Location "C:\dev\citiusverse"
+
+$env:CITIUS_BT_CALIBRATION   = "calibration_corpus_csigma_coast.rds"
+$env:CITIUS_BT_STORE         = "athletics_corpus_store"
+$env:CITIUS_BT_CACHE         = "backtest_cache_hlctrl"
+$env:CITIUS_BT_OUT           = "backtest_hlctrl.rds"
+$env:CITIUS_BT_MEETS         = "300"
+$env:CITIUS_BT_TARGET        = "900"
+$env:CITIUS_BT_WORKERS       = "10"
+$env:CITIUS_BT_PROJECT_TIER  = "0.5"
+$env:CITIUS_BT_FAMILY_DEBIAS = "1"
+Remove-Item Env:\CITIUS_BT_SIGMA_SCALE -ErrorAction SilentlyContinue
+Remove-Item Env:\CITIUS_BT_PROJECT_ROUND -ErrorAction SilentlyContinue
+Remove-Item Env:\CITIUS_HALF_LIFE_FAMILY -ErrorAction SilentlyContinue
+
+$LOG = "C:\dev\citiusverse\citiusdata\hlctrl_log.txt"
+& Rscript "citiusdata\scripts\backtest_athletics.R" 2>&1 | Out-File -Append -Encoding utf8 $LOG
+$n = (Get-ChildItem "citiusdata\data\backtest_cache_hlctrl" -Filter *.rds |
+        Where-Object { $_.Name -ne "_arm.rds" } | Measure-Object).Count
+Write-Host "HLCTRL DONE: cached=$n"
