@@ -52,6 +52,37 @@ hist_raw    <- if (identical(HISTORY, OUTCOMES)) champs else readRDS(file.path(O
 CALIBRATION <- Sys.getenv("CITIUS_BT_CALIBRATION", "calibration_corpus.rds")
 calibration <- readRDS(file.path(OUT, CALIBRATION))
 
+# FINALS-CONDITIONAL SIGMA SCALE. `sigma_within` is fitted across an athlete's
+# whole history -- every context, including off-season and minor meets -- while
+# a T1 final is a peak-focus performance and genuinely more consistent. Measured
+# 2026-09-01 (check_spread_vs_realised.R): realised within-race dispersion at T1
+# finals is 0.830 of the fitted sigma pooled, and 0.64-0.67 for Discus, 800m,
+# Shot Put and Pole Vault. The out-of-sample sizing (check_finals_sigma_gain.R)
+# found a single GLOBAL constant statistically indistinguishable from an
+# EB-pooled per-event table (p=0.667), so this is one scalar rather than a
+# lookup: fewer moving parts, no fit population to get wrong, no transfer risk.
+#
+# Applied to the calibration object, so every consumer of sigma_within in this
+# run sees the same value -- rather than scaling at the simulate call site,
+# which would leave ability estimation reading the unscaled one and the two
+# silently disagreeing.
+SIGMA_SCALE <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_BT_SIGMA_SCALE", "")))
+if (!is.na(SIGMA_SCALE)) {
+  if (!is.finite(SIGMA_SCALE) || SIGMA_SCALE <= 0 || SIGMA_SCALE > 2) cli::cli_abort(
+    "{.envvar CITIUS_BT_SIGMA_SCALE} must be in (0, 2], got {.val {SIGMA_SCALE}}.")
+  ev_dt <- data.table::as.data.table(calibration$events)
+  if (!"sigma_within" %in% names(ev_dt)) cli::cli_abort(
+    "{.envvar CITIUS_BT_SIGMA_SCALE} is set but the calibration has no {.field sigma_within}.")
+  n_scaled <- sum(is.finite(ev_dt$sigma_within))
+  if (n_scaled == 0) cli::cli_abort(
+    "{.envvar CITIUS_BT_SIGMA_SCALE} is set but no event has a finite sigma_within to scale.")
+  before_med <- stats::median(ev_dt$sigma_within, na.rm = TRUE)
+  ev_dt[is.finite(sigma_within), sigma_within := sigma_within * SIGMA_SCALE]
+  calibration$events <- ev_dt
+  cli::cli_alert_info(
+    "sigma scale {.val {SIGMA_SCALE}} applied to {n_scaled} event{?s}: median sigma_within {round(before_med, 5)} -> {round(stats::median(ev_dt$sigma_within, na.rm = TRUE), 5)}.")
+}
+
 # LEAKAGE CHECK. The per-meet ability refit below is strictly out-of-sample, but
 # the CALIBRATION is loaded whole and applied to every scored meet -- and it
 # carries per-athlete `sensitivity`, which condition_sensitivity() consumes at
@@ -543,6 +574,9 @@ arm_fingerprint <- list(
   # own identity is part of it: a refit table with the same flag set is a
   # different arm, and so is a different fit holdout now that the holdout
   # actually gates application.
+  # A sigma scale changes every simulated probability, so an arm run with one
+  # must never read back cached meets from an arm run without it.
+  sigma_scale = if (is.na(SIGMA_SCALE)) "" else format(SIGMA_SCALE),
   family_debias = FAMILY_DEBIAS,
   family_debias_md5 = if (FAMILY_DEBIAS) md5_of("family_pool_offsets.rds") else NA_character_,
   family_debias_holdout = if (FAMILY_DEBIAS) format(as.Date(.fp$fit_holdout)) else NA_character_)
