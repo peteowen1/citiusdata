@@ -28,6 +28,11 @@ dir.create(BT_CACHE, recursive = TRUE, showWarnings = FALSE)
 # comparison is not, because last-5 draws its own independent noise. Screen at
 # 2000-3000, confirm the number you're about to act on at 10000.
 N_SIMS <- .env_int("CITIUS_BT_NSIMS", "10000")
+# Skip simulate_event()/medal_probs() and compute median_mark directly from
+# `ability` (see the MARKS_ONLY branch below for why this is exact, not an
+# approximation). Only valid for a marks-MAE comparison -- p_gold/p_medal/
+# median_rank come back NA, so never set this for a Brier/logloss run.
+MARKS_ONLY <- .env_int("CITIUS_BT_MARKS_ONLY", "0") == 1
 MAX_PER_RUN <- .env_int("CITIUS_BT_MEETS", "25")
 # History depth per refit. TWELVE YEARS, and do not shorten it on the argument
 # that old marks carry negligible weight.
@@ -1033,9 +1038,38 @@ run_meet <- function(i) {
     if (FAMILY_DEBIAS && nrow(entrants) && as.Date(cut_date) >= as.Date(.fp$fit_holdout)) {
       entrants[, ability := ability - family_pool_offset(ev) / 100]
     }
-    sim <- tick("sim", simulate_event(entrants, n_sims = N_SIMS,
-                                      calibration = calibration, seed = 11L))
-    mp <- medal_probs(sim)
+    if (MARKS_ONLY) {
+      # Skip simulate_event()/medal_probs() entirely. perf_std = ability +
+      # est_error + form_error + noise*sigma + cond*sens + taper (simulate.R
+      # ~L297-305) -- every additive term there is independently zero-mean
+      # and symmetric (scaled-t noise, three independent Gaussians), so for a
+      # symmetric zero-mean sum, mean = median exactly: the population value
+      # simulate_event() estimates via Monte Carlo IS `ability` itself, in
+      # the limit, PLUS `taper`. This script never passes `taper` to
+      # simulate_event() (grep confirms no caller in this file sets it), so
+      # it is always the function's default 0 here -- if that ever changes,
+      # this branch must add it too, or median_mark will be biased low/high
+      # by exactly the taper value.
+      #
+      # This is ONLY valid for marks. p_gold/p_medal/median_rank need the
+      # actual order statistics across simulated draws -- there is no
+      # closed-form shortcut for those, which is why this path leaves them NA
+      # rather than guessing, and why it must never be used for a Brier/
+      # logloss/placement comparison.
+      reg_idx <- match(ev, .citius_event_registry$event_id)
+      .orient <- .citius_event_registry$orientation[reg_idx]
+      if (is.na(.orient)) .orient <- -1L
+      mp <- data.table::data.table(
+        athlete_id = entrants$athlete_id,
+        p_gold = NA_real_, p_medal = NA_real_, p_top8 = NA_real_,
+        median_rank = NA_real_,
+        median_mark = perf_to_mark(entrants$ability, .orient)
+      )
+    } else {
+      sim <- tick("sim", simulate_event(entrants, n_sims = N_SIMS,
+                                        calibration = calibration, seed = 11L))
+      mp <- medal_probs(sim)
+    }
     key <- rk
     mp[, race_id := key]
     # Carry the evidence weight alongside the probability. Hypotheses about
