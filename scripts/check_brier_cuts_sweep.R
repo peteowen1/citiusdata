@@ -142,4 +142,38 @@ run_cut(t1, "era", "indoor vs outdoor", min_races = 10L)
 run_cut(t1, "venue_country", "venue country")
 run_cut(t1[age_cov == TRUE], "age_bin", "age band", min_races = 10L)
 
+# ---- added 2026-09-01: event, meet, wind, field size ----------------------
+# The four cuts the sweep was missing when the standing goal became "medal
+# Brier must beat last-5 too". Event and field size are the two most likely to
+# localise a DISCRIMINATION problem: Brier is a within-race ordering metric, so
+# it should degrade where the ordering is genuinely hardest (deep fields) or
+# where the event's own signal is weakest -- neither of which the level-shift
+# fixes could ever have touched.
+run_cut(t1, "event_id", "individual event", min_races = 10L)
+
+# Meet, two ways. meet_tier is the coarse decision-relevant one; the named meet
+# catches a single venue/organiser dragging a tier's average.
+run_cut(d, "meet_tier", "meet tier (ALL tiers, not just T1)", min_races = 10L)
+if ("competition_id" %in% names(t1)) {
+  t1[, comp_chr := as.character(competition_id)]
+  run_cut(t1, "comp_chr", "individual meet (T1)", min_races = 10L)
+}
+
+# Wind, binned. Legal-limit +2.0 is the meaningful boundary, and NA is its own
+# level rather than being dropped -- absence of a wind reading is informative
+# (it means an event or venue that does not record one), which is exactly the
+# missing-is-informative trap. Reported as an explicit "no reading" level.
+t1[, wind_bin := fifelse(is.na(wind), "no reading",
+                  fifelse(wind < -1, "headwind < -1",
+                   fifelse(wind < 0, "-1 to 0",
+                    fifelse(wind < 1, "0 to +1",
+                     fifelse(wind <= 2, "+1 to +2", "over +2 (illegal)")))))]
+run_cut(t1, "wind_bin", "wind band", min_races = 10L)
+
+# Field size: computed per race, then attached to every row of that race.
+t1[, field_size := uniqueN(athlete_id), by = race_id]
+t1[, field_bin := cut(field_size, c(-Inf, 6, 8, 10, 12, Inf),
+                      labels = c("<=6", "7-8", "9-10", "11-12", "13+"))]
+run_cut(t1, "field_bin", "field size", min_races = 10L)
+
 cat("\nDone.\n")
