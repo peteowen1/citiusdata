@@ -51,7 +51,15 @@ hist[, l5 := (cs - cs5) / pmin(k, 5)]
 # walk-forward season best / personal best, same shift(cummax()) as
 # check_event_vs_sb_pb.R -- excludes the current race, includes everything before it.
 hist[, sb_perf := shift(cummax(perf)), by = .(athlete_id, yr)]
-hist[, pb_perf := shift(cummax(perf))]
+hist[, pb_perf := shift(cummax(perf)), by = .(athlete_id)]
+# A3: PB must never be more extreme (better) than SB for the same athlete/row
+# -- SB is a subset of PB's own history (this season is part of "ever"), so
+# pb should always be >= the best seen this season. Catches the exact class
+# of bug just found (a missing `by=` silently computing a GLOBAL cummax
+# across every athlete in table order) before it reaches an artefact again.
+chk <- hist[is.finite(sb_perf) & is.finite(pb_perf)]
+stopifnot("A3: PB is more extreme than SB for some athlete -- grouping bug" =
+            all(chk$pb_perf >= chk$sb_perf - 1e-9))
 
 q <- d[, .(athlete_id, date = date - 1L, race_id)]
 setkeyv(hist, c("athlete_id", "date"))
