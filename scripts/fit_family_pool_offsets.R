@@ -39,7 +39,13 @@ suppressMessages(library(data.table)); suppressMessages(library(arrow))
 source(here::here("citiusdata", "scripts", "_env.R"))
 source(here::here("citiusdata", "scripts", "_deployed.R"))
 OUT <- here::here("citiusdata", "data")
-HOLDOUT_LO <- as.Date("2023-01-01")
+# Lower bound of the fit window. Env-driven since 2026-09-01: with the apply-
+# date gate live, the offsets only affect meets on/after FIT_HOLDOUT, so
+# evaluating on a long history requires fitting on an EARLY window and applying
+# forward. Hardcoding 2023 made every pre-2025 race in a full-history score run
+# on the uncorrected model, which is how the same arm reads -2.72% on a 2025+
+# holdout and +5.17% on the full T1 history.
+HOLDOUT_LO <- as.Date(Sys.getenv("CITIUS_FAMILY_POOL_FIT_LO", "2023-01-01"))
 FIT_HOLDOUT <- as.Date(Sys.getenv("CITIUS_FAMILY_POOL_FIT_HOLDOUT", "2025-01-01"))
 ARM <- Sys.getenv("CITIUS_FAMILY_POOL_ARM", "backtest_tierctrl.rds")
 say <- function(...) cat(sprintf(...), "\n", sep = "")
