@@ -536,7 +536,16 @@ arm_fingerprint <- list(
   # Without these two, a tier arm would read the control's cached meets back as
   # its own predictions and the A/B would come back a dead heat -- the exact
   # failure this fingerprint exists to prevent.
-  project_tier = PROJECT_TIER, project_round = PROJECT_ROUND)
+  project_tier = PROJECT_TIER, project_round = PROJECT_ROUND,
+  # Added 2026-09-01: the debias was absent from this fingerprint entirely, so a
+  # debias arm and its control could share a cache and come back a dead heat --
+  # the same failure the two fields above were added to prevent. The offsets'
+  # own identity is part of it: a refit table with the same flag set is a
+  # different arm, and so is a different fit holdout now that the holdout
+  # actually gates application.
+  family_debias = FAMILY_DEBIAS,
+  family_debias_md5 = if (FAMILY_DEBIAS) md5_of("family_pool_offsets.rds") else NA_character_,
+  family_debias_holdout = if (FAMILY_DEBIAS) format(as.Date(.fp$fit_holdout)) else NA_character_)
 
 # A cache that predates this check is stamped by the first run after it, which
 # is the best that can be done retrospectively -- an existing directory carries
@@ -646,6 +655,23 @@ if (nrow(pool) > TARGET) pool <- pool[round(seq(1, .N, length.out = TARGET))]
 
 todo <- pool[!file.exists(file.path(BT_CACHE, paste0(competition_id, ".rds")))]
 cli::cli_alert_info("{nrow(todo)} of {nrow(pool)} meet{?s} remaining.")
+
+# The family-pool debias only applies to meets on or after its fit holdout (see
+# the gate in run_meet()). State the split UP FRONT and abort if it corrects
+# nothing: a debias arm that silently equals its control is exactly the vacuous
+# pass silent-bugs.md is about, and it would otherwise be discoverable only by
+# diffing two finished 90-minute runs.
+if (FAMILY_DEBIAS) {
+  .fp_n_apply <- sum(as.Date(pool$comp_start) >= as.Date(.fp$fit_holdout))
+  cli::cli_alert_info(
+    # Parenthesised: cli reads a leading-dot name as a style token (.file, .val)
+    # and aborts with "Invalid cli literal ... starts with a dot". Same trap the
+    # family-debias patch hit on {.fp$fit_arm} the day it was written.
+    "family-pool debias applies to {(.fp_n_apply)} of {nrow(pool)} pooled meet{?s} (on/after {.val {format((.fp$fit_holdout))}}); the rest are control by design.")
+  if (.fp_n_apply == 0) cli::cli_abort(
+    c("{.envvar CITIUS_BT_FAMILY_DEBIAS} is set but no pooled meet is on/after the fit holdout {.val {format((.fp$fit_holdout))}}.",
+      i = "This arm would be byte-identical to its control. Widen {.envvar CITIUS_BT_TARGET} or refit with an earlier holdout."))
+}
 
 # Per-phase timing, so an optimisation is aimed rather than guessed. Written to
 # the log every meet and summarised at the end.
@@ -938,7 +964,15 @@ run_meet <- function(i) {
     # meant to sit after everything else, not a footing-sensitive one.
     # UNITS: the table is "100 x oriented log mark" (the %-of-mark convention
     # used throughout this file), `ability` is NOT scaled by 100 -- divide.
-    if (FAMILY_DEBIAS && nrow(entrants)) {
+    # APPLY-DATE GATE. The offsets are fit on data strictly BEFORE
+    # `.fp$fit_holdout`, so applying them to a meet that predates the fit window
+    # corrects a past prediction with future information. This gate was missing
+    # until 2026-09-01: `fit_holdout` was written into the artefact, printed in
+    # the startup log line, and never compared against anything, so 100% of
+    # pre-holdout rows were being shifted (mean +1.67pp). A pre-holdout meet is
+    # therefore identical to the control arm BY DESIGN -- a full-span comparison
+    # of this arm shows a diluted effect, not a broken one.
+    if (FAMILY_DEBIAS && nrow(entrants) && as.Date(cut_date) >= as.Date(.fp$fit_holdout)) {
       entrants[, ability := ability - family_pool_offset(ev) / 100]
     }
     sim <- tick("sim", simulate_event(entrants, n_sims = N_SIMS,
