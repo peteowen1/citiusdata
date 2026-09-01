@@ -52,35 +52,45 @@ hist_raw    <- if (identical(HISTORY, OUTCOMES)) champs else readRDS(file.path(O
 CALIBRATION <- Sys.getenv("CITIUS_BT_CALIBRATION", "calibration_corpus.rds")
 calibration <- readRDS(file.path(OUT, CALIBRATION))
 
-# FINALS-CONDITIONAL SIGMA SCALE. `sigma_within` is fitted across an athlete's
-# whole history -- every context, including off-season and minor meets -- while
-# a T1 final is a peak-focus performance and genuinely more consistent. Measured
-# 2026-09-01 (check_spread_vs_realised.R): realised within-race dispersion at T1
-# finals is 0.830 of the fitted sigma pooled, and 0.64-0.67 for Discus, 800m,
-# Shot Put and Pole Vault. The out-of-sample sizing (check_finals_sigma_gain.R)
-# found a single GLOBAL constant statistically indistinguishable from an
-# EB-pooled per-event table (p=0.667), so this is one scalar rather than a
-# lookup: fewer moving parts, no fit population to get wrong, no transfer risk.
+# FINALS-CONDITIONAL SIGMA SCALE.
 #
-# Applied to the calibration object, so every consumer of sigma_within in this
-# run sees the same value -- rather than scaling at the simulate call site,
-# which would leave ability estimation reading the unscaled one and the two
-# silently disagreeing.
+# WRONG FIELD, FIRST ATTEMPT (2026-09-01, same day): this used to multiply
+# `calibration$events$sigma_within` and was BIT-FOR-BIT INERT -- confirmed by
+# diffing two full arms' predictions to the last digit. Root cause, found in
+# `ability.R`'s own header comment at the `sigma_context` block: "A previous
+# attempt to widen `calibration$events$sigma_within` was bit-for-bit inert for
+# exactly that reason [simulate_event() reads ab$sigma, not sigma_within]."
+# Every arm here runs `sigma_parts = "estimator,weight"` (never "target"), so
+# `use_target` in `estimate_ability()` is FALSE and `sigma_target` never reads
+# `sigma_within` at all -- that whole code path is skipped. This was a
+# rediscovery of an already-documented package limitation, not a new bug.
+#
+# THE FIELD THAT ACTUALLY REACHES `ab$sigma`: `calibration$sigma_context`, a
+# per-family ratio of championship to pooled sigma, applied multiplicatively
+# and UNCONDITIONALLY whenever the field exists (ability.R:1431-1439, gated
+# only on `!is.null(calibration$sigma_context)`, not on any sigma_mode). It
+# ALREADY implements a version of the correction this scale is trying to add:
+# measured throw 0.702 / jump 0.762 against this session's independently
+# measured RESIDUAL 0.680 / 0.768 (check_spread_vs_realised.R measured on
+# predictions that already had this correction applied, so its "17% too wide"
+# finding is over and above sigma_context, not evidence sigma is uncorrected).
+# Multiplying its `ratio` column is therefore an ADDITIONAL correction on top
+# of the existing one, not a replacement for a missing one.
 SIGMA_SCALE <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_BT_SIGMA_SCALE", "")))
 if (!is.na(SIGMA_SCALE)) {
   if (!is.finite(SIGMA_SCALE) || SIGMA_SCALE <= 0 || SIGMA_SCALE > 2) cli::cli_abort(
     "{.envvar CITIUS_BT_SIGMA_SCALE} must be in (0, 2], got {.val {SIGMA_SCALE}}.")
-  ev_dt <- data.table::as.data.table(calibration$events)
-  if (!"sigma_within" %in% names(ev_dt)) cli::cli_abort(
-    "{.envvar CITIUS_BT_SIGMA_SCALE} is set but the calibration has no {.field sigma_within}.")
-  n_scaled <- sum(is.finite(ev_dt$sigma_within))
-  if (n_scaled == 0) cli::cli_abort(
-    "{.envvar CITIUS_BT_SIGMA_SCALE} is set but no event has a finite sigma_within to scale.")
-  before_med <- stats::median(ev_dt$sigma_within, na.rm = TRUE)
-  ev_dt[is.finite(sigma_within), sigma_within := sigma_within * SIGMA_SCALE]
-  calibration$events <- ev_dt
+  if (is.null(calibration$sigma_context)) cli::cli_abort(
+    "{.envvar CITIUS_BT_SIGMA_SCALE} is set but this calibration has no {.field sigma_context} -- ",
+    "scaling {.field events$sigma_within} instead is BIT-FOR-BIT INERT (see comment above).")
+  sc_dt <- data.table::as.data.table(calibration$sigma_context)
+  if (!"ratio" %in% names(sc_dt)) cli::cli_abort(
+    "{.envvar CITIUS_BT_SIGMA_SCALE} is set but {.field sigma_context} has no {.field ratio} column.")
+  before_med <- stats::median(sc_dt$ratio, na.rm = TRUE)
+  sc_dt[, ratio := ratio * SIGMA_SCALE]
+  calibration$sigma_context <- sc_dt
   cli::cli_alert_info(
-    "sigma scale {.val {SIGMA_SCALE}} applied to {n_scaled} event{?s}: median sigma_within {round(before_med, 5)} -> {round(stats::median(ev_dt$sigma_within, na.rm = TRUE), 5)}.")
+    "sigma scale {.val {SIGMA_SCALE}} applied to sigma_context ({nrow(sc_dt)} famil{?y/ies}): median ratio {round(before_med, 4)} -> {round(stats::median(sc_dt$ratio, na.rm = TRUE), 4)}.")
 }
 
 # LEAKAGE CHECK. The per-meet ability refit below is strictly out-of-sample, but
