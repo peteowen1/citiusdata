@@ -119,21 +119,17 @@ cat(sprintf("competition names available: %s\n", format(nrow(nm), big.mark = ","
 # The name is a property of the competition and the lookup is the authority on
 # it, so consult it for every unnamed row, not only for new ones.
 #
-# KNOWN GAP, found 2026-09-02, not fixed here: this backfills `comp_name`
-# into cat0 but does NOT recompute `class`/`strength`/`meet_tier` for the
-# rows it renames. A competition already in cat0 with comp_name NA at
-# build time gets class="unclassified" (cat_of(NA) can't match anything),
-# which caps it at T2 by design ("an unclassified meet is never T1") --
-# and that stale tier survives even after this backfill gives it a real
-# name. Confirmed on Boston Marathon 2026 (competition_id 7235561): named
-# correctly by this block, strength recomputed to 98.0 by the road-race fix
-# below, but meet_tier stuck at T2_strong because its class was frozen at
-# "unclassified" before either fix ran. Only affects competitions that were
-# BOTH already in cat0 AND unnamed at the time cat0 was built -- new
-# additions (the rest of this script) classify correctly from the start.
-# Proper fix: re-run cat_of() on the newly-backfilled names, then re-run
-# the meet_tier fcase for any row whose class actually changed -- not
-# attempted here, this session already went deep enough on this file.
+# PARTIALLY FIXED 2026-09-02, the rest fixed 2026-09-03. This backfills
+# `comp_name` into cat0; the `.reclass` block further down (search
+# "RECLASSIFY WHAT THE BACKFILL JUST NAMED") reruns cat_of() on every
+# newly-named row and re-applies the KNOWN_T1/KNOWN_T3 tier rules, one-way.
+# What it was still missing: the BY_STRENGTH path (road_race) -- confirmed
+# on Boston Marathon 2026 (competition_id 7235561), which `.reclass`
+# correctly reclassified unclassified -> road_race with strength 98.0
+# already sitting in cat0 (computed by build_competition_catalogue.R's own
+# road-race fix before this script ever runs), but left at meet_tier
+# T2_strong because nothing checked BY_STRENGTH's threshold for it. Fixed
+# alongside the K1/K3 bumps below -- see that block.
 .unnamed_before <- cat0[is.na(comp_name) | !nzchar(comp_name), .N]
 if (.unnamed_before > 0L) {
   cat0 <- merge(cat0, nm[, .(competition_id, .lk_name = competition)],
@@ -162,32 +158,17 @@ cat(sprintf("corpus rows with a competition_id: %s of %s (%s have none -- a\n",
     format(n_before - nrow(corp), big.mark = ",")))
 cat("  separate defect in the career-route harvest; out of scope here)\n")
 
-miss_ids <- setdiff(unique(corp$competition_id), cat0$competition_id)
-cat(sprintf("uncatalogued competitions: %s of %s (%.1f%%)\n",
-    format(length(miss_ids), big.mark = ","), format(uniqueN(corp$competition_id), big.mark = ","),
-    100 * length(miss_ids) / uniqueN(corp$competition_id)))
-# WRITE BEFORE EXITING. This used to quit outright when nothing was missing,
-# which is correct for the addition step and now discards the name backfill
-# above it.
-if (!length(miss_ids)) {
-  cat("nothing to add\n")
-  if (.unnamed_before > 0L) { write_parquet(cat0, CAT); cat("wrote the name backfill\n") }
-  quit(status = 0)
-}
-
-miss_nm <- nm[competition_id %chin% miss_ids, .(competition_id, comp_name = competition)]
-n_no_name <- length(miss_ids) - nrow(miss_nm)
-if (n_no_name > 0L) {
-  cat(sprintf("%s missing competitions have NO name in the lookup -- they cannot\n", n_no_name))
-  cat("  be classified and will be filed as unclassified with comp_name NA.\n")
-  miss_nm <- rbind(miss_nm,
-    data.table(competition_id = setdiff(miss_ids, miss_nm$competition_id),
-               comp_name = NA_character_))
-}
-
 # ---- classification: build_competition_catalogue.R's cat_of(), with the two
 #      scale fixes documented above. Everything else copied verbatim so a
 #      diff against build_competition_catalogue.R shows exactly what changed. -
+#
+# MOVED AHEAD OF THE miss_ids/quit CHECK BELOW, 2026-09-03: this block and
+# .reclass right after it only touch cat0 -- neither depends on there being
+# any missing competitions to add. Running them here means .reclass no
+# longer silently skips whenever the coverage gap is fully closed (it was
+# gated behind the early quit() when there was "nothing to add", which is
+# the current steady state now that gap is closed -- see the BY_STRENGTH
+# fix note on the backfill block above for what that skip was hiding).
 NOT_THE_EVENT <- paste(
   "Trials|Qualifier|Qualifying|Anniversary|Open Meeting|Selection|",
   "Warm.?up|Test Event|Festival|Classic -", sep = "")
@@ -312,7 +293,15 @@ reclassified %s of %s previously-unclassified named meets
     cat0[competition_id %chin% .ids,
          class := .newclass[.moved][match(competition_id, .ids)]]
     # and re-apply the knowledge tiers for them, one-way
-    K1 <- c("olympics","world_champs","world_indoor","commonwealth","european_champs")
+    # K1 must match build_competition_catalogue.R's own KNOWN_T1 exactly --
+    # was previously missing diamond_league, world_other and indoor_tour
+    # (found 2026-09-03; harmless in practice since those three rarely
+    # arrive unclassified, but wrong is wrong). The BY_STRENGTH (road_race)
+    # case is handled separately below, unconditionally across all of cat0
+    # -- see the "BY_STRENGTH CONSISTENCY PASS" comment for why it can't
+    # live in this .moved-gated block.
+    K1 <- c("olympics","world_champs","world_indoor","commonwealth","european_champs",
+            "diamond_league","world_other","indoor_tour")
     K3 <- c("age_group","club_meet","ncaa_lower","team_champs_lower")
     .n1 <- cat0[meet_tier == "T1_elite", .N]
     cat0[competition_id %chin% .ids & class %chin% K1, meet_tier := "T1_elite"]
@@ -330,6 +319,52 @@ reclassified %s of %s previously-unclassified named meets
                 format(.n1, big.mark = ",")))
   }
 }
+
+# BY_STRENGTH CONSISTENCY PASS, unconditional -- not gated on .ids/.moved
+# above. The block above only bumps rows reclassified out of "unclassified"
+# IN THIS RUN; a road_race whose class was already fixed by an earlier run
+# (before this BY_STRENGTH bump existed) never re-enters that path, since
+# it's no longer "unclassified". Boston Marathon 2026 (competition_id
+# 7235561) was exactly this case: class already road_race, strength 98,
+# meet_tier stuck at T2_strong, and today's run above reclassified 0 of
+# 22,569 rows because there was nothing left to reclassify -- the class fix
+# had already happened, just never the tier. Sweep the whole table instead
+# of only this run's movers, so a one-time backlog like this actually
+# clears rather than needing the exact right run to have existed.
+.by_strength_fix <- cat0[class %chin% c("road_race") & !is.na(strength) &
+                          strength >= 75 & meet_tier != "T1_elite"]
+if (nrow(.by_strength_fix)) {
+  cat(sprintf("\nBY_STRENGTH consistency: %s road_race row(s) at strength>=75 were below T1_elite\n",
+              nrow(.by_strength_fix)))
+  print(.by_strength_fix[, .(competition_id, comp_name, strength, meet_tier)])
+  cat0[competition_id %chin% .by_strength_fix$competition_id, meet_tier := "T1_elite"]
+}
+
+miss_ids <- setdiff(unique(corp$competition_id), cat0$competition_id)
+cat(sprintf("uncatalogued competitions: %s of %s (%.1f%%)\n",
+    format(length(miss_ids), big.mark = ","), format(uniqueN(corp$competition_id), big.mark = ","),
+    100 * length(miss_ids) / uniqueN(corp$competition_id)))
+# WRITE BEFORE EXITING. This used to quit outright when nothing was missing,
+# which is correct for the addition step and now discards the name backfill
+# above it -- and, since 2026-09-03, discards the reclassification above
+# too, which by this point has already run and mutated cat0 regardless of
+# whether there's anything new to add.
+if (!length(miss_ids)) {
+  cat("nothing to add\n")
+  write_parquet(cat0, CAT); cat("wrote the name backfill + reclassification\n")
+  quit(status = 0)
+}
+
+miss_nm <- nm[competition_id %chin% miss_ids, .(competition_id, comp_name = competition)]
+n_no_name <- length(miss_ids) - nrow(miss_nm)
+if (n_no_name > 0L) {
+  cat(sprintf("%s missing competitions have NO name in the lookup -- they cannot\n", n_no_name))
+  cat("  be classified and will be filed as unclassified with comp_name NA.\n")
+  miss_nm <- rbind(miss_nm,
+    data.table(competition_id = setdiff(miss_ids, miss_nm$competition_id),
+               comp_name = NA_character_))
+}
+
 miss_nm[, class := cat_of(comp_name)]
 cat("\nname-based classification of the missing competitions:\n")
 print(miss_nm[, .N, by = class][order(-N)])
