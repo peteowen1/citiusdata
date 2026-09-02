@@ -1,16 +1,24 @@
 <!--
   Meet registry artifact template. To republish:
-  1. Rscript scripts/export_meet_registry_artifact.R (writes data/meet_registry_artifact.json)
-  2. Splice __MEET_DATA_JSON__ below with that file's contents (a plain string
-     replace on the raw text -- do this with a script, not by hand, the JSON
-     is several MB). Node one-liner:
+  1. Rscript scripts/export_meet_registry_artifact.R   -> data/meet_registry_artifact.json (meet level, ~4MB)
+     Rscript scripts/export_meet_events.R              -> data/meet_registry_events.json  (event level, ~8MB)
+  2. Splice BOTH placeholders below (__MEET_DATA_JSON__ and
+     __MEET_EVENTS_JSON__) with those files' contents -- a plain string
+     replace on the raw text, done with a script, not by hand (they're
+     megabytes). Node one-liner:
        node -e 'const fs=require("fs");
-         const html=fs.readFileSync("scripts/meet_registry_artifact_template.html","utf8");
-         const json=fs.readFileSync("data/meet_registry_artifact.json","utf8");
-         fs.writeFileSync("/tmp/meet_registry_final.html", html.replace("__MEET_DATA_JSON__", json));'
+         let h=fs.readFileSync("scripts/meet_registry_artifact_template.html","utf8");
+         h=h.replace("__MEET_DATA_JSON__", fs.readFileSync("data/meet_registry_artifact.json","utf8"));
+         h=h.replace("__MEET_EVENTS_JSON__", fs.readFileSync("data/meet_registry_events.json","utf8"));
+         fs.writeFileSync("/tmp/meet_registry_final.html", h);'
   3. Publish /tmp/meet_registry_final.html as an Artifact, same file path as
      last time if updating the existing published page (ask the user for
      that URL, or use Artifact action:"list" to find it).
+
+  SIZE BUDGET: the artifact cap is 16MB. Meet data ~4.2MB + event data
+  ~8.1MB + markup ~15KB leaves little headroom -- the event JSON uses a
+  positional-array encoding for exactly this reason (array-of-objects was
+  36.7MB). If either dataset grows, re-check the total before publishing.
 
   The row counts in the subtitle text below ("32,089 competitions —
   18,524 shown") are a snapshot from whenever this was last regenerated,
@@ -214,6 +222,53 @@
   .pill.T3_development { background: var(--t3-bg); color: var(--t3); }
   .class-tag { color: var(--text-dim); font-size: 0.8rem; }
 
+  tbody tr.meet-row { cursor: pointer; }
+  tbody tr.meet-row .chev {
+    display: inline-block;
+    width: 12px;
+    color: var(--text-dim);
+    font-size: 0.7rem;
+    margin-right: 5px;
+  }
+  tr.detail-row > td {
+    background: var(--bg);
+    padding: 0 12px 14px 34px;
+  }
+  .event-table {
+    width: auto;
+    min-width: 520px;
+    font-size: 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .event-table th {
+    position: static;
+    font-size: 0.66rem;
+    cursor: default;
+    background: var(--bg);
+  }
+  .event-table th:hover { color: var(--text-dim); }
+  .event-table td { padding: 6px 12px; }
+  .event-table tbody tr:hover { background: transparent; }
+  .detail-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    padding: 10px 0 6px;
+  }
+  .wr-bar {
+    display: inline-block;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--accent);
+    vertical-align: middle;
+    margin-right: 6px;
+    min-width: 2px;
+  }
+
   .pager {
     display: flex;
     align-items: center;
@@ -262,6 +317,12 @@
   meets, etc.) tier is fixed by what the meet named itself. For road races
   and anything the name-matcher couldn't classify, tier is derived from
   strength instead (≥75 → T1, ≥50 → T2, else T3).
+  <br><br>
+  <strong>Click any meet</strong> to expand its events — winning mark,
+  how close that mark is to the world record ("% of WR": 100% would equal
+  the WR, computed direction-aware so it works for both times and
+  distances), the number of athletes in that event's final, and that single
+  event's own strength score before it was averaged into the meet's.
   <br><br>
   <strong>Read before trusting a tier as final:</strong> the road-race
   reclassification bug was fixed 2026-09-03 — 136 races (Tokyo Marathon,
@@ -335,10 +396,15 @@
 
 <script>
 const DATA = __MEET_DATA_JSON__;
+// Per-meet event detail, keyed by competition_id. Each event is a
+// positional array to keep the payload under the artifact size cap:
+// [discipline, n_athletes, winning_mark, event_strength, wr_pct]
+const EVENTS = __MEET_EVENTS_JSON__;
 
 let sortKey = "strength", sortDir = -1, page = 0;
 const PAGE_SIZE = 100;
 const activeTiers = new Set(["T1_elite", "T2_strong", "T3_development"]);
+const expanded = new Set();
 
 const classSel = document.getElementById("class");
 const classes = [...new Set(DATA.map(d => d.class))].sort();
@@ -386,9 +452,12 @@ function render() {
     emptyMsg.hidden = false;
   } else {
     emptyMsg.hidden = true;
-    tbody.innerHTML = slice.map(d => `
-      <tr>
-        <td class="name">${escapeHtml(d.comp_name || "(unnamed)")}</td>
+    tbody.innerHTML = slice.map(d => {
+      const id = String(d.competition_id);
+      const isOpen = expanded.has(id);
+      const main = `
+      <tr class="meet-row" data-id="${id}">
+        <td class="name"><span class="chev">${isOpen ? "▾" : "▸"}</span>${escapeHtml(d.comp_name || "(unnamed)")}</td>
         <td class="class-tag">${escapeHtml(d.class)}</td>
         <td><span class="pill ${d.meet_tier}">${tierLabel(d.meet_tier)}</span></td>
         <td class="num">${d.strength != null ? d.strength.toFixed(1) : "—"}</td>
@@ -397,7 +466,9 @@ function render() {
         <td class="num">${d.athletes ?? "—"}</td>
         <td class="num">${d.events ?? "—"}</td>
         <td class="num">${d.finals ?? "—"}</td>
-      </tr>`).join("");
+      </tr>`;
+      return isOpen ? main + detailRow(id) : main;
+    }).join("");
   }
 
   document.getElementById("pageInfo").textContent =
@@ -410,12 +481,51 @@ function render() {
   if (activeTh) activeTh.textContent = sortDir === 1 ? "↑" : "↓";
 }
 
+function detailRow(id) {
+  const evs = EVENTS[id];
+  if (!evs || !evs.length) {
+    return `<tr class="detail-row"><td colspan="9">
+      <div class="detail-title">No scored finals recorded for this meet.</div></td></tr>`;
+  }
+  const rows = evs.map(e => {
+    const [disc, nAth, mark, str, wr] = e;
+    const barW = wr != null ? Math.max(2, Math.min(60, Math.round(wr * 0.6))) : 0;
+    return `<tr>
+      <td>${escapeHtml(disc ?? "—")}</td>
+      <td class="num">${mark != null ? mark : "—"}</td>
+      <td class="num">${wr != null ? `<span class="wr-bar" style="width:${barW}px"></span>${wr.toFixed(1)}%` : "—"}</td>
+      <td class="num">${nAth ?? "—"}</td>
+      <td class="num">${str != null ? str.toFixed(1) : "—"}</td>
+    </tr>`;
+  }).join("");
+  return `<tr class="detail-row"><td colspan="9">
+    <div class="detail-title">${evs.length} scored event${evs.length === 1 ? "" : "s"}</div>
+    <table class="event-table">
+      <thead><tr>
+        <th>Event</th>
+        <th class="num">Winning mark</th>
+        <th class="num" title="Winning mark as a share of the world record, direction-aware: 100% equals the WR.">% of WR</th>
+        <th class="num">Athletes</th>
+        <th class="num" title="This single event's strength before it was averaged into the meet's overall score.">Event strength</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></td></tr>`;
+}
+
 function tierLabel(t) {
   return t === "T1_elite" ? "T1" : t === "T2_strong" ? "T2" : "T3";
 }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
+
+document.getElementById("tbody").addEventListener("click", ev => {
+  const tr = ev.target.closest("tr.meet-row");
+  if (!tr) return;
+  const id = tr.dataset.id;
+  if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
+  render();
+});
 
 document.querySelectorAll("th[data-key]").forEach(th => {
   th.addEventListener("click", () => {
