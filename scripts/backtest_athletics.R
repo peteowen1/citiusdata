@@ -1166,7 +1166,9 @@ if (N_WORKERS > 1L) {
                     # meant every FAMILY_DEBIAS=FALSE parallel arm died with
                     # "object 'FAMILY_DEBIAS' not found" -- latent all day because
                     # every earlier parallel arm happened to run with it TRUE.
-                    "FAMILY_DEBIAS")
+                    # Same trap again: run_meet()'s `if (MARKS_ONLY)` check
+                    # also runs on every worker unconditionally.
+                    "FAMILY_DEBIAS", "MARKS_ONLY")
   # `clean` is the in-memory fallback corpus, potentially gigabytes -- exporting
   # it would copy that to every worker. Only export it when it will actually be
   # read (no store), which is exactly the case the memory cost is unavoidable.
