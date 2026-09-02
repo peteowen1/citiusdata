@@ -102,10 +102,14 @@ shipping path directly, but had never been added to this file. It has two
 tags, not one, and they mean different things:
 
 - `SEQ_TAG` (default `"baseline"`) — `form_ratings.R` / `form_ratings_swimming.R`
-  write `seqv2_state_$SEQ_TAG.parquet`, `seqv3_history_$SEQ_TAG.parquet`,
-  `seqv3_majors_$SEQ_TAG.parquet`, `seqv3_meta_$SEQ_TAG.json`. Run once per
-  arm being evaluated — this is the experiment-arm layer, ~97
-  `check_*`/`score_*`/`build_*`/`optimise_*` scripts read these by tag.
+  always write `seqv2_state_$SEQ_TAG.parquet` and `seqv3_majors_$SEQ_TAG.parquet`,
+  but `seqv3_history_$SEQ_TAG.parquet` and `seqv3_meta_$SEQ_TAG.json` are
+  ADDITIONALLY gated behind `SEQ_HIST=1` (default off) — found 2026-09-02 after
+  it silently produced an incomplete quartet and broke `check_dominance.R`/
+  `check_merged_sections.R` with an opaque Arrow IOError rather than a clear
+  "set SEQ_HIST" message. Run once per arm being evaluated — this is the
+  experiment-arm layer, ~97 `check_*`/`score_*`/`build_*`/`optimise_*` scripts
+  read these by tag (now in `scripts/diagnostics/`, see "Layout" above).
 - `FORM_TAG` (default `"final"`) — `form_display_marks.R` /
   `form_display_marks_swimming.R` READ `seqv2_state_$FORM_TAG.parquet` /
   `seqv3_history_$FORM_TAG.parquet` (i.e. someone must have run `form_ratings.R`
@@ -115,11 +119,11 @@ tags, not one, and they mean different things:
   shipping-path end of the chain, belongs in "Shipping path" above by
   function, listed here instead so the whole chain reads as one story.
 
-Shipping chain: `form_ratings.R` (`SEQ_TAG=final`) → `seqv2_state_final.parquet`
-+ `seqv3_history_final.parquet` + `seqv3_majors_final.parquet` +
-`seqv3_meta_final.json` → `form_display_marks.R` (`FORM_TAG=final`) →
-`form_display_final.parquet` + `form_display_final_calib.json` →
-`export_athletics_blog.R`.
+Shipping chain: `form_ratings.R` (`SEQ_TAG=final SEQ_HIST=1`) →
+`seqv2_state_final.parquet` + `seqv3_history_final.parquet` +
+`seqv3_majors_final.parquet` + `seqv3_meta_final.json` → `form_display_marks.R`
+(`FORM_TAG=final`) → `form_display_final.parquet` +
+`form_display_final_calib.json` → `export_athletics_blog.R`.
 
 ## Data directory hygiene (added 2026-08-30, after a week that needed it)
 
