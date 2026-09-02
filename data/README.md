@@ -8,21 +8,24 @@ anything else here never touches git history.
 
 ## Canonical tables (the ones that matter)
 
-| File | What it is | Built by |
-|---|---|---|
-| `championship_results.rds` | one row per athlete per race, ~4.5M rows | harvest + merge pipeline |
-| `competition_catalogue.parquet` | one row per competition, ~32k rows (tier, class, measured strength) | `build_competition_catalogue.R`, then `augment_catalogue_coverage.R` |
-| `athletics_corpus.rds` / `.parquet` | the ability-estimation corpus | `build_athletics_corpus.R` |
-| `athletics_history.rds` | career-route history sweep | harvest pipeline |
-| `calibration_corpus_csigma_coast.rds` | **the deployed calibration** — read via `_deployed.R`, never rename/move this one | `recalibrate_corpus.R` |
-| `family_pool_offsets.rds`, `elite_cohort.rds`, `aging.rds` | model input tables | see `scripts/README.md` "Shipping path" |
-| `citius.duckdb` | DuckDB mirror of the three RDS tables above (championship_results/athletics_corpus/athletics_history) | `bootstrap_citius_duckdb.R` |
-| `athlete_meta.parquet`, `athlete_pbs.parquet`, `athlete_sbs.parquet`, `athlete_honours.parquet`, `athlete_wa_rankings*.parquet`, `athlete_crosswalk_*.parquet` | reference/lookup tables, each scoped to one purpose (bio, personal bests, season bests, honours, rankings, cross-source identity linking) — none of these is a single "master" athlete table | harvest_* scripts |
+| File | What it is | Built by | Dictionary |
+|---|---|---|---|
+| `championship_results.rds` | one row per athlete per race, ~4.5M rows | harvest + merge pipeline | [data-dictionary-championship-results.md](../../docs/reference/data-dictionary-championship-results.md) |
+| `competition_catalogue.parquet` | one row per competition, ~32k rows (tier, class, measured strength) — this **is** the meet registry. Browsable at https://claude.ai/code/artifact/73f3a002-2f5d-4cec-a248-364724a9f213 (filterable by tier/class/year/strength; re-export + republish via `scripts/export_meet_registry_artifact.R` + `scripts/meet_registry_artifact_template.html` when the catalogue changes meaningfully) | `build_competition_catalogue.R`, then `augment_catalogue_coverage.R` | [data-dictionary-competition-catalogue.md](../../docs/reference/data-dictionary-competition-catalogue.md) |
+| `athletics_corpus.rds` / `.parquet` | the ability-estimation corpus | `build_athletics_corpus.R` | [data-dictionary-athletics-corpus.md](../../docs/reference/data-dictionary-athletics-corpus.md) |
+| `athletics_history.rds` | career-route history sweep | harvest pipeline | same shape as the competition-route columns in the corpus dictionary above |
+| `calibration_corpus_csigma_coast.rds` | **the deployed calibration** — read via `_deployed.R`, never rename/move this one | `recalibrate_corpus.R` | [data-dictionary-model-artifacts.md](../../docs/reference/data-dictionary-model-artifacts.md) |
+| `family_pool_offsets.rds`, `elite_cohort.rds`, `aging.rds` | model input tables | see `scripts/README.md` "Shipping path" | same, `data-dictionary-model-artifacts.md` |
+| `citius.duckdb` | DuckDB mirror of the three RDS tables above (championship_results/athletics_corpus/athletics_history) | `bootstrap_citius_duckdb.R` | same schema as the `.rds` dictionaries |
+| `athlete_meta.parquet`, `athlete_pbs.parquet`, `athlete_sbs.parquet`, `athlete_honours.parquet`, `athlete_wa_rankings*.parquet`, `athlete_crosswalk_*.parquet` | reference/lookup tables, each scoped to one purpose (bio, personal bests, season bests, honours, rankings, cross-source identity linking) — none of these is a single "master" athlete table | harvest_* scripts | [athlete-tables-audit-2026-09-03.md](../../docs/reference/athlete-tables-audit-2026-09-03.md) |
 
-For column-level detail (types, NA rates, known issues, what's expected vs
-wrong) see `docs/reference/data-audit-2026-09-02.md` in the parent
-citiusverse repo — that document is the data dictionary, this file is just
-"where things live."
+This file is the **registry** — every table, one line, where it lives. For
+column-level detail (types, meanings, known gaps) follow the Dictionary
+links above. `docs/reference/data-audit-2026-09-02.md` is the bug/fix
+history on this pipeline, not a dictionary. `citiusverse/DICTIONARY.md` (the
+repo root, one level up again) is a *vocabulary* glossary — meet/event/
+phase/race terminology — a different thing from the column dictionaries
+linked above; don't conflate the two.
 
 ## `.rds` vs DuckDB vs parquet — which is authoritative
 
