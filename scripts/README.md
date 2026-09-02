@@ -18,6 +18,17 @@ should say so in its header. The fastest audit is:
 grep -L "_deployed" scripts/predict_*.R scripts/score_*.R scripts/export_*.R
 ```
 
+## Layout
+
+`diagnostics/` holds the 150 one-off `check_*.R`/`score_*.R` (the diagnostic
+kind, not the 3 shipping `score_*.R` below)/`probe_*.R` investigation
+scripts — moved there 2026-09-02 purely for browsability (341 top-level `.R`
+files was unmanageable). Every one of them resolves `citiusdata/data` via
+either a hardcoded absolute path or `here::here("citiusdata", "data")`,
+neither of which depends on the script's own location, so the move changed
+nothing about how they run. Everything else in this file lives at the top
+level of `scripts/`.
+
 ## Shipping path (sources `_deployed.R`, output is published or quoted)
 
 | script | role |

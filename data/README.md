@@ -61,8 +61,14 @@ not disposable, unlike the backtest caches below.
 Anything older than ~7 days with no live script reference gets moved to
 `_archive/<date>-<reason>/` on a periodic sweep, then deleted by a human
 after 90 days there — never auto-deleted. See the dated subfolder READMEs
-under `_archive/` for what's currently archived and why. Two sweeps done so
-far: `2026-08-30-data-cleanup/`, `2026-09-02-backtest-cache-sweep/`.
+under `_archive/` for what's currently archived and why. Four sweeps done so
+far: `2026-08-30-data-cleanup/`, `2026-09-02-backtest-cache-sweep/`,
+`2026-09-02-seqv-sweep-grid/` (683 files, 13.2GB — `form_ratings.R`'s
+per-arm `seqv2_state`/`seqv3_history`/`seqv3_majors` knob-sweep outputs, a
+family the second sweep missed because the names don't start `backtest_*`),
+`2026-09-02-timestamped-prediction-snapshots/` (35 files — one-off
+`<meet>_pretournament_<TIMESTAMP>.parquet` run snapshots nothing reads back;
+the live path is the matching `.rds`).
 
 **This mess regrows fast** — the second sweep found the clutter had
 already regrown substantially in the 3 days since the first. There's no
