@@ -61,14 +61,25 @@ not disposable, unlike the backtest caches below.
 Anything older than ~7 days with no live script reference gets moved to
 `_archive/<date>-<reason>/` on a periodic sweep, then deleted by a human
 after 90 days there — never auto-deleted. See the dated subfolder READMEs
-under `_archive/` for what's currently archived and why. Four sweeps done so
+under `_archive/` for what's currently archived and why. Seven sweeps done so
 far: `2026-08-30-data-cleanup/`, `2026-09-02-backtest-cache-sweep/`,
-`2026-09-02-seqv-sweep-grid/` (683 files, 13.2GB — `form_ratings.R`'s
-per-arm `seqv2_state`/`seqv3_history`/`seqv3_majors` knob-sweep outputs, a
-family the second sweep missed because the names don't start `backtest_*`),
-`2026-09-02-timestamped-prediction-snapshots/` (35 files — one-off
-`<meet>_pretournament_<TIMESTAMP>.parquet` run snapshots nothing reads back;
-the live path is the matching `.rds`).
+`2026-09-02-seqv-sweep-grid/` (761 files, 13.2GB — `form_ratings.R`'s
+per-arm `seqv2_state`/`seqv3_history`/`seqv3_majors`/`seqv3_meta`
+knob-sweep outputs, a family the second sweep missed because the names
+don't start `backtest_*`), `2026-09-02-timestamped-prediction-snapshots/`
+(35 files — one-off `<meet>_pretournament_<TIMESTAMP>.parquet` run
+snapshots nothing reads back; the live path is the matching `.rds`),
+`2026-09-02-root-run-logs/` + `2026-09-02-data-run-logs/` (196 files, ~2.5MB
+— stray stdout/stderr redirects, one at `citiusdata/` root, one here),
+`2026-09-02-dead-calibration-arms/` (39 files, 334MB — old
+`calibration_corpus_*` arm variants confirmed dead by a stronger
+zero-any-reference grep, not just zero-read), `2026-09-02-diagnostic-outputs/`
+(one-off `check_*.R`/`score_*.R` output files, write-only confirmed per file).
+**Every sweep's README documents which `TAG`/`MEET`-variable-based files it
+deliberately did NOT touch** — read one before assuming a zero-grep-hit file
+is safe to archive; several genuinely-live files (e.g. `seqv3_majors_baseline.parquet`,
+`brussels2026_pretournament.rds`) have zero literal-string references because
+they're built from a runtime variable, not a proven-dead filename.
 
 **This mess regrows fast** — the second sweep found the clutter had
 already regrown substantially in the 3 days since the first. There's no
