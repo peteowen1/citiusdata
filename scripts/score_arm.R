@@ -248,8 +248,12 @@ pop <- function(dd, label) {
   # path) never compute p_gold/p_medal -- they're NA by construction, not a
   # bug. t.test() on an all-NA vector errors, so this arm can only ever
   # report marks MAE/RMSE; the probability sections are skipped rather than
-  # printing NaN/an error that looks like a real result.
-  MARKS_ONLY_ARM <- all(is.na(dd$a_gold))
+  # printing NaN/an error that looks like a real result. Checked on BOTH
+  # sides: the baseline (b_gold, either VS's arm or the simulated last-5
+  # baseline) can be the MARKS_ONLY one too if the two arms in a VS
+  # comparison are given in the other order, and a_gold-only check would
+  # miss that and still crash on t.test(b, a).
+  MARKS_ONLY_ARM <- all(is.na(dd$a_gold)) || all(is.na(dd$b_gold))
   pair <- function(am, bm, nm) {
     t <- t.test(bm, am, paired = TRUE)
     sprintf("  %-16s %9.5f  %9.5f   %+7.2f%%  %s  p=%.3g", nm, mean(am), mean(bm),

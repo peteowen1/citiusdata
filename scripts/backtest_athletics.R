@@ -608,7 +608,16 @@ arm_fingerprint <- list(
   sigma_scale = if (is.na(SIGMA_SCALE)) "" else format(SIGMA_SCALE),
   family_debias = FAMILY_DEBIAS,
   family_debias_md5 = if (FAMILY_DEBIAS) md5_of("family_pool_offsets.rds") else NA_character_,
-  family_debias_holdout = if (FAMILY_DEBIAS) format(as.Date(.fp$fit_holdout)) else NA_character_)
+  family_debias_holdout = if (FAMILY_DEBIAS) format(as.Date(.fp$fit_holdout)) else NA_character_,
+  # Same failure class as project_tier/round and family_debias above, for two
+  # flags added alongside them: MARKS_ONLY changes every predicted column's
+  # shape (NA vs simulated); SEL_SHRINK/SEL_SIGMA shift entrants$ability by a
+  # real number before simulation. Neither was in this list, so a cache built
+  # by one config could be silently read back as another's -- caught in
+  # review before this shipped.
+  marks_only = MARKS_ONLY,
+  sel_shrink = if (is.na(SEL_SHRINK)) "" else format(SEL_SHRINK),
+  sel_sigma = SEL_SIGMA)
 
 # A cache that predates this check is stamped by the first run after it, which
 # is the best that can be done retrospectively -- an existing directory carries
