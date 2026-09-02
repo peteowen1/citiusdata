@@ -40,7 +40,14 @@ SC  <- Sys.getenv("FORM_OUT", here::here("citiusdata", "data"))
 # k0 0.95 and floor 0.32 both moved; kappa 3 was already optimal. The old
 # eye-chosen 0.55 / 3 / 0.18 scored 68.028 on the 2025 tuning window; these
 # score 68.564, and 67.353 -> 68.018 on the sealed 2026 window.
-K0 <- .env_num("SEQ_K0", 0.95); KAPPA <- .env_num("SEQ_KAPPA", 3)
+#
+# k0 UPDATED 2026-09-03 (0.95 -> 1.05), re-swept against the comp_start/
+# comp_name/road_race-fixed pool: a real, modest shift (+0.026 pp tune /
+# +0.034 pp sealed), genuinely plateauing by 1.05-1.20 near the documented
+# ~1.33 overshoot ceiling, not a still-climbing range-edge artifact. kappa
+# unchanged -- 3/5/8 remain a near-tie, same conclusion as 2026-08-14. See
+# FORM-MODEL.md's "Re-swept 2026-09-02/03" section for the full grid.
+K0 <- .env_num("SEQ_K0", 1.05); KAPPA <- .env_num("SEQ_KAPPA", 3)
 KFLOOR <- .env_num("SEQ_KFLOOR", 0.32); CSHRINK <- .env_num("SEQ_C", 4)
 # The ladder winners are ON by default, so a bare run IS the chosen model rather
 # than the model minus its adjustments. Set SEQ_AGE=0 / SEQ_STALE=0 / SEQ_CENS=1
