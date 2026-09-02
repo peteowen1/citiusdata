@@ -646,15 +646,43 @@ marks_src <- tryCatch(
 if (is.null(marks_src) || !nrow(marks_src)) {
   marks_src <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 }
-mk <- marks_src[as.character(athlete_id) %in% rated_ids & !is.na(perf) & !is.na(date),
-                .(athlete_id = as.character(athlete_id), event_id, date, perf,
-                  mark_string, legal)]
+# NOT filtered on !is.na(perf) here -- a DNF/DQ/no-height row has no parseable
+# mark (perf is NA whenever mark doesn't parse), but it is still real, current
+# information about the athlete's last competition appearance. Filtering it
+# out here silently reports an OLDER valid race as "latest", contradicting the
+# comment below. Measured on this corpus: 12.7% of (athlete_id, event_id)
+# groups have their true most recent row fail !is.na(perf) -- not a rare edge
+# case. SB/PB (below) DO need a genuine comparable mark, so they filter on
+# !is.na(perf) themselves, downstream of this unfiltered read.
+mk_all <- marks_src[as.character(athlete_id) %in% rated_ids & !is.na(date),
+                    .(athlete_id = as.character(athlete_id), event_id, date, perf,
+                      mark_string, legal)]
 
-# Latest race takes the most recent result whatever the wind: it answers "what
-# did they last run", which a wind-aided run still answers honestly.
-setorder(mk, athlete_id, event_id, -date)
-latest_mk <- mk[, .(latest_mark = mark_string[1], latest_date = date[1]),
-                by = .(athlete_id, event_id)]
+# Latest race takes the most recent result whatever the wind, and whatever the
+# outcome -- a DNF/DQ/NM is still an honest answer to "what did they last
+# run", not something to skip past. Ties on the same date (one field-event
+# session legitimately produces several rows via multiple attempts) resolve to
+# the best-perf row via the -perf tertiary key, not an arbitrary one: 6.5% of
+# groups have same-day ties, and 94% of those ties have differing perf values,
+# so the tiebreak genuinely changes what gets published.
+#
+# `perf_na` is an explicit tertiary key, NOT redundant with `-perf`: setorder()
+# does NOT reliably put NA last for a `-col` (descending) sort key once an
+# earlier key has ties -- confirmed directly (setorder(d, g, -d2, -p) left an
+# NA `p` row ahead of a real one within a `d2` tie). Without this, a same-day
+# DNF/DQ row (perf NA) could win the pick over a same-day row with a real
+# mark, publishing a blank latest_mark when a real one was available.
+mk_all[, perf_na := is.na(perf)]
+setorder(mk_all, athlete_id, event_id, -date, perf_na, -perf)
+mk_all[, perf_na := NULL]
+latest_mk <- mk_all[, .(latest_mark = mark_string[1], latest_date = date[1]),
+                    by = .(athlete_id, event_id)]
+# `latest_mark` is legitimately "" for ~5% of athletes: their true most recent
+# row has no mark_string recorded at all in the source feed (a scratch/no-show
+# with nothing else to show, not a formatting issue this script could recover).
+# The blog page should render that as "no result", not as a missing row.
+
+mk <- mk_all[!is.na(perf)]
 
 # SB and PB are record claims, so they take wind-legal marks ONLY. `legal` is
 # FALSE on 166k rows and NA on 4.8k, and `%in% TRUE` excludes both -- deliberate,
