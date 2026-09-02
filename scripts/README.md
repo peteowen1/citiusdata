@@ -151,6 +151,30 @@ cleanup mechanism — directly implicated in how long that week's
   script is exactly the pattern that made a future reorg cost 43-51 script
   edits per file this time; don't add to that bill.
 
+### Cleanup status, 2026-09-03
+
+The `scripts/` reorg (150 diagnostic one-offs into `scripts/diagnostics/`,
+see "Layout" above) is done. The remaining ~26 `.ps1`/`.cmd` runners at the
+top level were surveyed but mostly left alone: several look like dead
+one-off arm runners (their target `backtest_$arm.rds` files are already
+archived), but their VALUE is being the reproduction path for that exact
+file if it's ever needed again, and archiving the script costs nothing to
+defer. Given the same-day discovery that an earlier archiving pass had
+broken two live shipping scripts by misjudging a file as disposable (see
+`data/README.md`'s "per-file reference grep" note), this pass erred
+conservative rather than repeat that mistake for a low-value cleanup.
+
+**RDS retirement (the "flip DuckDB to be the write-source" idea mentioned
+in "`.rds` vs DuckDB vs parquet" below): not pursued, and shouldn't be
+without a real reason.** `audit_data_integrity.R` reads `.rds` directly BY
+DESIGN — it's the independent copy DuckDB gets checked against, so
+migrating it to read DuckDB would defeat its own purpose. The other
+candidates (`fit_family_pool_offsets.R`, `merge_t3_full_checkpoint.R`,
+`merge_t3_pilot_2026.R`) read `.rds` because `.rds` is still the documented
+write-source of truth — reading DuckDB instead would mean trusting a
+derived copy over the source, which is backwards while that stays true.
+Revisit only if `.rds` actually stops being the write-source.
+
 ## DuckDB store (`citius.duckdb`) — added 2026-08-30
 
 `citius/R/duckdb_store.R` + `citius/R/db_schema.R` (in the `citius` package,

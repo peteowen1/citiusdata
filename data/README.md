@@ -81,6 +81,15 @@ is safe to archive; several genuinely-live files (e.g. `seqv3_majors_baseline.pa
 `brussels2026_pretournament.rds`) have zero literal-string references because
 they're built from a runtime variable, not a proven-dead filename.
 
+**A per-file reference grep is only as good as the file list it's run
+against** — the 2026-09-02 backtest-cache sweep's own check missed
+`backtest_combined_full.rds` and `backtest_ctrl_now.rds` being read by name
+in two shipping export scripts and 10+ diagnostics respectively, found and
+restored 2026-09-03 (see that sweep's own README for the correction). When
+sweeping a whole family (`backtest_*.rds`, `seqv*_$TAG.*`), grep for every
+bare filename actually present on disk, not a sample of the ones that look
+disposable.
+
 **This mess regrows fast** — the second sweep found the clutter had
 already regrown substantially in the 3 days since the first. There's no
 periodic enforcement yet, only manual sweeps; if this file's `backtest_cache_*`
