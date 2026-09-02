@@ -874,16 +874,39 @@ run_meet <- function(i) {
     # CITIUS_HALF_LIFE_FAMILY is set, and had been missing it -- every
     # per-family half-life arm (e.g. the hurdles test) was paying the full
     # unrestricted cost this was built to eliminate.
-    # REVERTED 2026-09-02: tried splitting by event_id instead of family to
-    # let CITIUS_HALF_LIFE_FAMILY carry event-level overrides too. A 5-meet
-    # regression check against already-cached hltest output (family-only
-    # keys, should be a no-op change) showed small but NONZERO median_mark
-    # diffs (0.01-0.22 mark units) that MARKS_ONLY should make impossible --
-    # no simulation, so no legitimate source of noise. Root cause not found
-    # before this needed to ship; reverted to the known-correct per-family
-    # split rather than leave an unexplained numeric discrepancy live. If
-    # event-level overrides are wanted later, re-attempt this AND find the
-    # discrepancy's cause first -- do not re-apply from this comment alone.
+    # REVERTED 2026-09-02, three investigation rounds deep: tried splitting
+    # by event_id instead of family to let CITIUS_HALF_LIFE_FAMILY carry
+    # event-level overrides too.
+    #   1. A 5-meet check against cached hltest output showed nonzero
+    #      median_mark diffs (0.01-0.22 mark units) that MARKS_ONLY should
+    #      make impossible (no simulation, no legitimate noise source).
+    #   2. A direct, isolated estimate_ability() test (HighJump-M +
+    #      LongJump-M together vs separately, real defaults, a NARROW
+    #      only= of just those two events' entrants) showed PERFECT
+    #      0.000000 diff -- seemed to clear estimate_ability() entirely.
+    #   3. A same-session fresh A/B through the FULL pipeline (10 meets,
+    #      back to back, no staleness possible) reproduced the exact same
+    #      diffs as step 1 -- ruling out stale-cache as the explanation.
+    #   4. Redid step 2 with the REAL only_ids for one of the diffing
+    #      meets -- ALL 284 entrants across that meet's 25 events, not a
+    #      narrow 2-event union -- and the diff reappeared (max 0.0013 in
+    #      log-perf/ability units, 178 of 325 rows affected). So it's real,
+    #      and specifically tied to how BROAD `only=` is relative to what's
+    #      in a single estimate_ability() call: bundling many events into
+    #      one family-wide call vs one call per event changes results only
+    #      once `only` spans far more athletes/groups than either call
+    #      actually needs.
+    # Most plausible mechanism, NOT confirmed: floating-point summation-
+    # order sensitivity in the weighted-sum aggregation -- different
+    # event/row groupings sum the same numbers in a different order, and
+    # at this magnitude (sub-0.1% on the mark scale) that's consistent with
+    # non-associative floating-point addition, not a semantic bug. Left
+    # reverted anyway: "plausible but unconfirmed" does not clear this
+    # codebase's own bar for a silent numeric change. If event-level
+    # overrides are wanted later, the next step is tracing
+    # estimate_ability()'s actual summation order (ability.R's weighted-sum
+    # and prior_mu blocks), not another black-box A/B -- that angle is
+    # exhausted.
     only_ids <- unique(as.character(block$athlete_id))
     tick("ability", data.table::rbindlist(lapply(split(pf, pf$family), function(g) {
       hl <- if (!is.na(g$family[1]) && g$family[1] %in% names(hl_map))
