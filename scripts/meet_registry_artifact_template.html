@@ -246,7 +246,32 @@
 </header>
 
 <div class="caveats">
-  <strong>Read before trusting a tier as final:</strong> the road-race reclassification bug was fixed 2026-09-03 — 136 races (Tokyo Marathon, Boston Marathon, NYC Mini 10K, the World Road Running Championships among them) were promoted from T2 to T1 that day after sitting miscategorised. <code>comp_name</code> and <code>comp_start</code> gaps for championship-class meets were backfilled 2026-09-02. Filter by year below to see coverage directly — T1_elite counts are genuinely thin in several early years (see the year filter), which is corpus coverage, not a modelling artifact.
+  <strong>What "strength" means:</strong> a 0-100 measured field-quality
+  score, not an opinion. For each finalist, take their own career-best mark
+  as a percentile within that event and era (e.g. "better than 92% of
+  1500m runners active 2020-2024"); average that across the finalists in
+  one event, then average across every event contested at the meet. A
+  strength of 100 means the field was, on average, the best-ever standard
+  for those events in that era — it measures who showed up, not how fast
+  the times were on the day. Meets below 5 scored events are withheld
+  (shown as "—") unless they're road races, which are exempt since a
+  marathon only ever has one or two events to score.
+  <br><br>
+  <strong>What "tier" means:</strong> T1_elite / T2_strong / T3_development.
+  For most classes (Olympics, World Championships, Diamond League, age-group
+  meets, etc.) tier is fixed by what the meet named itself. For road races
+  and anything the name-matcher couldn't classify, tier is derived from
+  strength instead (≥75 → T1, ≥50 → T2, else T3).
+  <br><br>
+  <strong>Read before trusting a tier as final:</strong> the road-race
+  reclassification bug was fixed 2026-09-03 — 136 races (Tokyo Marathon,
+  Boston Marathon, NYC Mini 10K, the World Road Running Championships among
+  them) were promoted from T2 to T1 that day after sitting miscategorised.
+  <code>comp_name</code> and <code>comp_start</code> gaps for
+  championship-class meets were backfilled 2026-09-02. Filter by year below
+  to see coverage directly — T1_elite counts are genuinely thin in several
+  early years (see the year filter), which is corpus coverage, not a
+  modelling artifact.
 </div>
 
 <div class="controls">
@@ -289,7 +314,7 @@
           <th data-key="comp_name">Meet<span class="arrow"></span></th>
           <th data-key="class">Class<span class="arrow"></span></th>
           <th data-key="meet_tier">Tier<span class="arrow"></span></th>
-          <th data-key="strength" class="num">Strength<span class="arrow"></span></th>
+          <th data-key="strength" class="num" title="0-100: each finalist's career-best percentile within their event+era, averaged across the meet's events. See the note above the filters.">Strength<span class="arrow"></span></th>
           <th data-key="year" class="num">Year<span class="arrow"></span></th>
           <th data-key="country">Country<span class="arrow"></span></th>
           <th data-key="athletes" class="num">Athletes<span class="arrow"></span></th>
