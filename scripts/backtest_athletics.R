@@ -874,6 +874,16 @@ run_meet <- function(i) {
     # CITIUS_HALF_LIFE_FAMILY is set, and had been missing it -- every
     # per-family half-life arm (e.g. the hurdles test) was paying the full
     # unrestricted cost this was built to eliminate.
+    # REVERTED 2026-09-02: tried splitting by event_id instead of family to
+    # let CITIUS_HALF_LIFE_FAMILY carry event-level overrides too. A 5-meet
+    # regression check against already-cached hltest output (family-only
+    # keys, should be a no-op change) showed small but NONZERO median_mark
+    # diffs (0.01-0.22 mark units) that MARKS_ONLY should make impossible --
+    # no simulation, so no legitimate source of noise. Root cause not found
+    # before this needed to ship; reverted to the known-correct per-family
+    # split rather than leave an unexplained numeric discrepancy live. If
+    # event-level overrides are wanted later, re-attempt this AND find the
+    # discrepancy's cause first -- do not re-apply from this comment alone.
     only_ids <- unique(as.character(block$athlete_id))
     tick("ability", data.table::rbindlist(lapply(split(pf, pf$family), function(g) {
       hl <- if (!is.na(g$family[1]) && g$family[1] %in% names(hl_map))
