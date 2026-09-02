@@ -244,6 +244,12 @@ llf <- function(p, y) { p <- pmin(pmax(p, EPS), 1 - EPS); -(y * log(p) + (1 - y)
 
 pop <- function(dd, label) {
   nr <- uniqueN(dd$race_id); if (nr < 25) return(invisible(NULL))
+  # MARKS_ONLY arms (backtest_athletics.R's simulate_event()-skipping fast
+  # path) never compute p_gold/p_medal -- they're NA by construction, not a
+  # bug. t.test() on an all-NA vector errors, so this arm can only ever
+  # report marks MAE/RMSE; the probability sections are skipped rather than
+  # printing NaN/an error that looks like a real result.
+  MARKS_ONLY_ARM <- all(is.na(dd$a_gold))
   pair <- function(am, bm, nm) {
     t <- t.test(bm, am, paired = TRUE)
     sprintf("  %-16s %9.5f  %9.5f   %+7.2f%%  %s  p=%.3g", nm, mean(am), mean(bm),
@@ -251,10 +257,12 @@ pop <- function(dd, label) {
             ifelse(mean(am) < mean(bm), "ARM ", "base"), t$p.value)
   }
   byrace <- function(f) dd[, .(a = f(.SD, "a"), b = f(.SD, "b")), by = race_id]
-  gB <- byrace(function(s, p) mean((s[[paste0(p, "_gold")]] - s$hit)^2))
-  gL <- byrace(function(s, p) mean(llf(s[[paste0(p, "_gold")]], s$hit)))
-  mB <- byrace(function(s, p) mean((s[[paste0(p, "_medal")]] - s$hit_medal)^2))
-  mL <- byrace(function(s, p) mean(llf(s[[paste0(p, "_medal")]], s$hit_medal)))
+  if (!MARKS_ONLY_ARM) {
+    gB <- byrace(function(s, p) mean((s[[paste0(p, "_gold")]] - s$hit)^2))
+    gL <- byrace(function(s, p) mean(llf(s[[paste0(p, "_gold")]], s$hit)))
+    mB <- byrace(function(s, p) mean((s[[paste0(p, "_medal")]] - s$hit_medal)^2))
+    mL <- byrace(function(s, p) mean(llf(s[[paste0(p, "_medal")]], s$hit_medal)))
+  }
   ea <- 100 * (dd$a_perf - dd$act_perf); eb <- 100 * (dd$b_perf - dd$act_perf)
   eac <- ea - mean(ea, na.rm = TRUE); ebc <- eb - mean(eb, na.rm = TRUE)
   # `post` turns the mean of the per-prediction quantity into the reported
@@ -266,20 +274,25 @@ pop <- function(dd, label) {
     sprintf("  %-16s %9.4f  %9.4f   %+7.2f%%  %s  p=%.3g", nm, ax, ay,
             100 * (ax - ay) / ay, ifelse(ax < ay, "ARM ", "base"), t$p.value)
   }
-  cat(sprintf("\n%s  |  %d races, %s predictions\n", label, nr, format(nrow(dd), big.mark = ",")))
+  cat(sprintf("\n%s  |  %d races, %s predictions%s\n", label, nr, format(nrow(dd), big.mark = ","),
+              if (MARKS_ONLY_ARM) "  [MARKS_ONLY: no p_gold/p_medal]" else ""))
   cat(sprintf("  %-16s %9s  %9s   %8s\n", "", "arm", "base", "rel"))
-  cat(pair(gB$a, gB$b, "gold Brier"), "\n")
-  cat(pair(gL$a, gL$b, "gold logloss"), "\n")
-  cat(pair(mB$a, mB$b, "medal Brier"), "\n")
-  cat(pair(mL$a, mL$b, "medal logloss"), "\n")
+  if (!MARKS_ONLY_ARM) {
+    cat(pair(gB$a, gB$b, "gold Brier"), "\n")
+    cat(pair(gL$a, gL$b, "gold logloss"), "\n")
+    cat(pair(mB$a, mB$b, "medal Brier"), "\n")
+    cat(pair(mL$a, mL$b, "medal logloss"), "\n")
+  }
   cat(mk(ea, eb, "marks MAE", abs), "\n")
   cat(mk(ea, eb, "marks RMSE", function(v) v^2, sqrt), "\n")
   cat(mk(eac, ebc, "marks MAE ctr", abs), "\n")
   cat(mk(eac, ebc, "marks RMSE ctr", function(v) v^2, sqrt), "\n")
-  fa <- dd[, .(w = athlete_id[which.max(a_gold)] == athlete_id[hit == TRUE][1]), by = race_id]
-  fb <- dd[, .(w = athlete_id[which.max(b_gold)] == athlete_id[hit == TRUE][1]), by = race_id]
-  cat(sprintf("  %-16s %8.1f%%  %8.1f%%\n", "favourite wins",
-              100 * mean(fa$w, na.rm = TRUE), 100 * mean(fb$w, na.rm = TRUE)))
+  if (!MARKS_ONLY_ARM) {
+    fa <- dd[, .(w = athlete_id[which.max(a_gold)] == athlete_id[hit == TRUE][1]), by = race_id]
+    fb <- dd[, .(w = athlete_id[which.max(b_gold)] == athlete_id[hit == TRUE][1]), by = race_id]
+    cat(sprintf("  %-16s %8.1f%%  %8.1f%%\n", "favourite wins",
+                100 * mean(fa$w, na.rm = TRUE), 100 * mean(fb$w, na.rm = TRUE)))
+  }
 }
 cli::cli_h1("{ARM} vs {BLAB}   (holdout from {HOLDOUT})")
 # Populations by TIER, not by class. T1 is the tier the catalogue assigns, so it

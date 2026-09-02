@@ -77,8 +77,27 @@ DEPLOYED <- list(
   # 90 for sprints). Road and walk are varied because those two families have
   # real evidence: t = +8.24 on marks, p = 1.8e-16. The mechanism is race
   # FREQUENCY, not physiology -- a marathoner races twice a year.
+  #
+  # HURDLES=180 added 2026-09-02: fit_half_life() had measured hurdles wanting
+  # ~180 days since the original comment above was written, but it was never
+  # adopted (same "don't trust fit_half_life() blindly" caution that kept
+  # sprints at the default). Adopted now on the same evidence bar as
+  # road/walk -- a direct out-of-sample marks-MAE A/B, not the fit -- using
+  # the new CITIUS_BT_MARKS_ONLY fast path (backtest_athletics.R skips
+  # simulate_event() for a marks-only comparison; see its own comment for why
+  # that's exact, not approximate). 277 T1+T2 meets, 2023-01-01 holdout,
+  # hurdles=180 vs the 365 default: family-level -5.53% MAE (p=2.04e-16, 100
+  # races), and EVERY OTHER FAMILY IS BYTE-IDENTICAL BETWEEN ARMS (p=NaN,
+  # zero-variance diff) -- confirming the effect is isolated to the changed
+  # variable, not a vintage/pool confound. Per hurdles event: 400mH-M -5.84%
+  # (p=2.6e-4, the event that motivated this test), 400mH-W -7.53%
+  # (p=1.2e-5), 100mH-W -6.96% (p=1.5e-9), 110mH-M -1.62% (p=0.078, weak).
+  # This tests marks MAE only -- MARKS_ONLY cannot produce p_gold/p_medal, so
+  # there is no ranking/medal-skill evidence for this specific change, unlike
+  # the 365 default itself. That gap is accepted here on the same basis the
+  # road/walk precedent already accepted a marks-only justification.
   half_life = 365,
-  hl_family = c(road = 1095, walk = 730),
+  hl_family = c(road = 1095, walk = 730, hurdles = 180),
 
   # FIELD PRIOR. Shrink a thinly-evidenced entrant toward the FIELD rather than
   # the unconditional event mean, which includes a long tail of athletes who

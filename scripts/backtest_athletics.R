@@ -866,12 +866,22 @@ run_meet <- function(i) {
       local_nofam$events <- unique(pf$event_id[is.na(pf$family)])
       pf[is.na(family), family := ""]
     }
+    # Same `only=` restriction as the single-half-life branch above (ability.R
+    # ~L1137-1157: computing the expensive per-athlete body for the ~25
+    # entrants instead of every athlete who ever contested these events cut
+    # 85% of a backtest's runtime there; "identical for the retained
+    # athletes" is asserted by test). This branch only runs when
+    # CITIUS_HALF_LIFE_FAMILY is set, and had been missing it -- every
+    # per-family half-life arm (e.g. the hurdles test) was paying the full
+    # unrestricted cost this was built to eliminate.
+    only_ids <- unique(as.character(block$athlete_id))
     tick("ability", data.table::rbindlist(lapply(split(pf, pf$family), function(g) {
       hl <- if (!is.na(g$family[1]) && g$family[1] %in% names(hl_map))
         hl_map[[g$family[1]]] else half_life
       estimate_ability(g[, !"family"], as_of = cut_date, half_life = hl,
                        calibration = calibration, adjust_context = ADJUST_CONTEXT,
                        adjust_race = ADJUST_RACE, sigma_mode = SIGMA_MODE, sigma_parts = SIGMA_PARTS,
+                       only = only_ids,
                        peak_gamma = PEAK_GAMMA,
                        robust_location = ROBUST_LOCATION,
                        decouple_peak = DECOUPLE_PEAK)
