@@ -619,9 +619,68 @@ ratings <- merge(ratings, citius_events()[, .(event_id, sport, discipline, sex, 
 ratings[, c("pred_mark", "mark_unit") := predicted_mark(ability, orientation)]
 ratings[, orientation := NULL]
 
+# --- latest race / SB / PB, to sit next to the predicted mark (blog#586) ------
+# A predicted mark alone gives a reader nothing to judge it against. These three
+# are what they'd compare it to anyway, so publish them rather than make them
+# guess. (The comparison is one the model wins: measured on T1 elite, centred
+# MAE, leakage-safe -- 10.7% better than latest race, 11.7% than SB, 27.4% than
+# PB. It does NOT beat a mean of the athlete's last 5, which is why nothing here
+# claims more than "better than the obvious single-number guesses".)
+#
+# `perf` is orientation-signed (perf = orientation * log(mark)), so HIGHER is
+# always better whether the event is timed or measured. That makes "best" a
+# plain max() and removes the single biggest way this could go wrong -- sorting
+# field events backwards.
+#
+# Scoped to the athletes that actually publish (top 150 per event), not the full
+# 4.5M-row history, and read separately from `hist` above -- that one is narrowed
+# to Glasgow participants and would blank every rated athlete who wasn't there.
+rated_ids <- unique(ratings$athlete_id)
+marks_src <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(marks_src) || !nrow(marks_src)) {
+  marks_src <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+}
+mk <- marks_src[as.character(athlete_id) %in% rated_ids & !is.na(perf) & !is.na(date),
+                .(athlete_id = as.character(athlete_id), event_id, date, perf,
+                  mark_string, legal)]
+
+# Latest race takes the most recent result whatever the wind: it answers "what
+# did they last run", which a wind-aided run still answers honestly.
+setorder(mk, athlete_id, event_id, -date)
+latest_mk <- mk[, .(latest_mark = mark_string[1], latest_date = date[1]),
+                by = .(athlete_id, event_id)]
+
+# SB and PB are record claims, so they take wind-legal marks ONLY. `legal` is
+# FALSE on 166k rows and NA on 4.8k, and `%in% TRUE` excludes both -- deliberate,
+# because a record claim should fail closed. In the men's 100m alone, two of the
+# six best marks by perf are wind-aided (Jacobs 9.67 w+4.1, De Grasse 9.69 w+4.8)
+# and would otherwise publish as somebody's personal best.
+#
+# Indoor and outdoor are pooled, matching how the ability model itself treats
+# them. Conventional athletics splits those records; if that becomes a complaint,
+# split here rather than in the page.
+legal_mk <- mk[legal %in% TRUE]
+setorder(legal_mk, athlete_id, event_id, -perf)
+pb_mk <- legal_mk[, .(pb_mark = mark_string[1]), by = .(athlete_id, event_id)]
+sb_mk <- legal_mk[data.table::year(date) == data.table::year(AS_OF),
+                  .(sb_mark = mark_string[1]), by = .(athlete_id, event_id)]
+
+for (tbl in list(latest_mk, sb_mk, pb_mk)) {
+  ratings <- merge(ratings, tbl, by = c("athlete_id", "event_id"), all.x = TRUE)
+}
+cli::cli_alert_info(
+  "Marks: latest on {round(100 * mean(!is.na(ratings$latest_mark)))}%, SB on {round(100 * mean(!is.na(ratings$sb_mark)))}%, PB on {round(100 * mean(!is.na(ratings$pb_mark)))}% of rating rows.")
+
 RATING_COLS <- c("athlete_id", "athlete_name", "event_id", "sport", "discipline", "sex",
                  "ability", "ability_se", "z", "pct_best", "pct_wr", "pred_mark",
-                 "mark_unit", "n", "w_total", "n_event", "last_date")
+                 "mark_unit", "latest_mark", "latest_date", "sb_mark", "pb_mark",
+                 "n", "w_total", "n_event", "last_date")
 for (nm in setdiff(RATING_COLS, names(ratings))) ratings[, (nm) := NA]
 ratings <- ratings[, ..RATING_COLS]
 ratings[, `:=`(as_of = AS_OF, generated_at = NOW)]
