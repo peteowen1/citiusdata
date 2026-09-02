@@ -190,6 +190,22 @@ build <- function(src, dest, label, join_tier = FALSE, data = NULL) {
     ))
     return(NULL)
   }
+  # The opposite direction is not just "fine, ignore it": a T3 merge script
+  # writes DuckDB before its atomic .rds rename, so a crash between the two
+  # leaves DuckDB genuinely ahead. This store then builds correctly off the
+  # newer DuckDB data, but the 40+ scripts that still readRDS() the .rds
+  # directly (see this file's own header) stay on the older rows with no
+  # error anywhere -- warn so that gap doesn't go unnoticed, without
+  # discarding the newer, still-good DuckDB data by falling back.
+  ahead_rows <- nrow(duck) > nrow(rds)
+  ahead_comps <- "competition_id" %in% names(duck) && "competition_id" %in% names(rds) &&
+    uniqueN(duck$competition_id) > uniqueN(rds$competition_id)
+  if (ahead_rows || ahead_comps) {
+    cli::cli_warn(c(
+      "citius.duckdb's {label} is AHEAD of {rds_file}: {nrow(duck)} vs {nrow(rds)} rows.",
+      "i" = "This store will be built from the newer DuckDB data, but scripts that readRDS() {rds_file} directly won't see it -- finish the interrupted merge's .rds write."
+    ))
+  }
   duck
 }
 .athletics$championship_results <- .stale_check(.athletics$championship_results,

@@ -142,7 +142,12 @@ anchor("no class has >15% of its meets split across tiers (n>=10)", nrow(bad_cla
 # Negative check, same reasoning as build_competition_catalogue.R's own: a
 # class whose median strength clearly belongs in a different tier band than
 # its modal assignment is a labeling bug, not noise.
-TIER_BAND <- function(s) fcase(s >= 75, "T1_elite", s >= 40, "T2_strong", default = "T3_development")
+# Must match build_competition_catalogue.R's own thresholds exactly -- this
+# audit checks the catalogue's tier assignment against strength, so a drifted
+# copy of the same cutoffs produces false-positive mismatches for classes
+# whose median strength sits between the two thresholds (found 2026-09-02:
+# this was 40, the catalogue's real T2 floor is 50).
+TIER_BAND <- function(s) fcase(s >= 75, "T1_elite", s >= 50, "T2_strong", default = "T3_development")
 by_class[, strength_implied_tier := TIER_BAND(median_strength)]
 mismatch <- by_class[strength_implied_tier != modal_tier & n >= 10]
 anchor("no class's median strength implies a different tier than its modal assignment (n>=10)",
@@ -225,14 +230,21 @@ check_store <- function(rds_dt, table_name) {
         "SELECT t.%s FROM %s t JOIN audit_sample_tmp s ON %s",
         paste(c(jk, val_cols), collapse = ", t."), table_name, join_cond)))
       # A key can legitimately map to >1 row (multi-attempt); compare on the
-      # sorted multiset of values per key rather than assuming 1:1.
+      # sorted multiset of values per key rather than assuming 1:1. Compare
+      # ALL of val_cols, not just mark -- an earlier version of this check
+      # selected place/date into samp/db_samp but then only ever compared
+      # mark, so a place- or date-only corruption (a join reordering, a
+      # wrong-column read) passed silently. Paste the row's val_cols into one
+      # signature string per row so this stays generic over however many
+      # columns val_cols has.
+      row_sig <- function(sd) do.call(paste, c(as.list(sd), sep = ""))
       merged <- merge(
-        samp[, .(rds_vals = list(sort(mark))), by = jk],
-        db_samp[, .(db_vals = list(sort(mark))), by = jk],
+        samp[, .(rds_vals = list(sort(row_sig(.SD)))), by = jk, .SDcols = val_cols],
+        db_samp[, .(db_vals = list(sort(row_sig(.SD)))), by = jk, .SDcols = val_cols],
         by = jk, all = TRUE)
       value_mismatch <- merged[, sum(mapply(function(a, b) !isTRUE(all.equal(a, b)), rds_vals, db_vals))]
-      anchor(sprintf("%s: sampled mark values match (n=%d keys, %s excluded for NA key)",
-                     table_name, nrow(merged), format(n_na_key, big.mark = ",")),
+      anchor(sprintf("%s: sampled %s values match (n=%d keys, %s excluded for NA key)",
+                     table_name, paste(val_cols, collapse = "/"), nrow(merged), format(n_na_key, big.mark = ",")),
              value_mismatch == 0, sprintf("%d key(s) differ", value_mismatch))
     }
   })

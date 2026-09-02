@@ -4,8 +4,11 @@
 # fetched, not a data/harvest failure), so this merges what's actually cached.
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_merge_guards.R"))
 OUT <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "ath_comp_cache_t3pilot")
+
+citius_merge_guard("merge_t3_pilot_2026.R")
 
 fs <- list.files(CACHE, pattern = "[.]rds$", full.names = TRUE)
 cli::cli_alert_info("{length(fs)} cached files")
@@ -25,17 +28,10 @@ ch2 <- rbind(ch, new, fill = TRUE)
 stopifnot(nrow(ch2) == before_n + nrow(new))
 stopifnot(!any(ch2$competition_id == 0, na.rm = TRUE))
 
-conn <- with_citius_db_connection(function(conn) {
+with_citius_db_connection(function(conn) {
   store_championship_results(conn, ch2, mode = "replace")
-  conn
 }, path = get_citius_db_path())
 
-atomic_write <- function(f, path) {
-  tmp <- paste0(path, ".tmp-write")
-  saveRDS(f, tmp)
-  ok <- file.rename(tmp, path)
-  if (!ok) cli::cli_abort("atomic rename failed for {path}")
-}
-atomic_write(ch2, file.path(OUT, "championship_results.rds"))
+citius_atomic_write(ch2, file.path(OUT, "championship_results.rds"))
 
 cli::cli_alert_success("championship_results.rds: {format(before_n, big.mark=',')} -> {format(nrow(ch2), big.mark=',')} rows, {before_comp} -> {uniqueN(ch2$competition_id)} competitions")
