@@ -224,6 +224,22 @@ ch[is.na(pctl), pctl := frank(perf, na.last = "keep") / sum(!is.na(perf)), by = 
 ath_q <- ch[!is.na(pctl), .(a_q = max(pctl)), by = .(athlete_id, event_id)]
 fin_rows <- ch[grepl("final", round, ignore.case = TRUE) &
                  !grepl("semi", round, ignore.case = TRUE)]
+
+# ROAD EVENTS: "final round" is the WHOLE MASS-PARTICIPATION FIELD, not a
+# curated entry list -- a track final is capped at ~8-16 by construction, a
+# marathon's is capped by nothing. Averaging quality across every finisher
+# dilutes the actual elite race with however many club-level qualifiers
+# showed up: measured 2026-09-02, Boston Marathon (a World Marathon Major)
+# scored strength 2.7 from 1,547 cohort-matched finishers, the near-opposite
+# of what it should read. Restrict to each race's own top 10 BY MARK before
+# scoring -- mirrors what a championship final's field size already gives
+# every other event for free, not a new assumption. Uses `perf` (oriented,
+# higher always better) so this is orientation-safe for both directions.
+road_events <- as.data.table(citius_events())[family == "road", event_id]
+fin_rows[event_id %in% road_events, .rk := frank(-perf, ties.method = "first"),
+         by = .(competition_id, event_id)]
+fin_rows <- fin_rows[is.na(.rk) | .rk <= 10L][, .rk := NULL]
+
 fin_rows <- merge(fin_rows, ath_q, by = c("athlete_id", "event_id"), all.x = TRUE)
 # PER EVENT, then averaged -- because breadth is not weakness.
 #
@@ -260,10 +276,22 @@ strength <- ev_q[, .(strength = round(mean(ev_pct), 1), s_raw = round(100 * mean
 # rather than trusted -- the same reason fit_half_life() refuses a boundary
 # optimum and match_event() refuses a fuzzy match.
 MIN_EVENTS_FOR_STRENGTH <- 5L
-thin <- strength[races_won < MIN_EVENTS_FOR_STRENGTH]
+# PURE ROAD competitions are exempt: a road meet never runs more than the
+# Marathon-M/Marathon-W pair (structurally, not thinly) -- this floor was
+# built for a multi-event meet running too FEW of its many possible events,
+# which cannot happen to a class capped at 2. The noise problem the floor
+# exists to catch (a tiny, lucky sample reading implausibly high) is handled
+# per-event for road races by the top-10-by-mark restriction above instead.
+# A MIXED competition (e.g. the Olympics, which runs a marathon alongside 40
+# other events) is NOT exempt -- it's judged on its full breadth as before.
+road_only <- ev_q[, .(all_road = all(event_id %in% road_events)), by = competition_id]
+strength <- merge(strength, road_only, by = "competition_id", all.x = TRUE)
+exempt <- !is.na(strength$all_road) & strength$all_road
+thin <- strength[races_won < MIN_EVENTS_FOR_STRENGTH & !exempt]
 if (nrow(thin)) cli::cli_alert_info(
   "{nrow(thin)} competition{?s} have fewer than {MIN_EVENTS_FOR_STRENGTH} scored events; strength withheld.")
-strength[races_won < MIN_EVENTS_FOR_STRENGTH, strength := NA_real_]
+strength[races_won < MIN_EVENTS_FOR_STRENGTH & !exempt, strength := NA_real_]
+strength[, all_road := NULL]
 
 cat_tbl <- ch[, .(
   # NOT comp_name[1]. Missingness here is per-ROW, not per-competition, so the
