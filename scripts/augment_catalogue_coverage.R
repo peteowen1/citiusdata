@@ -180,9 +180,9 @@ NOT_THE_EVENT <- paste(
   "Pre.?Tournament|Rehearsal|",
   "Warm.?up|Test Event|Festival|Classic -", sep = "")
 NEVER_ELITE <- paste0(
-  # `\bMarat` for the same reason as the road_race rule above: the accented and
-  # Catalan spellings were escaping this guard too.
-  "\\bMarat|10 ?[Kk]m?\\b|5 ?[Kk]m?\\b|Road Race|",
+  # `Marat`, no word boundary -- must stay identical to the road_race rule
+  # above, or this guard and the classifier disagree about what a road race is.
+  "Marat|10 ?[Kk]m?\\b|5 ?[Kk]m?\\b|Road Race|",
   "karusell|Bislettmila|Distanseserie|Distance challenge|Bislett Spring|",
   "Bislett Open|KM Oslo|Nasjonalt|Sommerstevne|Elite Series|Street Tour|",
   "Stabhochsprung|Kugelsto|m.odzie|youth|junior|U1[0-9]|U2[0-3]|",
@@ -227,11 +227,13 @@ RULES <- list(
     "Pan American Athletics Championships|NACAC Championships|",
     "Oceania (Athletics )?Championships|South American (Athletics )?Championships|",
     "South American Indoor|Ibero.?American")),
-  # `\bMarat` stem, kept in lockstep with build_competition_catalogue.R. The
-  # listed spellings missed every accented form, so 135 meets and 8,869
-  # athletes -- Valencia, Sevilla, Barcelona, Malaga -- fell to `unclassified`.
+  # `Marat` with NO word boundary, in lockstep with
+  # build_competition_catalogue.R. The listed spellings missed every accented
+  # form (135 meets, 8,869 athletes); a `\b` then broke 48 compound-word races
+  # (Halbmarathon, Halvmaraton, Mezzamaratona, pulmaraton). The bare stem has
+  # zero false positives across 2,888 names checked.
   list(class = "road_race", pat = paste0(
-    "\\bMarat|\\b10 ?[Kk]m?\\b|\\b5 ?[Kk]m?\\b|",
+    "Marat|\\b10 ?[Kk]m?\\b|\\b5 ?[Kk]m?\\b|",
     "Road Running|Road Race|Elite 10K|10K Elite|Great North Run|",
     "City Run|Corrida")),
   # The European Cross Country Championships (14 editions, 437-529 athletes)

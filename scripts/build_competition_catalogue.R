@@ -69,10 +69,13 @@ NOT_THE_EVENT <- paste(
 # DL banner is a youth meeting. These are applied to the elite classes only, so
 # a road race still classifies correctly as a road race elsewhere.
 NEVER_ELITE <- paste0(
-  # `\bMarat` for the same reason as the road_race rule: the accented and
-  # Catalan spellings were escaping this guard too, so a Spanish marathon could
-  # still be swept into an elite class by a city or sponsor match.
-  "\\bMarat|10 ?[Kk]m?\\b|5 ?[Kk]m?\\b|Road Race|",
+  # `Marat` with NO word boundary, matching the road_race rule exactly. The
+  # accented spellings were escaping this guard, and a `\b` would then let every
+  # compound form (Halbmarathon, Halvmaraton, Mezzamaratona) escape it instead
+  # -- so a German half marathon could be swept into an elite class by a city or
+  # sponsor match. Both patterns must stay identical or the guard and the
+  # classifier disagree about what a road race is.
+  "Marat|10 ?[Kk]m?\\b|5 ?[Kk]m?\\b|Road Race|",
   "karusell|Bislettmila|Distanseserie|Distance challenge|Bislett Spring|",
   "Bislett Open|KM Oslo|Nasjonalt|Sommerstevne|Elite Series|Street Tour|",
   # `m.odzie` rather than a \\u escape: PCRE2 rejects \\u outright, and the
@@ -167,16 +170,29 @@ RULES <- list(
   # Elite road racing belongs in T1 (Pete, 2026-07-31) and the strength measure
   # sorts the Berlin marathon from a local half, so the class just needs to
   # exist for the tiering to be honest about what it is looking at.
-  # `\bMarat` rather than listing spellings. The pattern used to carry
-  # "Marathon" and "Maraton" and missed every accented form, so 135 meets --
-  # 8,869 athletes, the Valencia, Sevilla, Barcelona and Malaga road races --
-  # fell through to `unclassified`: Maraton with an accent, Marato (Catalan),
-  # Mitja Marato, Medio Maraton, Maratona. The stem catches all of them plus
-  # Marathon itself, and nothing else in athletics begins "marat".
+  # `Marat` as a bare substring, with NO word boundary. Two bugs in sequence:
+  #
+  #   (a) the pattern listed "Marathon" and "Maraton" and missed every accented
+  #       form, so 135 meets and 8,869 athletes -- Valencia, Sevilla, Barcelona,
+  #       Malaga -- fell to `unclassified`.
+  #   (b) the first fix used `\bMarat`, and the word boundary then broke 48
+  #       road races where "marathon" sits INSIDE a compound word:
+  #       Halbmarathon (German), Halvmaraton (Norwegian), Mezzamaratona
+  #       (Italian), pulmaraton (Czech), Halfmarathon, Venicemarathon.
+  #       It caught 3 of 25 Halbmarathon meets. The Generali Berliner
+  #       Halbmarathon dropped out of T1.
+  #
+  # Measured before removing the boundary rather than after: of 2,888 catalogue
+  # names containing "marat", exactly 7 do not also match an explicit marathon
+  # word, and all 7 ARE road races (Marato Barcelona, a truncated
+  # "Semi-Maratho", Basque "Maratoia", a "Half Marathlon" typo). Zero false
+  # positives, so the bare stem is safe.
+  #
   # Same word-boundary family as the RAK/Marrakesh and bare-"Championships"
-  # bugs already recorded in this file.
+  # bugs already recorded in this file -- except here the boundary was the bug,
+  # not the fix.
   list(class = "road_race", pat = paste0(
-    "\\bMarat|\\b10 ?[Kk]m?\\b|\\b5 ?[Kk]m?\\b|",
+    "Marat|\\b10 ?[Kk]m?\\b|\\b5 ?[Kk]m?\\b|",
     "Road Running|Road Race|Elite 10K|10K Elite|Great North Run|",
     "City Run|Corrida")),
 
