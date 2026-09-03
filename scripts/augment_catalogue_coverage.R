@@ -147,8 +147,11 @@ if (.unnamed_before > 0L) {
 
 # ---- the population: everything in the corpus the catalogue has never seen -
 corp <- setDT(read_parquet(CORP,
+  # race_key added 2026-09-03 for the `finals` count in the summary below --
+  # counting distinct races needs the race key, and its absence here is what
+  # made the first version of that fix die with "object 'race_key' not found".
   col_select = c("athlete_id", "competition_id", "event_id", "date", "round",
-                 "place", "perf", "source")))
+                 "place", "perf", "source", "race_key")))
 corp[, competition_id := as.character(competition_id)]
 corp[, athlete_id := as.character(athlete_id)]
 n_before <- nrow(corp)
@@ -184,7 +187,11 @@ RULES <- list(
     "Division II|Division III|Div. II|Div. III|NAIA|NJCAA|Conference USA|",
     "Big Ten|SEC Outdoor|SEC Indoor|Pac-12|ACC Outdoor|ACC Indoor|",
     "Inter-University|Intervarsity|Students Open")),
-  list(class = "ncaa", pat = "NCAA|Division I|Div. I|Collegiate|University Championships"),
+  list(class = "ncaa", pat = paste0(
+    "NCAA|Division I|Div. I|Collegiate|University Championships|",
+    "Southeastern Conference|Atlantic Coast Conference|Big Twelve|Big 12|",
+    "Pacific-12|Mountain West|American Athletic Conference|Ivy League|",
+    "Patriot League|Sun Belt Conference|Missouri Valley Conference")),
   list(class = "olympics",       pat = "Olympic Games|XXX+ Olympic"),
   list(class = "world_champs",   pat = "World Athletics Championships|IAAF World Championships(?! in Athletics.*Indoor)|World Championships in Athletics"),
   list(class = "world_indoor",   pat = "World (Athletics )?Indoor Championships|IAAF World Indoor"),
@@ -238,8 +245,31 @@ RULES <- list(
   # meetings, not continental-tour fixtures. Verified the named alternatives
   # below still catch the real ones (35 remain: Motonet GP, Rieti, Zagreb,
   # Padova, the Kusocinski/Szewinska memorials, ...).
-  list(class = "continental_tour", pat = "Continental Tour|Golden Spike|Kusoci|Szewi|Rieti|Zag|Hanzekovic|Padova|Turku|Motonet|Racers Grand Prix"),
-  list(class = "national_champs", pat = "National Championships|Championships of|(USA|British|Jamaican|Kenyan|Australian|Japanese|Chinese|German|French|Italian|Spanish|Polish|South African|Canadian|Indian|Nigerian|Ethiopian|Dutch|Swedish|Norwegian|Finnish|Czech|Swiss|Belgian|Irish|Portuguese|Greek|Turkish|Brazilian|Mexican|Cuban|New Zealand) Championships"),
+  # KEEP IN SYNC with build_competition_catalogue.R's RULES -- this is a
+  # deliberate copy of that list (see this file's header), and the two
+  # drifting apart has already caused two separate bugs. The only
+  # intentional difference is the bare "|Meeting" alternative, dropped here
+  # as scale fix #3 and retained there.
+  list(class = "continental_tour", pat = paste0(
+    "Continental Tour|Golden Spike|Kusoci|Szewi|Rieti|Zag|Hanzekovic|",
+    "Padova|Turku|Motonet|Racers Grand Prix|",
+    "FBK Games|Copernicus Cup|Gyulai|Istvan Memorial|Istv.n Memorial|",
+    "New Balance Indoor Grand Prix|ISTAF|Paavo Nurmi|Kip Keino|Trond Mohn|",
+    "Seiko Golden Grand Prix|Maurie Plant|Meeting Madrid|Cybulski|",
+    "Russian Winter|Ostrava|Meeting de Lyon|Miramas|Belgrade Indoor|",
+    "Cyprus International|Meeting Metz|Metz Moselle|Hauts-de-France|",
+    "Mondeville|Tampere Indoor|Ciutat de Barcelona|Canarias Athletics|",
+    "Meeting Internacional")),
+  list(class = "national_champs", pat = paste0(
+    "National Championships|Championships of|",
+    "(USA|US|American|British|Jamaican|Kenyan|Australian|Japanese|Chinese|",
+    "German|French|Italian|Spanish|Polish|South African|Canadian|Indian|",
+    "Nigerian|Ethiopian|Dutch|Swedish|Norwegian|Finnish|Czech|Swiss|Belgian|",
+    "Irish|Portuguese|Greek|Turkish|Brazilian|Mexican|Cuban|New Zealand|",
+    "Russian|Ukrainian|Hungarian|Austrian|Danish|Romanian|Bulgarian|",
+    "Slovenian|Croatian)",
+    "\\s+(Indoor|Outdoor|Winter|Combined Events|Throws|Race Walking)?\\s*",
+    "Championships")),
   list(class = "team_champs_lower", pat = paste0(
     "Second Division|Third Division|Second League|First League|1st League|",
     "2nd League|3rd League|Race Walking Cup|Throwing Cup")),
@@ -612,8 +642,13 @@ if (!all(ok1, ok2, ok3, ok4, ok5, ok6, ok7, ok8, ok9, ok10, ok11)) {
 }
 
 # ---- write: backup, tmp, atomic replace, matching the established pattern --
+# `finals` MUST BE IN THIS LIST or the loop below sets it to NA for every
+# added row -- computing it in `summ` is not enough. That is exactly what
+# happened on the first attempt (2026-09-03): finals was added to the
+# summary, the run completed clean, and the strength-but-no-finals count
+# was still 2,635 afterwards because this select dropped it.
 new <- cat_tbl[, .(competition_id, comp_name, year, results, athletes, events,
-                    strength, races_won, class, meet_tier)]
+                    finals, strength, races_won, class, meet_tier)]
 for (cn in setdiff(names(cat0), names(new))) new[, (cn) := NA]
 out <- rbind(cat0, new[, names(cat0), with = FALSE])
 stopifnot("duplicate competition ids after rbind" = !anyDuplicated(out$competition_id),

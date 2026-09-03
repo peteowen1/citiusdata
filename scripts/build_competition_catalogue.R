@@ -81,7 +81,17 @@ RULES <- list(
     "Division II|Division III|Div. II|Div. III|NAIA|NJCAA|Conference USA|",
     "Big Ten|SEC Outdoor|SEC Indoor|Pac-12|ACC Outdoor|ACC Indoor|",
     "Inter-University|Intervarsity|Students Open")),
-  list(class = "ncaa", pat = "NCAA|Division I|Div. I|Collegiate|University Championships"),
+  # Spelled-out Division I power-conference championships added 2026-09-03.
+  # They belong here, NOT in ncaa_lower: that class is for Division II/III
+  # and NAIA. The SEC and Big 12 championships measure strength 90-93,
+  # which is elite-adjacent -- filing them as "lower" would have demoted 44
+  # genuinely strong fields out of the model's corpus. Caught in a dry run
+  # before it shipped.
+  list(class = "ncaa", pat = paste0(
+    "NCAA|Division I|Div. I|Collegiate|University Championships|",
+    "Southeastern Conference|Atlantic Coast Conference|Big Twelve|Big 12|",
+    "Pacific-12|Mountain West|American Athletic Conference|Ivy League|",
+    "Patriot League|Sun Belt Conference|Missouri Valley Conference")),
   list(class = "olympics",       pat = "Olympic Games|XXX+ Olympic"),
   # The body was the IAAF until 2019, so London 2017 and Doha 2019 are "IAAF
   # World Championships in Athletics". Fixing this pattern in the HARVESTER and
@@ -166,8 +176,36 @@ RULES <- list(
     "Bislettmila|karusell|Distanseserie|Distance challenge|",
     "Lambertseter|Sommerstevne|Nasjonalt|KM Oslo|Street Tour|",
     "Boysen Memorial|Aspire Indoor Invitational|Challenge Games")),
-  list(class = "continental_tour", pat = "Continental Tour|Golden Spike|Kusoci|Szewi|Rieti|Zag|Hanzekovic|Padova|Turku|Motonet|Racers Grand Prix|Meeting"),
-  list(class = "national_champs", pat = "National Championships|Championships of|(USA|British|Jamaican|Kenyan|Australian|Japanese|Chinese|German|French|Italian|Spanish|Polish|South African|Canadian|Indian|Nigerian|Ethiopian|Dutch|Swedish|Norwegian|Finnish|Czech|Swiss|Belgian|Irish|Portuguese|Greek|Turkish|Brazilian|Mexican|Cuban|New Zealand) Championships"),
+  # Named international one-day meets added 2026-09-03. These were sitting
+  # unclassified and reaching T2 only via the strength fallback, so this is
+  # mostly a class correction rather than a tier move (192 classified, 30
+  # tier changes measured in a dry run).
+  list(class = "continental_tour", pat = paste0(
+    "Continental Tour|Golden Spike|Kusoci|Szewi|Rieti|Zag|Hanzekovic|",
+    "Padova|Turku|Motonet|Racers Grand Prix|",
+    "FBK Games|Copernicus Cup|Gyulai|Istvan Memorial|Istv.n Memorial|",
+    "New Balance Indoor Grand Prix|ISTAF|Paavo Nurmi|Kip Keino|Trond Mohn|",
+    "Seiko Golden Grand Prix|Maurie Plant|Meeting Madrid|Cybulski|",
+    "Russian Winter|Ostrava|Meeting de Lyon|Miramas|Belgrade Indoor|",
+    "Cyprus International|Meeting Metz|Metz Moselle|Hauts-de-France|",
+    "Mondeville|Tampere Indoor|Ciutat de Barcelona|Canarias Athletics|",
+    "Meeting Internacional|Meeting")),
+  # WIDENED 2026-09-03: the nationality list previously required the word
+  # "Championships" to follow the nationality immediately, so every
+  # "<Nation> Indoor Championships" fell through to unclassified -- 679
+  # meets, including the USA/French/German/Russian/Spanish/Italian indoor
+  # nationals. Allows an optional Indoor/Outdoor/Winter/discipline word in
+  # between, and adds the nationalities that were simply missing.
+  list(class = "national_champs", pat = paste0(
+    "National Championships|Championships of|",
+    "(USA|US|American|British|Jamaican|Kenyan|Australian|Japanese|Chinese|",
+    "German|French|Italian|Spanish|Polish|South African|Canadian|Indian|",
+    "Nigerian|Ethiopian|Dutch|Swedish|Norwegian|Finnish|Czech|Swiss|Belgian|",
+    "Irish|Portuguese|Greek|Turkish|Brazilian|Mexican|Cuban|New Zealand|",
+    "Russian|Ukrainian|Hungarian|Austrian|Danish|Romanian|Bulgarian|",
+    "Slovenian|Croatian)",
+    "\\s+(Indoor|Outdoor|Winter|Combined Events|Throws|Race Walking)?\\s*",
+    "Championships")),
   # Team championships split by division. The Super League and First Division
   # (71-75) are real; the Second Division (57), First League (33) and Third
   # Division (19) are not, and nor are the Pan American race walking cups
