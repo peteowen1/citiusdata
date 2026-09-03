@@ -244,10 +244,13 @@ RULES <- list(
   list(class = "world_other", pat = "European Cross Country Championships"),
   list(class = "world_other", pat = "World Athletics Final|Continental Cup|IAAF Grand Prix Final"),
   list(class = "indoor_tour", pat = "World Indoor Tour|Indoor Tour Gold|Millrose|Mill\u00earose"),
+  # Kept in lockstep with build_competition_catalogue.R -- see that file for
+  # why the Central American exclusion changes class only, not tier.
   list(class = "regional_games", pat = paste0(
     "Mediterranean Games|Islamic Solidarity|",
     "Universiade|World University|Southeast Asian Games|Bolivarian|",
-    "Central American|South American Games|GCC Games|Military Games|",
+    "Central American(?! Race Walking| Cross Country)|",
+    "South American Games|GCC Games|Military Games|",
     "Military World|Gulf Games|Pacific Games|Maccabiah")),
   list(class = "diamond_league",
        pat = paste0("Weltklasse Z|Athletissima|Prefontaine Classic|Herculis|",

@@ -200,10 +200,26 @@ RULES <- list(
   # levels, and its Gold meetings are the strongest indoor fields outside a
   # championship.
   list(class = "indoor_tour", pat = "World Indoor Tour|Indoor Tour Gold|Millrose|Mill\u00earose"),
+  # Audited 2026-09-03 against asian_games's conflation, and it is a DIFFERENT
+  # shape of problem. asian_games swept in trials and a sub-regional games
+  # under one label with the wrong tier consequence; here the WA category code
+  # (`wac`) on the meets this class covers is overwhelmingly B/C/D, and B/C/D
+  # all map to T2 under apply_wa_category_tier.R -- so WA's own classification
+  # already agrees with the T2 placement. No tier bug to fix.
+  #
+  # The one real thing found: `Central American` bare matched
+  # "Central American Race Walking Championships" and "Central American Cross
+  # Country Championships" -- single-discipline sub-championships, not the
+  # multi-sport Games -- alongside the actual "Central American Championships"
+  # and "Central American Games". Excluded by lookahead so `class` reads
+  # correctly. Measured before shipping: this changes NO meet's tier (their
+  # wac is B/C/D in every case, same T2 outcome via the WA mapping instead) --
+  # it is a metadata-accuracy fix, not a model-affecting one.
   list(class = "regional_games", pat = paste0(
     "Mediterranean Games|Islamic Solidarity|",
     "Universiade|World University|Southeast Asian Games|Bolivarian|",
-    "Central American|South American Games|GCC Games|Military Games|",
+    "Central American(?! Race Walking| Cross Country)|",
+    "South American Games|GCC Games|Military Games|",
     "Military World|Gulf Games|Pacific Games|Maccabiah")),
   # Diamond League by MEETING name, not by city.
   #
