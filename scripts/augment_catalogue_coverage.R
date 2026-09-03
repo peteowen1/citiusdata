@@ -320,25 +320,47 @@ reclassified %s of %s previously-unclassified named meets
   }
 }
 
-# BY_STRENGTH CONSISTENCY PASS, unconditional -- not gated on .ids/.moved
-# above. The block above only bumps rows reclassified out of "unclassified"
-# IN THIS RUN; a road_race whose class was already fixed by an earlier run
-# (before this BY_STRENGTH bump existed) never re-enters that path, since
-# it's no longer "unclassified". Boston Marathon 2026 (competition_id
-# 7235561) was exactly this case: class already road_race, strength 98,
-# meet_tier stuck at T2_strong, and today's run above reclassified 0 of
-# 22,569 rows because there was nothing left to reclassify -- the class fix
-# had already happened, just never the tier. Sweep the whole table instead
-# of only this run's movers, so a one-time backlog like this actually
-# clears rather than needing the exact right run to have existed.
-.by_strength_fix <- cat0[class %chin% c("road_race") & !is.na(strength) &
-                          strength >= 75 & meet_tier != "T1_elite"]
-if (nrow(.by_strength_fix)) {
-  cat(sprintf("\nBY_STRENGTH consistency: %s road_race row(s) at strength>=75 were below T1_elite\n",
-              nrow(.by_strength_fix)))
-  print(.by_strength_fix[, .(competition_id, comp_name, strength, meet_tier)])
-  cat0[competition_id %chin% .by_strength_fix$competition_id, meet_tier := "T1_elite"]
+# TIER CONSISTENCY PASS, unconditional -- not gated on .ids/.moved above.
+#
+# The .reclass block only re-applies tier rules to rows it moved out of
+# "unclassified" IN THIS RUN. A meet whose class was already fixed by an
+# EARLIER run -- before that run's tier logic knew about its class -- never
+# re-enters that path, because it is no longer "unclassified". The tier
+# then stays wrong permanently, however many times this script runs.
+#
+# Found twice, the same shape both times, 2026-09-03:
+#   - road_race: Boston Marathon 2026 sat at T2_strong with strength 98
+#     because the BY_STRENGTH rule didn't exist when its class was set.
+#     136 road races were affected.
+#   - KNOWN_T1 classes: 97 meets (56 diamond_league at T2, 19 world_other
+#     at T3, 10 world_other at T2, 8 indoor_tour at T2, 4 diamond_league
+#     at T3) -- these three classes were missing from the .reclass K1 list
+#     until today, so anything reclassified before that never got lifted.
+#     The first fix covered only road_race and left this half in place.
+#
+# So: enforce EVERY tier rule over the whole table, not just this run's
+# movers, and mirror build_competition_catalogue.R's fcase exactly. This is
+# a repair pass for accumulated backlog -- in a clean state it finds zero.
+.K1 <- c("olympics","world_champs","commonwealth","world_indoor",
+         "diamond_league","world_other","indoor_tour","european_champs")
+.K3 <- c("age_group","club_meet","ncaa_lower","team_champs_lower")
+.want_tier <- function(class, strength) data.table::fcase(
+  class %chin% .K1, "T1_elite",
+  class %chin% .K3, "T3_development",
+  class == "road_race" & !is.na(strength) & strength >= 75, "T1_elite",
+  class == "road_race" & !is.na(strength) & strength >= 50, "T2_strong",
+  class == "road_race", "T3_development",
+  default = NA_character_)   # NA = this pass has no opinion, leave as-is
+cat0[, .should := .want_tier(class, strength)]
+.fix <- cat0[!is.na(.should) & .should != meet_tier]
+if (nrow(.fix)) {
+  cat(sprintf("\ntier consistency: %s row(s) disagreed with their class's own rule\n", nrow(.fix)))
+  print(.fix[, .N, by = .(class, from = meet_tier, to = .should)][order(-N)])
+  cat0[!is.na(.should) & .should != meet_tier, meet_tier := .should]
+} else {
+  cat("\ntier consistency: no disagreements\n")
 }
+cat0[, .should := NULL]
 
 miss_ids <- setdiff(unique(corp$competition_id), cat0$competition_id)
 cat(sprintf("uncatalogued competitions: %s of %s (%.1f%%)\n",
