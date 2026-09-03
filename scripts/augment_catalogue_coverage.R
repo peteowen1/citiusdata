@@ -373,9 +373,23 @@ reclassified %s of %s previously-unclassified named meets
 # a repair pass for accumulated backlog -- in a clean state it finds zero.
 .K1 <- c("olympics","world_champs","commonwealth","world_indoor",
          "diamond_league","world_other","indoor_tour","european_champs")
+# .K2 WAS MISSING, and it is the band the violations were in. The comment above
+# says this pass mirrors build_competition_catalogue.R's fcase exactly; it did
+# not. With .K1, .K3 and road_race covered and everything else defaulting to NA,
+# the six KNOWN_T2 classes were the one band this check could not see -- so it
+# printed "no disagreements" on 2026-09-03 while 407 meets disagreed: 78,034
+# athletes and 12,630 finals, including the Greek, Irish, Belgian, Canadian,
+# Swiss, Dutch and Brazilian national championships sitting in T3, which the
+# builder's `class %in% KNOWN_T2 -> "T2_strong"` makes unreachable.
+#
+# The tell that it was a guard hole rather than a data quirk: KNOWN_T1 had 0
+# violations and KNOWN_T3 had 0. Only the uncovered band was dirty.
+.K2 <- c("continental","national_champs","ncaa","team_champs",
+         "continental_tour","regional_games")
 .K3 <- c("age_group","club_meet","ncaa_lower","team_champs_lower")
 .want_tier <- function(class, strength) data.table::fcase(
   class %chin% .K1, "T1_elite",
+  class %chin% .K2, "T2_strong",
   class %chin% .K3, "T3_development",
   class == "road_race" & !is.na(strength) & strength >= 75, "T1_elite",
   class == "road_race" & !is.na(strength) & strength >= 50, "T2_strong",
