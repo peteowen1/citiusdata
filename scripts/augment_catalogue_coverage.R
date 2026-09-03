@@ -173,7 +173,11 @@ cat("  separate defect in the career-route harvest; out of scope here)\n")
 # the current steady state now that gap is closed -- see the BY_STRENGTH
 # fix note on the backfill block above for what that skip was hiding).
 NOT_THE_EVENT <- paste(
-  "Trials|Qualifier|Qualifying|Anniversary|Open Meeting|Selection|",
+  # Kept in lockstep with build_competition_catalogue.R. `Trials?` not `Trials`:
+  # a national grand prix named "(WCH & Asian Games Trial)" escaped the
+  # plural-only pattern and was classified asian_games.
+  "Trials?|Qualifier|Qualifying|Anniversary|Open Meeting|Selection|",
+  "Pre.?Tournament|Rehearsal|",
   "Warm.?up|Test Event|Festival|Classic -", sep = "")
 NEVER_ELITE <- paste0(
   "Marathon|Half.?Marathon|10 ?[Kk]m?\\b|5 ?[Kk]m?\\b|Road Race|",
@@ -204,6 +208,9 @@ RULES <- list(
   list(class = "world_other",    pat = "World Athletics (Relays|Cross Country|Race Walking|Road Running)|World Half Marathon|World Cross Country|World Race Walking|World Mountain",
        exclude = "\\bTour\\b"),
   list(class = "commonwealth",   pat = "Commonwealth Games"),
+  # MUST precede asian_games -- the bare "Asian Games" also matches
+  # "South East Asian Games" and "South Asian Games".
+  list(class = "regional_games", pat = "South\\s*-?\\s*East Asian Games|Southeast Asian Games|South Asian Games"),
   list(class = "asian_games",    pat = "Asian Games"),
   list(class = "panam_games",    pat = "Pan American Games"),
   list(class = "african_games",  pat = "African Games|All-Africa Games"),
@@ -285,7 +292,8 @@ cat_of <- function(x) {
   excluded <- grepl(NOT_THE_EVENT, x, ignore.case = TRUE, perl = TRUE)
   for (r in RULES) {
     senior <- r$class %in% c("olympics","world_champs","world_indoor","world_other",
-                             "commonwealth","continental","regional_games")
+                             "commonwealth","continental","regional_games",
+                             "asian_games","african_games","panam_games","european_games")
     elite <- r$class %in% c("olympics","world_champs","world_indoor","commonwealth",
                             "continental","diamond_league")
     never <- grepl(NEVER_ELITE, x, ignore.case = TRUE, perl = TRUE)
@@ -385,7 +393,8 @@ reclassified %s of %s previously-unclassified named meets
 # The tell that it was a guard hole rather than a data quirk: KNOWN_T1 had 0
 # violations and KNOWN_T3 had 0. Only the uncovered band was dirty.
 .K2 <- c("continental","national_champs","ncaa","team_champs",
-         "continental_tour","regional_games")
+         "continental_tour","regional_games",
+         "asian_games","african_games","panam_games","european_games")
 .K3 <- c("age_group","club_meet","ncaa_lower","team_champs_lower")
 .want_tier <- function(class, strength) data.table::fcase(
   class %chin% .K1, "T1_elite",
@@ -521,7 +530,8 @@ cat_tbl <- merge(cat_tbl, strength, by = "competition_id", all.x = TRUE)
 KNOWN_T1 <- c("olympics", "world_champs", "commonwealth", "world_indoor",
               "diamond_league", "world_other", "indoor_tour", "european_champs")
 KNOWN_T2 <- c("continental", "national_champs", "ncaa", "team_champs",
-              "continental_tour", "regional_games")
+              "continental_tour", "regional_games",
+              "asian_games", "african_games", "panam_games", "european_games")
 KNOWN_T3 <- c("age_group", "club_meet", "ncaa_lower", "team_champs_lower")
 BY_STRENGTH <- c("road_race")
 cat_tbl[, meet_tier := fcase(

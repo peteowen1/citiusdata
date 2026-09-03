@@ -55,7 +55,13 @@ cat(sprintf("harvest: %s results | %s competitions\n",
 # Every one of these was a false positive in the first pass. They are listed
 # rather than patched away so the next person can see what the names do.
 NOT_THE_EVENT <- paste(
-  "Trials|Qualifier|Qualifying|Anniversary|Open Meeting|Selection|",
+  # `Trials?` not `Trials`: "National Race Walking Grand Prix 1 (WCH & Asian
+  # Games Trial)" -- a national grand prix -- was classified asian_games because
+  # the singular escaped the plural-only pattern. Pre-Tournament and Rehearsal
+  # added for the same reason: "Jakarta Asian Games Pre-Tournament" and
+  # "Rehearsal Rhine-Ruhr FISU World University Games" are not those events.
+  "Trials?|Qualifier|Qualifying|Anniversary|Open Meeting|Selection|",
+  "Pre.?Tournament|Rehearsal|",
   "Warm.?up|Test Event|Festival|Classic -", sep = "")
 
 # Never an elite senior track meeting, whatever else the name contains. A
@@ -100,6 +106,15 @@ RULES <- list(
   list(class = "world_indoor",   pat = "World (Athletics )?Indoor Championships|IAAF World Indoor"),
   list(class = "world_other",    pat = "World Athletics (Relays|Cross Country|Race Walking|Road Running)|World Half Marathon|World Cross Country|World Race Walking|World Mountain"),
   list(class = "commonwealth",   pat = "Commonwealth Games"),
+  # MUST precede asian_games. Rules are first-match-wins, and the bare string
+  # "Asian Games" also matches "South East Asian Games" and "South Asian Games"
+  # -- so all three were one class, and regional_games' own explicit
+  # "Southeast Asian Games" entry could never fire. Measured 2026-09-03:
+  # asian_games held the Asian Games (581-635 athletes), the SEA Games (228-594)
+  # and the South Asian Games under one label, so no single tier rule could be
+  # right for it. The SEA Games is a sub-regional championship, not a
+  # continental one, which is why it belongs with regional_games.
+  list(class = "regional_games", pat = "South\\s*-?\\s*East Asian Games|Southeast Asian Games|South Asian Games"),
   list(class = "asian_games",    pat = "Asian Games"),
   list(class = "panam_games",    pat = "Pan American Games"),
   list(class = "african_games",  pat = "African Games|All-Africa Games"),
@@ -220,8 +235,12 @@ cat_of <- function(nm) {
   # A meet whose name merely REFERENCES a major is not that major.
   excluded <- grepl(NOT_THE_EVENT, nm, ignore.case = TRUE, perl = TRUE)
   for (r in RULES) {
+    # The four continental-games classes were in NEITHER guard list, so a meet
+    # merely REFERENCING them was classified as them -- which is exactly what
+    # NOT_THE_EVENT exists to prevent for every other senior class.
     senior <- r$class %in% c("olympics","world_champs","world_indoor","world_other",
-                             "commonwealth","continental","regional_games")
+                             "commonwealth","continental","regional_games",
+                             "asian_games","african_games","panam_games","european_games")
     elite <- r$class %in% c("olympics","world_champs","world_indoor","commonwealth",
                             "continental","diamond_league")
     never <- grepl(NEVER_ELITE, nm, ignore.case = TRUE, perl = TRUE)
@@ -411,7 +430,15 @@ cat_tbl[, class := cat_of(comp_name)]
 KNOWN_T1 <- c("olympics", "world_champs", "commonwealth", "world_indoor",
               "diamond_league", "world_other", "indoor_tour", "european_champs")
 KNOWN_T2 <- c("continental", "national_champs", "ncaa", "team_champs",
-              "continental_tour", "regional_games")
+              "continental_tour", "regional_games",
+              # These four were in NO tier list, so continental multi-sport
+              # championships fell through to the unclassified strength band and
+              # landed wherever the number put them -- the 19th Asian Games (581
+              # athletes) was T2 by luck of scoring 83.4, while the Southeast
+              # Asian Games sat in T3. They are peers of regional_games, which
+              # was already here. With the split above, asian_games now holds
+              # only the actual Asian Games.
+              "asian_games", "african_games", "panam_games", "european_games")
 KNOWN_T3 <- c("age_group", "club_meet", "ncaa_lower", "team_champs_lower")
 # Road racing spans the Berlin marathon and a local 10K, so it is the one class
 # where measured strength genuinely decides the tier rather than the label.
