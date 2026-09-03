@@ -6,6 +6,40 @@ Everything else is either a canonical table, a derived store, a live
 harvest cache, or disposable experiment output — moving or deleting
 anything else here never touches git history.
 
+## Published artifacts (new 2026-09-03)
+
+Until 2026-09-03 **citiusdata had zero GitHub releases**, so everything in this
+directory existed only on the machine that produced it — despite the repo README
+describing the release-as-data-bus pattern as though it were built. The write
+side now exists (`scripts/publish_release.R`); the read side does not.
+
+| Release tag | Assets | Size |
+|---|---|---|
+| `corpus-data` | `athletics_corpus.parquet` | 319 MB |
+| `catalogue-data` | `competition_catalogue.parquet`, `competition_name_lookup.parquet` | 2 MB |
+
+Tags follow torpdata's `<dataset>-data` convention, because `torp` is the only
+package in the ecosystem with a working read side and its loader builds
+`releases/download/{tag}/{file}`. **Nothing in `citius` downloads these yet** —
+the loaders read local files, so these are backup and distribution, not a live
+dependency. Building the read side needs a partitioning decision first: `torp`
+splits assets by season so one round does not pull 484 MB, whereas
+`athletics_corpus.parquet` is a single 320 MB file.
+
+## Current row counts (2026-09-03)
+
+| Table | Rows | Note |
+|---|---|---|
+| `championship_results.rds` | 4,544,586 | competition route |
+| `athletics_history.rds` | 4,978,201 | career route |
+| `athletics_corpus.parquet` | **7,545,158** | the union, after dedup |
+| `competition_catalogue.parquet` | **32,088** | T1 709 / T2 5,841 / T3 25,538 |
+
+Two corpus columns were repaired the same day — `comp_name` **0% → 57.6%** (100%
+on the 2.5M rows that have no `competition_id`) and `sex` **52.0% → 99.7%** —
+both caused by source column names the union did not match. See
+`docs/reference/silent-bugs.md`.
+
 ## Canonical tables (the ones that matter)
 
 | File | What it is | Built by | Dictionary |
@@ -13,7 +47,7 @@ anything else here never touches git history.
 | `championship_results.rds` | one row per athlete per race, ~4.5M rows | harvest + merge pipeline | [data-dictionary-championship-results.md](../../docs/reference/data-dictionary-championship-results.md) |
 | `competition_catalogue.parquet` | one row per competition, ~32k rows (tier, class, measured strength) — this **is** the meet registry. Browsable at https://claude.ai/code/artifact/73f3a002-2f5d-4cec-a248-364724a9f213 (filterable by tier/class/year/strength; re-export + republish via `scripts/export_meet_registry_artifact.R` + `scripts/meet_registry_artifact_template.html` when the catalogue changes meaningfully) | `build_competition_catalogue.R`, then `augment_catalogue_coverage.R` | [data-dictionary-competition-catalogue.md](../../docs/reference/data-dictionary-competition-catalogue.md) |
 | `athletics_corpus.rds` / `.parquet` | the ability-estimation corpus | `build_athletics_corpus.R` | [data-dictionary-athletics-corpus.md](../../docs/reference/data-dictionary-athletics-corpus.md) |
-| `athletics_history.rds` | career-route history sweep | harvest pipeline | same shape as the competition-route columns in the corpus dictionary above |
+| `athletics_history.rds` | career-route history sweep, 4.98M rows | harvest pipeline | [data-dictionary-athletics-history.md](../../docs/reference/data-dictionary-athletics-history.md) |
 | `calibration_corpus_csigma_coast.rds` | **the deployed calibration** — read via `_deployed.R`, never rename/move this one | `recalibrate_corpus.R` | [data-dictionary-model-artifacts.md](../../docs/reference/data-dictionary-model-artifacts.md) |
 | `family_pool_offsets.rds`, `elite_cohort.rds`, `aging.rds` | model input tables | see `scripts/README.md` "Shipping path" | same, `data-dictionary-model-artifacts.md` |
 | `citius.duckdb` | DuckDB mirror of the three RDS tables above (championship_results/athletics_corpus/athletics_history) | `bootstrap_citius_duckdb.R` | same schema as the `.rds` dictionaries |
