@@ -23,6 +23,7 @@
 
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_merge_guards.R"))
 
 OUT <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "ath_athlete_cache")
@@ -174,7 +175,12 @@ if (!identical(Sys.getenv("CITIUS_ASSEMBLE", "0"), "1")) {
   hist <- rbindlist(parts, use.names = TRUE, fill = TRUE)
   rm(parts); invisible(gc())
   if (nrow(hist)) {
-    saveRDS(hist, file.path(OUT, "athletics_history.rds"))
+    # Atomic (tmp-then-rename), matching the parquet twin two lines below --
+    # found by review 2026-09-04 that this was the one direct write in the
+    # block, bare `saveRDS` straight to the final path. A crash mid-write on
+    # this 8M-row object leaves a truncated athletics_history.rds, which
+    # build_athletics_corpus.R reads directly as one of its two inputs.
+    citius_atomic_write(hist, file.path(OUT, "athletics_history.rds"))
     # Parquet twin: temp-then-rename like the corpus builders, and LOUD on any
     # failure -- the .rds write above already succeeded, so a quiet skip here
     # leaves two vintages of the same table on disk with nothing recording it.

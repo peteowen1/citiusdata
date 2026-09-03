@@ -132,6 +132,7 @@ cat(sprintf("competition names available: %s\n", format(nrow(nm), big.mark = ","
 # alongside the K1/K3 bumps below -- see that block.
 .unnamed_before <- cat0[is.na(comp_name) | !nzchar(comp_name), .N]
 if (.unnamed_before > 0L) {
+  .rows_before_merge <- nrow(cat0)
   cat0 <- merge(cat0, nm[, .(competition_id, .lk_name = competition)],
                 by = "competition_id", all.x = TRUE)
   cat0[(is.na(comp_name) | !nzchar(comp_name)) &
@@ -142,7 +143,14 @@ if (.unnamed_before > 0L) {
               format(.unnamed_before - .unnamed_after, big.mark = ","),
               format(.unnamed_before, big.mark = ","),
               format(.unnamed_after, big.mark = ",")))
-  stopifnot("the backfill lost rows" = TRUE)
+  # THE ASSERTION WAS `= TRUE` -- a literal, unconditional pass, checking
+  # nothing. Found by review 2026-09-04. It sat directly under an
+  # `all.x = TRUE` merge: the exact join shape that fans out silently if `nm`
+  # (competition_name_lookup.parquet) ever contains a duplicate
+  # competition_id. `nm` is deduplicated where it's first built
+  # (augment_catalogue_road_majors.R), but nothing here re-checks that before
+  # trusting it -- this is the real comparison that claim needed.
+  stopifnot("the backfill lost or duplicated rows" = nrow(cat0) == .rows_before_merge)
 }
 
 # ---- the population: everything in the corpus the catalogue has never seen -

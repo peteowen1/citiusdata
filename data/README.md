@@ -33,10 +33,13 @@ splits assets by season so one round does not pull 484 MB, whereas
 | `championship_results.rds` | 4,544,586 | competition route |
 | `athletics_history.rds` | 4,978,201 | career route |
 | `athletics_corpus.parquet` | **7,545,158** | the union, after dedup |
-| `competition_catalogue.parquet` | **32,088** | T1 709 / T2 5,841 / T3 25,538 |
+| `competition_catalogue.parquet` | **32,088** | T1 860 / T2 4,610 / T3 26,618 (2026-09-03 evening, after `apply_wa_category_tier.R` and the class-rule fixes — see `data-dictionary-competition-catalogue.md`) |
 
-Two corpus columns were repaired the same day — `comp_name` **0% → 57.6%** (100%
-on the 2.5M rows that have no `competition_id`) and `sex` **52.0% → 99.7%** —
+Two corpus columns were repaired the same day — `comp_name` **0% → 46.5%** (100%
+on the 2.5M rows that have no `competition_id`; lower than the career route's
+own 100% because dedup keeps the competition route's copy of a duplicated
+performance, and that route is only 11.1% filled at the source) and `sex`
+**52.0% → 99.7%** —
 both caused by source column names the union did not match. See
 `docs/reference/silent-bugs.md`.
 

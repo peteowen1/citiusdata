@@ -14,6 +14,7 @@ suppressMessages({library(data.table); library(jsonlite)})
 D <- here::here("citiusdata", "data")
 
 source(here::here("citiusdata", "scripts", "_deployed.R"))
+source(here::here("citiusdata", "scripts", "_merge_guards.R"))
 crs <- .repair_sex_from_title(parse_crs_export(file.path(D, "glasgow2026_athletics_crs.json")))
 if (!is.null(attr(crs, "sex_repaired")))
   cat("repaired", attr(crs, "sex_repaired"), "rows whose route disagreed with the page title
@@ -36,7 +37,10 @@ cat(sprintf("\nfinals: feed %d | CRS %d | union %d\n",
 cat("\nevents the CRS ADDS that the feed never had:\n")
 print(sort(setdiff(newf, oldf)))
 
-saveRDS(crs, file.path(D, "glasgow2026_athletics_crs.rds"))
+# Atomic (tmp-then-rename) -- found by review 2026-09-04. Lower stakes than
+# the shared corpus (this is a distinctly-named derived output, never
+# overwriting its own input), but the same crash-safety pattern is cheap here.
+citius_atomic_write(crs, file.path(D, "glasgow2026_athletics_crs.rds"))
 arrow::write_parquet(crs, file.path(D, "glasgow2026_athletics_crs.parquet"))
 cat("\nwrote glasgow2026_athletics_crs.{rds,parquet}\n")
 

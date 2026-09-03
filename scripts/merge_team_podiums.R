@@ -13,6 +13,7 @@
 library(data.table)
 OUT <- here::here("citiusdata", "data")
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
+source(here::here("citiusdata", "scripts", "_merge_guards.R"))
 
 base <- as.data.table(readRDS(file.path(OUT, "sport_medal_tables.rds")))
 pods <- as.data.table(readRDS(file.path(OUT, "team_sport_podiums.rds")))
@@ -81,6 +82,8 @@ print(merged[is_team == TRUE, .(sport_editions = uniqueN(paste(games, year)),
                                 golds = sum(gold)), by = sport][order(-sport_editions)])
 
 merged[, is_team := NULL]
-saveRDS(merged, file.path(OUT, "sport_medal_tables_with_podiums.rds"))
+# Atomic (tmp-then-rename) -- found by review 2026-09-04, same as the two
+# glasgow2026_*.R merge scripts.
+citius_atomic_write(merged, file.path(OUT, "sport_medal_tables_with_podiums.rds"))
 fwrite(cmp, file.path(OUT, "sport_medal_tables_coverage_change.csv"))
 cat("\nSaved sport_medal_tables_with_podiums.rds\n")

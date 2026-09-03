@@ -44,6 +44,12 @@ cat(sprintf("catalogue: %s meets\n", format(nrow(ct), big.mark = ",")))
 
 # Preserve career-best before touching anything. Idempotent: a second run must
 # not overwrite strength_pb with an already-EW `strength`.
+#
+# `.expect_pb_n` is captured HERE, before either branch runs, so the final
+# assertion can check the real claim ("strength_pb still has as many non-NA
+# values as it started with") rather than `any(!is.na(...))`, which only
+# proves one row survived and would pass even after a partial overwrite.
+.expect_pb_n <- if ("strength_pb" %in% names(ct)) sum(!is.na(ct$strength_pb)) else sum(!is.na(ct$strength))
 if (!"strength_pb" %in% names(ct)) {
   ct[, strength_pb := strength]
   cat("preserved career-best strength as `strength_pb`\n")
@@ -106,11 +112,19 @@ for (y in c(2025, 2026))
       format(ct[meet_tier %chin% c("T1_elite","T2_strong") & year == y,
                 sum(finals, na.rm = TRUE)], big.mark = ",")))
 
-# Assert the VALUES, not that the script ran. Counting rows is not checking them.
+# Assert the VALUES, not that the script ran. Counting rows is not checking
+# them -- and `all()` over a possibly-EMPTY set is the specific way that goes
+# wrong: `all(logical(0))` is TRUE in R, so "strength did not adopt EW" would
+# pass even if the merge above matched zero rows (e.g. a competition_id
+# type/format mismatch between the two parquet files -- the exact column-
+# mismatch failure mode this session hit four times elsewhere). Found by
+# review 2026-09-04. The `n > 0` check makes that case fail loudly instead of
+# passing silently; `n` is the count already printed above at line ~71.
 stopifnot(
   "row count changed"        = nrow(ct) == length(before_tier),
   "duplicate ids"            = !any(duplicated(ct$competition_id)),
-  "career-best not preserved"= "strength_pb" %in% names(ct) && any(!is.na(ct$strength_pb)),
+  "no meets adopted EW"      = n > 0,
+  "career-best not preserved"= "strength_pb" %in% names(ct) && sum(!is.na(ct$strength_pb)) == .expect_pb_n,
   "strength did not adopt EW"= ct[!is.na(strength_ew), all(strength == strength_ew)],
   "a tier is missing"        = !any(is.na(ct$meet_tier)))
 

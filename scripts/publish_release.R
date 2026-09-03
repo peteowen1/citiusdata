@@ -53,8 +53,19 @@ INCLUDE_BIG <- nzchar(Sys.getenv("CITIUS_PUBLISH_ALL"))
 # every release already exists.
 .owner <- sub("/.*", "", REPO); .name <- sub(".*/", "", REPO)
 gh_releases <- function() {
+  # An auth/network/rate-limit failure here looks IDENTICAL to "repo genuinely
+  # has no releases yet" -- both return an empty list downstream, and the rest
+  # of the script's control flow is mostly self-healing to that (422-already-
+  # exists is treated as success, and the by-tag confirmation loop hard-stops
+  # if a release truly can't be found). But an ongoing auth problem on the
+  # READ side specifically would go completely unreported without this.
+  # Found by review 2026-09-04.
   r <- tryCatch(gh::gh("/repos/{owner}/{repo}/releases", owner = .owner, repo = .name,
-                       .limit = Inf), error = function(e) list())
+                       .limit = Inf),
+               error = function(e) {
+                 cli::cli_warn("gh_releases() failed, treating as empty: {conditionMessage(e)}")
+                 list()
+               })
   vapply(r, function(x) x$tag_name %||% NA_character_, character(1))
 }
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -114,6 +125,7 @@ for (tg in unique(vapply(todo, function(a) a$tag, character(1)))) {
 if (length(todo)) Sys.sleep(2)
 
 # PASS 2 -- upload.
+failed <- character(0)
 for (a in todo) {
   p <- file.path(D, a$file)
   mb <- file.size(p) / 1048576
@@ -135,14 +147,21 @@ for (a in todo) {
     Filter(function(x) identical(x$name, basename(a$file)), rel$assets)
   if (!length(hit)) {
     cat("FAILED - asset not on the release\n")
+    # THE CHECK HAS TO BE ENFORCED, NOT JUST PRINTED. This block existed
+    # specifically because a success code from pb_upload() does not prove the
+    # asset is retrievable -- but until this fix, every branch here was a bare
+    # cat() with no stop()/exit code, so the script always returned 0 even when
+    # every upload had just failed the check it exists to run. Caught by
+    # review, not by using it: nothing had actually failed silently yet.
+    failed <- c(failed, a$file)
   } else {
     sz <- hit[[1]]$size
+    ok <- abs(sz - file.size(p)) < 1024
     cat(sprintf("%s (remote %.1f MB, state %s)\n",
-                if (abs(sz - file.size(p)) < 1024) "ok" else "SIZE MISMATCH",
-                sz / 1048576, hit[[1]]$state))
+                if (ok) "ok" else "SIZE MISMATCH", sz / 1048576, hit[[1]]$state))
+    if (!ok) failed <- c(failed, a$file)
   }
 }
-
 cat("\nfinal state (read from the API, not piggyback's cache):\n")
 rr <- tryCatch(gh::gh("/repos/{owner}/{repo}/releases", owner = .owner, repo = .name,
                       .limit = Inf), error = function(e) list())
@@ -151,3 +170,13 @@ for (x in rr) {
   mb <- if (n) sum(vapply(x$assets, function(a) a$size, numeric(1))) / 1048576 else 0
   cat(sprintf("  %-18s %d asset(s), %.1f MB\n", x$tag_name, n, mb))
 }
+
+# ENFORCED, NOT JUST PRINTED. Before this fix every branch of the verification
+# above was a bare cat() with no stop()/nonzero exit anywhere in the file, so
+# the script always returned 0 even when every single upload had just failed
+# the check it exists to run -- exactly the failure mode its own header
+# comment says the check exists to catch. Placed after the final-state report
+# so a failure still prints full diagnostics before the abort.
+if (length(failed))
+  stop(sprintf("upload verification failed for: %s -- re-run to retry, do not treat this as published",
+              paste(failed, collapse = ", ")))

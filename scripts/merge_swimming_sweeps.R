@@ -11,6 +11,7 @@
 # the union is what counts.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages({library(data.table); library(jsonlite)})
+source(here::here("citiusdata", "scripts", "_merge_guards.R"))
 D <- here::here("citiusdata", "data")
 
 f1 <- file.path(D, "glasgow2026_swimming.json")
@@ -49,6 +50,8 @@ cat(sprintf("individual events WITH A COMPLETED FINAL: %d of %d\n",
 cat("\nstill absent entirely:\n"); print(setdiff(expect, have))
 cat("\npresent but no final captured:\n"); print(setdiff(intersect(expect, have), fin))
 
-saveRDS(m, file.path(D, "glasgow2026_swimming_merged.rds"))
+# Atomic (tmp-then-rename) -- found by review 2026-09-04, same as
+# merge_athletics_crs.R.
+citius_atomic_write(m, file.path(D, "glasgow2026_swimming_merged.rds"))
 arrow::write_parquet(m, file.path(D, "glasgow2026_swimming_merged.parquet"))
 cat("\nwrote glasgow2026_swimming_merged.{rds,parquet}\n")

@@ -82,9 +82,10 @@ before <- copy(ct$tier_pre_wa)
 ct[, wac := NA_character_]
 ct[!is.na(tier_codes), wac := best_code(tier_codes)]
 ct[, .apply := !class %chin% KNOWN & !is.na(wac)]
+.n_wac <- ct[.apply == TRUE, .N]
 cat(sprintf("unclassified meets: %s | with a WA code: %s | without (unchanged): %s\n",
             format(ct[!class %chin% KNOWN, .N], big.mark=","),
-            format(ct[.apply == TRUE, .N], big.mark=","),
+            format(.n_wac, big.mark=","),
             format(ct[!class %chin% KNOWN & is.na(wac), .N], big.mark=",")))
 
 ct[.apply == TRUE, meet_tier := TIER[wac]]
@@ -116,6 +117,11 @@ stopifnot("row count changed"   = nrow(ct) == length(before),
           # table while meet_tier is already subset, so the lengths disagree.
           # Same trap as the reporting line above.
           "a known class moved" = ct[class %chin% KNOWN, all(meet_tier == .from)],
+          # `all()` over a possibly-EMPTY set is TRUE in R, so "mapping not
+          # applied" would pass even if .n_wac were 0 (e.g. `wac` extraction
+          # silently returning nothing). Found by review 2026-09-04, same
+          # shape as apply_strength_ew.R's identical gap.
+          "no meets took a WA tier" = .n_wac > 0,
           "mapping not applied" = ct[.apply == TRUE, all(meet_tier == TIER[wac])],
           "a tier is missing"   = !any(is.na(ct$meet_tier)))
 ct[, c(".apply", ".from") := NULL]

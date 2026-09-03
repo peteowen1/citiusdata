@@ -94,7 +94,27 @@ cat(sprintf("half-lives: %s (default %s)\n",
 # C-speed: decay every mark to a common origin, cumsum, then shift() by one to
 # exclude the current race. An frollapply() with a custom function would run
 # R-level code 4M times, which citius/CLAUDE.md forbids on the big dimension.
-setorder(ch, athlete_id, event_id, date)
+#
+# THE ORDER WITHIN A DAY MUST BE DETERMINISTIC, AND IT WASN'T. `setorder` by
+# date alone leaves same-day rows (a heat and a final on the same day is the
+# common case) in whatever order the merge() just above happened to produce --
+# merge() gives no row-order guarantee, so a heat's "prior form" could draw on
+# that same day's final, exactly the leakage this file's own header says the
+# strictly-prior design exists to prevent. Found by review 2026-09-04: affects
+# 568,090 rows (~14% of the post-dedup table), 277,526 same-day groups.
+#
+# Fixed with a round-sequence tiebreak, reusing .round_class() (citius/R/
+# ability.R) rather than inventing a second round classifier -- this package
+# already paid for getting round precedence wrong once (see that function's
+# own comment: naive "final" pattern matching classified 14,764 semi-final
+# results as finals). "other" (unrecognised round codes, e.g. combined-event
+# group markers) sorts first as the conservative choice: it cannot then draw
+# leaked info from a same-day heat/semi/final, only the reverse.
+.seq <- c(other = 0L, heat = 1L, quarter = 2L, semi = 3L, final = 4L)
+ch[, .rseq := .seq[.round_class(round)]]
+ch[is.na(.rseq), .rseq := 0L]
+setorder(ch, athlete_id, event_id, date, .rseq)
+ch[, .rseq := NULL]
 ch[, d := as.numeric(date)]
 ch[, wk := 2^((d - min(d)) / hl), by = .(athlete_id, event_id)]
 ch[, `:=`(csw = cumsum(wk), cswp = cumsum(wk * perf)), by = .(athlete_id, event_id)]

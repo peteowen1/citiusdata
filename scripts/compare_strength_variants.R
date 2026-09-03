@@ -26,7 +26,15 @@ cat(sprintf("half-lives in use: %s (default %s)\n",
             paste(sprintf("%s=%s", names(hl_map), hl_map), collapse = ", "),
             DEPLOYED$half_life))
 
-setorder(ch, athlete_id, event_id, date)
+# Same-day tiebreak, same fix as build_strength_ew.R (2026-09-04 review):
+# date alone leaves a same-day heat/final pair in whatever order the earlier
+# merge happened to produce, which can leak a same-day final into a heat's
+# "prior" form. Reuses .round_class() rather than a second classifier.
+.seq <- c(other = 0L, heat = 1L, quarter = 2L, semi = 3L, final = 4L)
+ch[, .rseq := .seq[.round_class(round)]]
+ch[is.na(.rseq), .rseq := 0L]
+setorder(ch, athlete_id, event_id, date, .rseq)
+ch[, .rseq := NULL]
 ch[, d := as.numeric(date)]
 
 # EWMA over STRICTLY PRIOR races. Decay to a common origin so the whole

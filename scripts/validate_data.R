@@ -229,16 +229,32 @@ if (file.exists(cp)) {
     else ok("catalogue competition_id is unique (%s rows)", format(nrow(ct), big.mark = ","))
 
     # 4. TIER RULES HONOURED. Mirrors build_competition_catalogue.R's fcase.
-    #    This is the check whose KNOWN_T2 gap hid 407 violations.
+    #    This is the check whose KNOWN_T2 gap hid 407 violations -- and this
+    #    copy of K2 was ITSELF missing the four continental-games classes
+    #    (asian_games/african_games/panam_games/european_games) that fix
+    #    added, found by review 2026-09-04. The comment above names the exact
+    #    bug this check exists to catch while its own list drifted out of sync
+    #    with the source of truth (build_competition_catalogue.R,
+    #    augment_catalogue_coverage.R, apply_strength_ew.R all agree; this file
+    #    was the one holdout). Same failure family as everything else this
+    #    week: a duplicated list drifts, and nothing enforces the two copies
+    #    agree.
     K1 <- c("olympics","world_champs","commonwealth","world_indoor","diamond_league",
             "world_other","indoor_tour","european_champs")
     K2 <- c("continental","national_champs","ncaa","team_champs","continental_tour",
-            "regional_games")
+            "regional_games","asian_games","african_games","panam_games","european_games")
     K3 <- c("age_group","club_meet","ncaa_lower","team_champs_lower")
     for (spec in list(list(K1, "T1_elite"), list(K2, "T2_strong"), list(K3, "T3_development"))) {
-      bad <- ct[class %chin% spec[[1]] & meet_tier != spec[[2]]]
+      pop <- ct[class %chin% spec[[1]]]
+      # Population-nonzero guard: without it, a band with ZERO meets (e.g. a
+      # class name typo, or a live class silently renamed upstream) reports
+      # NOTHING -- indistinguishable from "checked, no violations found." A
+      # run can look clean specifically because the classification broke.
+      if (!nrow(pop)) { flag("no meets found in any %s class -- classification may be broken", spec[[2]]); next }
+      bad <- pop[meet_tier != spec[[2]]]
       if (nrow(bad)) flag("%d meet(s) in a %s class are not %s (e.g. %s)", nrow(bad),
                           spec[[2]], spec[[2]], bad[order(-athletes)][1]$comp_name)
+      else ok("all %d %s-class meets are %s", nrow(pop), spec[[2]], spec[[2]])
     }
     unnamed <- ct[is.na(comp_name) | !nzchar(trimws(comp_name))]
     if (nrow(unnamed))
