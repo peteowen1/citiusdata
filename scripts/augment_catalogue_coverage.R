@@ -454,7 +454,21 @@ miss_corp <- corp[competition_id %chin% miss_ids]
 summ <- miss_corp[, .(
   first_date = min(date, na.rm = TRUE), last_date = max(date, na.rm = TRUE),
   year = year(min(date, na.rm = TRUE)), results = .N, athletes = uniqueN(athlete_id),
-  events = uniqueN(event_id)
+  events = uniqueN(event_id),
+  # `finals` WAS MISSING FROM THIS SUMMARY ENTIRELY (fixed 2026-09-03), so
+  # every competition this script adds -- ~25,000 of the catalogue's 32,089
+  # -- carried finals = NA by construction. It showed up as 2,635 meets
+  # holding a real strength score next to an empty finals count, which is
+  # self-contradictory: strength is computed FROM final rows, so a scored
+  # meet has finals by definition.
+  #
+  # Uses is_final_round(), not a literal grepl("final"): the career route
+  # this script reads encodes rounds as "F"/"F1".."F9" (scale fix #2, see
+  # that function's own comment). The base builder's literal regex is
+  # correct for ITS input -- championship_results.rds has zero short codes,
+  # verified 2026-09-03 -- so this is a genuine per-source difference, not
+  # one of the two scripts being wrong.
+  finals = uniqueN(race_key[is_final_round(round)])
 ), by = competition_id]
 cat_tbl <- merge(miss_nm, summ, by = "competition_id", all.x = TRUE)
 cat_tbl <- merge(cat_tbl, strength, by = "competition_id", all.x = TRUE)

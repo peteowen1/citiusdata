@@ -309,16 +309,13 @@ cat_tbl <- ch[, .(
   athletes    = uniqueN(athlete_id),
   events      = uniqueN(event_id),
   races       = uniqueN(race_key),
-  # SHORT ROUND CODES COUNT AS FINALS TOO. The career-route feed encodes
-  # rounds as "F"/"F1".."F9" where the competition route spells out
-  # "Final", so a literal grepl("final") missed them entirely: 2,635 meets
-  # carried a real strength score alongside finals = NA, 1,626 of them road
-  # races. augment_catalogue_coverage.R already documents and handles this
-  # as its own "scale fix #2"; the base builder never got the same fix.
-  # Found 2026-09-03 via the meet registry artifact, which showed "no
-  # scored finals" for meets that plainly had races.
-  finals      = uniqueN(race_key[(grepl("final", round, ignore.case = TRUE) |
-                                    grepl("^F[0-9]*$", round)) &
+  # Literal "Final" only, deliberately. This script's input is
+  # championship_results.rds (the competition route), which contains ZERO
+  # short round codes -- verified 2026-09-03: 3,177,304 rows match the
+  # literal, 0 match "^F[0-9]*$". The short-code handling belongs in
+  # augment_catalogue_coverage.R, whose input (the career route) does use
+  # them. A brief "fix" adding short codes here was reverted as inert.
+  finals      = uniqueN(race_key[grepl("final", round, ignore.case = TRUE) &
                                    !grepl("semi", round, ignore.case = TRUE)]),
   tier_codes  = paste(sort(unique(na.omit(tier))), collapse = "/"),
   n_tier      = uniqueN(na.omit(tier))
