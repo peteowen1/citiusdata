@@ -2,14 +2,29 @@
   Meet registry artifact template. To republish:
   1. Rscript scripts/export_meet_registry_artifact.R   -> data/meet_registry_artifact.json (meet level, ~4MB)
      Rscript scripts/export_meet_events.R              -> data/meet_registry_events.json  (event level, ~8MB)
-  2. Splice BOTH placeholders below (__MEET_DATA_JSON__ and
-     __MEET_EVENTS_JSON__) with those files' contents -- a plain string
-     replace on the raw text, done with a script, not by hand (they're
-     megabytes). Node one-liner:
+  2. Splice the two MEET_DATA / MEET_EVENTS placeholders in the script
+     block below (each is that name wrapped in double underscores) with
+     those files' contents -- a plain string replace on the raw text, done
+     with a script, not by hand (they're megabytes).
+
+     TWO TRAPS, both hit for real on 2026-09-03:
+     (a) Do NOT write the placeholder tokens literally in this comment.
+         String.replace() takes the FIRST match, so a mention up here gets
+         substituted instead of the real one below, leaving broken JS and
+         a silently empty table.
+     (b) Pass a FUNCTION as the replacement, not the string. A raw string
+         replacement interprets $& / $1 / $` patterns, so any "$" in a meet
+         name would corrupt the output.
+
        node -e 'const fs=require("fs");
+         const P=s=>"__"+s+"__";
          let h=fs.readFileSync("scripts/meet_registry_artifact_template.html","utf8");
-         h=h.replace("__MEET_DATA_JSON__", fs.readFileSync("data/meet_registry_artifact.json","utf8"));
-         h=h.replace("__MEET_EVENTS_JSON__", fs.readFileSync("data/meet_registry_events.json","utf8"));
+         const meets=fs.readFileSync("data/meet_registry_artifact.json","utf8");
+         const events=fs.readFileSync("data/meet_registry_events.json","utf8");
+         h=h.replace(P("MEET_DATA_JSON"), ()=>meets);
+         h=h.replace(P("MEET_EVENTS_JSON"), ()=>events);
+         if (h.includes(P("MEET_DATA_JSON"))||h.includes(P("MEET_EVENTS_JSON")))
+           throw new Error("a placeholder was not replaced");
          fs.writeFileSync("/tmp/meet_registry_final.html", h);'
   3. Publish /tmp/meet_registry_final.html as an Artifact, same file path as
      last time if updating the existing published page (ask the user for
@@ -116,17 +131,27 @@
   }
 
   .caveats {
-    margin: 14px 32px 0;
-    padding: 12px 16px;
+    margin: 10px 32px 0;
+    padding: 8px 14px;
     background: var(--t2-bg);
     border: 1px solid var(--border);
     border-radius: 8px;
-    font-size: 0.82rem;
+    font-size: 0.8rem;
     color: var(--text);
-    line-height: 1.55;
+    line-height: 1.5;
     max-width: 900px;
   }
   .caveats strong { color: var(--t2); }
+  .caveats summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--t2);
+    list-style: none;
+  }
+  .caveats summary::-webkit-details-marker { display: none; }
+  .caveats summary::before { content: "▸ "; }
+  .caveats[open] summary::before { content: "▾ "; }
+  .caveats p { margin: 10px 0 0; }
 
   .controls {
     display: flex;
@@ -300,40 +325,27 @@
   <div class="subtitle">Every catalogued athletics competition, tiered by measured field strength. Source: <code>competition_catalogue.parquet</code>, 32,089 competitions — 18,524 shown here (never-scored, never-classified meets excluded from this view).</div>
 </header>
 
-<div class="caveats">
-  <strong>What "strength" means:</strong> a 0-100 measured field-quality
-  score, not an opinion. For each finalist, take their own career-best mark
-  as a percentile within that event and era (e.g. "better than 92% of
-  1500m runners active 2020-2024"); average that across the finalists in
-  one event, then average across every event contested at the meet. A
-  strength of 100 means the field was, on average, the best-ever standard
-  for those events in that era — it measures who showed up, not how fast
-  the times were on the day. Meets below 5 scored events are withheld
-  (shown as "—") unless they're road races, which are exempt since a
-  marathon only ever has one or two events to score.
-  <br><br>
-  <strong>What "tier" means:</strong> T1_elite / T2_strong / T3_development.
-  For most classes (Olympics, World Championships, Diamond League, age-group
-  meets, etc.) tier is fixed by what the meet named itself. For road races
-  and anything the name-matcher couldn't classify, tier is derived from
-  strength instead (≥75 → T1, ≥50 → T2, else T3).
-  <br><br>
-  <strong>Click any meet</strong> to expand its events — winning mark,
-  how close that mark is to the world record ("% of WR": 100% would equal
-  the WR, computed direction-aware so it works for both times and
-  distances), the number of athletes in that event's final, and that single
-  event's own strength score before it was averaged into the meet's.
-  <br><br>
-  <strong>Read before trusting a tier as final:</strong> the road-race
-  reclassification bug was fixed 2026-09-03 — 136 races (Tokyo Marathon,
-  Boston Marathon, NYC Mini 10K, the World Road Running Championships among
-  them) were promoted from T2 to T1 that day after sitting miscategorised.
-  <code>comp_name</code> and <code>comp_start</code> gaps for
-  championship-class meets were backfilled 2026-09-02. Filter by year below
-  to see coverage directly — T1_elite counts are genuinely thin in several
-  early years (see the year filter), which is corpus coverage, not a
-  modelling artifact.
-</div>
+<details class="caveats">
+  <summary>What strength and tier mean, and what to watch out for</summary>
+  <p><strong>Strength</strong> — a 0-100 measured field-quality score. Each
+  finalist's career-best mark as a percentile within their event and era,
+  averaged across an event's finalists, then across the meet's events. It
+  measures who showed up, not how fast the day was. Withheld ("—") below 5
+  scored events, except road races (a marathon only has one or two).</p>
+  <p><strong>Tier</strong> — fixed by what the meet named itself for most
+  classes (Olympics, Diamond League, age-group…). For road races and
+  anything unclassifiable by name, derived from strength: ≥75 → T1,
+  ≥50 → T2, else T3.</p>
+  <p><strong>Click any meet</strong> for its events: winning mark, that
+  mark as a share of the world record (direction-aware, so it reads the
+  same for times and distances), athletes in the final, and the event's own
+  strength before averaging.</p>
+  <p><strong>Known caveats</strong> — the road-race reclassification bug
+  was fixed 2026-09-03 (136 races promoted T2→T1, Tokyo/Boston/NYC Mini 10K
+  among them); <code>comp_name</code>/<code>comp_start</code> gaps were
+  backfilled 2026-09-02. T1 counts are genuinely thin in several early
+  years — that's corpus coverage, not a modelling artifact.</p>
+</details>
 
 <div class="controls">
   <div class="field grow">
