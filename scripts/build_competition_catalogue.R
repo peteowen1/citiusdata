@@ -69,7 +69,10 @@ NOT_THE_EVENT <- paste(
 # DL banner is a youth meeting. These are applied to the elite classes only, so
 # a road race still classifies correctly as a road race elsewhere.
 NEVER_ELITE <- paste0(
-  "Marathon|Half.?Marathon|10 ?[Kk]m?\\b|5 ?[Kk]m?\\b|Road Race|",
+  # `\bMarat` for the same reason as the road_race rule: the accented and
+  # Catalan spellings were escaping this guard too, so a Spanish marathon could
+  # still be swept into an elite class by a city or sponsor match.
+  "\\bMarat|10 ?[Kk]m?\\b|5 ?[Kk]m?\\b|Road Race|",
   "karusell|Bislettmila|Distanseserie|Distance challenge|Bislett Spring|",
   "Bislett Open|KM Oslo|Nasjonalt|Sommerstevne|Elite Series|Street Tour|",
   # `m.odzie` rather than a \\u escape: PCRE2 rejects \\u outright, and the
@@ -114,6 +117,20 @@ RULES <- list(
   # and the South Asian Games under one label, so no single tier rule could be
   # right for it. The SEA Games is a sub-regional championship, not a
   # continental one, which is why it belongs with regional_games.
+  # The European Cross Country Championships: 14 editions, 437-529 athletes
+  # each, every one sitting in `unclassified` because no rule named it. It is
+  # the continental sibling of World Cross Country, which `world_other` already
+  # holds, so it goes there rather than `european_champs` -- deliberately,
+  # because european_champs is in form_ratings.R's MAJ panel and adding a
+  # cross-country championship to the majors metric would change a fixed
+  # reference for reasons unrelated to the majors.
+  # Its `strength` is NA (one or two events), so no strength band could ever
+  # have rescued it -- only a name rule can.
+  list(class = "world_other", pat = "European Cross Country Championships"),
+  # The IAAF World Athletics Final (2001-2009) and the Continental Cup: the
+  # season-ending elite finals of their era. Defunct, so no rule was ever
+  # written, and 20+ editions sat unclassified.
+  list(class = "world_other", pat = "World Athletics Final|Continental Cup|IAAF Grand Prix Final"),
   list(class = "regional_games", pat = "South\\s*-?\\s*East Asian Games|Southeast Asian Games|South Asian Games"),
   list(class = "asian_games",    pat = "Asian Games"),
   list(class = "panam_games",    pat = "Pan American Games"),
@@ -150,10 +167,18 @@ RULES <- list(
   # Elite road racing belongs in T1 (Pete, 2026-07-31) and the strength measure
   # sorts the Berlin marathon from a local half, so the class just needs to
   # exist for the tiering to be honest about what it is looking at.
+  # `\bMarat` rather than listing spellings. The pattern used to carry
+  # "Marathon" and "Maraton" and missed every accented form, so 135 meets --
+  # 8,869 athletes, the Valencia, Sevilla, Barcelona and Malaga road races --
+  # fell through to `unclassified`: Maraton with an accent, Marato (Catalan),
+  # Mitja Marato, Medio Maraton, Maratona. The stem catches all of them plus
+  # Marathon itself, and nothing else in athletics begins "marat".
+  # Same word-boundary family as the RAK/Marrakesh and bare-"Championships"
+  # bugs already recorded in this file.
   list(class = "road_race", pat = paste0(
-    "Marathon|Half.?Marathon|\\b10 ?[Kk]m?\\b|\\b5 ?[Kk]m?\\b|",
+    "\\bMarat|\\b10 ?[Kk]m?\\b|\\b5 ?[Kk]m?\\b|",
     "Road Running|Road Race|Elite 10K|10K Elite|Great North Run|",
-    "City Run|Corrida|Maraton")),
+    "City Run|Corrida")),
 
   # The World Indoor Tour is a real elite circuit with Gold/Silver/Bronze
   # levels, and its Gold meetings are the strongest indoor fields outside a
@@ -182,7 +207,29 @@ RULES <- list(
                     "Anniversary Games|London Athletics Meet|Meeting de Paris|",
                     "Skolimowska Memorial|BAUHAUS.?galan|Diamond League|",
                     "Mohammed VI|Shanghai Golden Grand Prix|Qatar Athletic|",
-                    "Bauhaus Galan|Dream Mile|Keqiao|Suzhou")),
+                    "Bauhaus Galan|Dream Mile|Keqiao|Suzhou|",
+                    # HISTORICAL SPONSOR NAMES. A Diamond League fixture is
+                    # named after whoever is paying, and the meeting keeps its
+                    # place on the circuit when the sponsor changes. These
+                    # editions were all sitting in `unclassified`, found via
+                    # the WA feed's own GL category on 2026-09-03:
+                    #   Stockholm  -> DN Galan, BAUHAUS Athletics
+                    #   Paris      -> Meeting AREVA
+                    #   New York   -> adidas Grand Prix
+                    #   London     -> Crystal Palace, Aviva London Grand Prix
+                    #   Birmingham -> Muller Grand Prix
+                    #   Doha       -> Doha Meeting, Ooredoo, Seashore Group
+                    # These are MEETING names, not cities -- the first version
+                    # of this pattern matched bare city names and swept in 73
+                    # wrong meets, which is the trap being avoided here.
+                    # `BAUHAUS Athletics` as well as `BAUHAUS.?galan` above:
+                    # the 2015 Stockholm edition dropped "Galan" from the name,
+                    # so the existing alternatives -- which both require
+                    # "galan" to follow -- missed it.
+                    "BAUHAUS Athletics|DN Galan|Meeting AREVA|adidas Grand Prix|",
+                    "Crystal Palace|Aviva London Grand Prix|",
+                    "Müller Grand Prix|Muller Grand Prix|",
+                    "Ooredoo Doha|Seashore Group Doha|Doha Meeting")),
   # Named club-level and warm-up meets. Listed BEFORE continental_tour so a
   # "Bislett Spring" or a "pre-programme" cannot be swept up by a broader rule
   # and land in T1 next to the Olympics -- which is exactly what happened.

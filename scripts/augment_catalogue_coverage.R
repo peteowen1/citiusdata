@@ -180,7 +180,9 @@ NOT_THE_EVENT <- paste(
   "Pre.?Tournament|Rehearsal|",
   "Warm.?up|Test Event|Festival|Classic -", sep = "")
 NEVER_ELITE <- paste0(
-  "Marathon|Half.?Marathon|10 ?[Kk]m?\\b|5 ?[Kk]m?\\b|Road Race|",
+  # `\bMarat` for the same reason as the road_race rule above: the accented and
+  # Catalan spellings were escaping this guard too.
+  "\\bMarat|10 ?[Kk]m?\\b|5 ?[Kk]m?\\b|Road Race|",
   "karusell|Bislettmila|Distanseserie|Distance challenge|Bislett Spring|",
   "Bislett Open|KM Oslo|Nasjonalt|Sommerstevne|Elite Series|Street Tour|",
   "Stabhochsprung|Kugelsto|m.odzie|youth|junior|U1[0-9]|U2[0-3]|",
@@ -225,10 +227,20 @@ RULES <- list(
     "Pan American Athletics Championships|NACAC Championships|",
     "Oceania (Athletics )?Championships|South American (Athletics )?Championships|",
     "South American Indoor|Ibero.?American")),
+  # `\bMarat` stem, kept in lockstep with build_competition_catalogue.R. The
+  # listed spellings missed every accented form, so 135 meets and 8,869
+  # athletes -- Valencia, Sevilla, Barcelona, Malaga -- fell to `unclassified`.
   list(class = "road_race", pat = paste0(
-    "Marathon|Half.?Marathon|\\b10 ?[Kk]m?\\b|\\b5 ?[Kk]m?\\b|",
+    "\\bMarat|\\b10 ?[Kk]m?\\b|\\b5 ?[Kk]m?\\b|",
     "Road Running|Road Race|Elite 10K|10K Elite|Great North Run|",
-    "City Run|Corrida|Maraton")),
+    "City Run|Corrida")),
+  # The European Cross Country Championships (14 editions, 437-529 athletes)
+  # and the defunct IAAF World Athletics Final / Continental Cup. All sat
+  # unclassified because no rule named them. `world_other` rather than
+  # `european_champs`: the latter is in form_ratings.R's MAJ panel, and adding
+  # cross country there would move a fixed reference metric.
+  list(class = "world_other", pat = "European Cross Country Championships"),
+  list(class = "world_other", pat = "World Athletics Final|Continental Cup|IAAF Grand Prix Final"),
   list(class = "indoor_tour", pat = "World Indoor Tour|Indoor Tour Gold|Millrose|Mill\u00earose"),
   list(class = "regional_games", pat = paste0(
     "Mediterranean Games|Islamic Solidarity|",
@@ -241,7 +253,18 @@ RULES <- list(
                     "Anniversary Games|London Athletics Meet|Meeting de Paris|",
                     "Skolimowska Memorial|BAUHAUS.?galan|Diamond League|",
                     "Mohammed VI|Shanghai Golden Grand Prix|Qatar Athletic|",
-                    "Bauhaus Galan|Dream Mile|Keqiao|Suzhou")),
+                    "Bauhaus Galan|Dream Mile|Keqiao|Suzhou|",
+                    # Historical sponsor names -- a DL fixture is named after
+                    # whoever is paying and keeps its circuit place when the
+                    # sponsor changes. Found via the feed's own GL category.
+                    # MEETING names, not cities: the first version of this
+                    # pattern matched bare cities and swept in 73 wrong meets.
+                    # `BAUHAUS Athletics` too: the 2015 Stockholm edition
+                    # dropped "Galan", which both existing alternatives require.
+                    "BAUHAUS Athletics|DN Galan|Meeting AREVA|adidas Grand Prix|",
+                    "Crystal Palace|Aviva London Grand Prix|",
+                    "Müller Grand Prix|Muller Grand Prix|",
+                    "Ooredoo Doha|Seashore Group Doha|Doha Meeting")),
   list(class = "club_meet", pat = paste0(
     "pre-programme|pre-event|Bislett Spring|Bislett Open|Bislett 600|",
     "Bislettmila|karusell|Distanseserie|Distance challenge|",
