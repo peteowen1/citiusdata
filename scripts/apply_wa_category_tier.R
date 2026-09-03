@@ -79,18 +79,18 @@ if (!"tier_pre_wa" %in% names(ct)) {
 }
 before <- copy(ct$tier_pre_wa)
 
-ct[, wa_code := NA_character_]
-ct[!is.na(tier_codes), wa_code := best_code(tier_codes)]
-ct[, .apply := !class %chin% KNOWN & !is.na(wa_code)]
+ct[, wac := NA_character_]
+ct[!is.na(tier_codes), wac := best_code(tier_codes)]
+ct[, .apply := !class %chin% KNOWN & !is.na(wac)]
 cat(sprintf("unclassified meets: %s | with a WA code: %s | without (unchanged): %s\n",
             format(ct[!class %chin% KNOWN, .N], big.mark=","),
             format(ct[.apply == TRUE, .N], big.mark=","),
-            format(ct[!class %chin% KNOWN & is.na(wa_code), .N], big.mark=",")))
+            format(ct[!class %chin% KNOWN & is.na(wac), .N], big.mark=",")))
 
-ct[.apply == TRUE, meet_tier := TIER[wa_code]]
+ct[.apply == TRUE, meet_tier := TIER[wac]]
 if (!"tier_source" %in% names(ct)) ct[, tier_source := NA_character_]
 ct[, tier_source := NA_character_]
-ct[.apply == TRUE, tier_source := paste0("wa_", wa_code)]
+ct[.apply == TRUE, tier_source := paste0("wac_", wac)]
 
 cat(sprintf("\nmoved: %s\n", format(sum(before != ct$meet_tier), big.mark=",")))
 # `before` has to be a COLUMN, not a free vector. Referencing a vector inside
@@ -99,7 +99,7 @@ cat(sprintf("\nmoved: %s\n", format(sum(before != ct$meet_tier), big.mark=",")))
 # with a recycling-compatible length it would silently mislabel every group.
 ct[, .from := before]
 print(ct[.from != meet_tier, .(meets = .N, finals = sum(finals, na.rm = TRUE)),
-         by = .(from = .from, to = meet_tier, wa_code)][order(-meets)])
+         by = .(from = .from, to = meet_tier, wac)][order(-meets)])
 cat("\ntier counts:\n"); print(ct[, .N, by = meet_tier][order(meet_tier)])
 cat("\nscored pool:\n")
 for (y in c(2024, 2025, 2026)) {
@@ -116,7 +116,7 @@ stopifnot("row count changed"   = nrow(ct) == length(before),
           # table while meet_tier is already subset, so the lengths disagree.
           # Same trap as the reporting line above.
           "a known class moved" = ct[class %chin% KNOWN, all(meet_tier == .from)],
-          "mapping not applied" = ct[.apply == TRUE, all(meet_tier == TIER[wa_code])],
+          "mapping not applied" = ct[.apply == TRUE, all(meet_tier == TIER[wac])],
           "a tier is missing"   = !any(is.na(ct$meet_tier)))
 ct[, c(".apply", ".from") := NULL]
 tmp <- paste0(CAT, ".tmp"); write_parquet(ct, tmp)
