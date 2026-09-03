@@ -327,9 +327,17 @@
 
 <details class="caveats">
   <summary>What strength and tier mean, and what to watch out for</summary>
-  <p><strong>Strength</strong> — a 0-100 measured field-quality score. Each
-  finalist's career-best mark as a percentile within their event and era,
-  averaged across an event's finalists, then across the meet's events. It
+  <p><strong>Strength</strong> — a 0-100 score, and it is a ranking
+  <em>against other meets</em>, not against the record book. Built in four
+  steps: (1) each athlete's career-best mark becomes a percentile among all
+  performances in that event and era; (2) average that across the finalists
+  in one event, giving a quality number for this meet's version of that
+  event; (3) <strong>rank that number against every other meet contesting
+  the same event in the same era</strong>; (4) average those per-event ranks
+  across the meet. So <strong>100 means "the strongest field of any meet
+  running these events in this era"</strong> — the top of its peer group,
+  not a field of world-record holders. That's why several meets sit at
+  exactly 100.0: each is first in its own event-and-era grouping. It
   measures who showed up, not how fast the day was. Withheld ("—") below 5
   scored events, except road races (a marathon only has one or two).</p>
   <p><strong>Tier</strong> — fixed by what the meet named itself for most
@@ -410,7 +418,11 @@
 const DATA = __MEET_DATA_JSON__;
 // Per-meet event detail, keyed by competition_id. Each event is a
 // positional array to keep the payload under the artifact size cap:
-// [discipline, n_athletes, winning_mark, event_strength, wr_pct]
+// [label, n_athletes, winning_mark_str, event_strength, wr_pct]
+// `label` carries sex ("100 Metres (M)") -- without it a meet's M and W
+// races render as duplicate rows. `winning_mark_str` is the feed's own
+// display string, not the numeric: a 2.00m high jump formats as "2" from
+// the number, and 5000m as "894.09" instead of 14:54.09.
 const EVENTS = __MEET_EVENTS_JSON__;
 
 let sortKey = "strength", sortDir = -1, page = 0;
