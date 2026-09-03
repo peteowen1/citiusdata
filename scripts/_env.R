@@ -39,3 +39,51 @@
     stop(sprintf("%s='%s' must be a whole number", name, v), call. = FALSE)
   as.integer(x)
 }
+
+
+# ---------------------------------------------------------------------------
+# THE BUG THIS EXISTS TO STOP. `library(citius)` loads the INSTALLED package,
+# not the source tree, and nothing anywhere compared the two. On 2026-09-03 the
+# installed build was 0.1.0 while the source was 0.1.1, so
+# build_athletics_corpus.R's DuckDB write-through called a function that did not
+# exist in the build it was talking to. Its tryCatch downgraded that to a
+# warning, the script exited 0, and build_stores.R's .stale_check then found
+# DuckDB behind and silently fell back to RDS. Three layers, all reporting
+# success, and citius.duckdb simply stopped being updated.
+#
+# Why this is a MIGRATION blocker and not a one-off: the RDS->DuckDB plan's step
+# 4a is "stop writing RDS". Do that while this failure mode is live and a failed
+# DuckDB write has no fallback left -- the shipping store would be built from
+# data that never updated, with nothing failing anywhere to say so.
+#
+# Call this at the top of any script that writes to citius.duckdb or relies on a
+# recently-added citius function.
+#
+#   strict = TRUE  -> stop(). Use in anything that WRITES.
+#   strict = FALSE -> warn. Use in read-only diagnostics.
+citius_version_guard <- function(strict = TRUE) {
+  desc <- here::here("citius", "DESCRIPTION")
+  if (!file.exists(desc)) {
+    # SAY SO. Returning quietly here is the same vacuous-guard pattern this
+    # function exists to catch: run from the wrong working directory,
+    # here::here() resolves elsewhere, DESCRIPTION is not found, and the check
+    # silently passes on nothing. A legitimate installed-only deployment and a
+    # misresolved path are indistinguishable, so announce which one this is
+    # rather than letting a no-op look like a pass.
+    message(sprintf("citius_version_guard: no DESCRIPTION at %s -- version NOT checked (installed-only deployment, or here::here() resolved to the wrong root)", desc))
+    return(invisible(NA))
+  }
+  src <- read.dcf(desc, fields = "Version")[[1]]
+  inst <- tryCatch(as.character(utils::packageVersion("citius")),
+                   error = function(e) NA_character_)
+  if (is.na(inst)) {
+    msg <- "citius is not installed, but scripts call it via citius::"
+  } else if (!identical(src, inst)) {
+    msg <- sprintf(paste0("citius INSTALLED %s but SOURCE is %s. `library(citius)` ",
+                          "loads the installed build, so any function added since ",
+                          "%s is missing at runtime. Run: Rscript -e \"devtools::install('citius', quick=TRUE)\""),
+                   inst, src, inst)
+  } else return(invisible(TRUE))
+  if (strict) stop(msg, call. = FALSE) else warning(msg, call. = FALSE)
+  invisible(FALSE)
+}
