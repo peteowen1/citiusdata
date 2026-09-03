@@ -35,9 +35,10 @@
   positional-array encoding for exactly this reason (array-of-objects was
   36.7MB). If either dataset grows, re-check the total before publishing.
 
-  The row counts in the subtitle text below ("32,089 competitions —
-  18,524 shown") are a snapshot from whenever this was last regenerated,
-  not computed live -- update them by hand if they've moved meaningfully.
+  The subtitle row count is now DERIVED from DATA.length at render time. It
+  used to be a hardcoded snapshot with a note saying "update by hand", and by
+  2026-09-03 it was wrong by two catalogue rebuilds. Anything that has to be
+  updated by hand eventually isn't.
 -->
 <title>Meet Registry</title>
 <style>
@@ -235,6 +236,14 @@
   tbody tr:hover { background: var(--row-hover); }
   td.name { white-space: normal; max-width: 320px; font-weight: 500; }
   td.num { text-align: right; }
+  /* The PB column is a reference, not the live number -- muted so the eye goes
+     to Strength, with the delta carrying the signal. */
+  td.pb { color: var(--muted); white-space: nowrap; }
+  td.date { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .delta { font-size: 0.82em; font-variant-numeric: tabular-nums; }
+  .delta.up { color: var(--t1); }
+  .delta.down { color: #b4442c; }
+  .delta.flat { opacity: 0.45; }
   .pill {
     display: inline-block;
     padding: 2px 9px;
@@ -322,37 +331,68 @@
 
 <header>
   <h1>Meet Registry</h1>
-  <div class="subtitle">Every catalogued athletics competition, tiered by measured field strength. Source: <code>competition_catalogue.parquet</code>, 32,089 competitions — 18,524 shown here (never-scored, never-classified meets excluded from this view).</div>
+  <div class="subtitle">Every catalogued athletics competition, tiered by measured field strength. Source: <code>competition_catalogue.parquet</code>, <span id="countAll">…</span> competitions shown here (never-scored, never-classified meets excluded from this view).</div>
 </header>
 
 <details class="caveats">
   <summary>What strength and tier mean, and what to watch out for</summary>
   <p><strong>Strength</strong> — a 0-100 score, and it is a ranking
   <em>against other meets</em>, not against the record book. Built in four
-  steps: (1) each athlete's career-best mark becomes a percentile among all
-  performances in that event and era; (2) average that across the finalists
-  in one event, giving a quality number for this meet's version of that
-  event; (3) <strong>rank that number against every other meet contesting
-  the same event in the same era</strong>; (4) average those per-event ranks
-  across the meet. So <strong>100 means "the strongest field of any meet
-  running these events in this era"</strong> — the top of its peer group,
-  not a field of world-record holders. That's why several meets sit at
-  exactly 100.0: each is first in its own event-and-era grouping. It
-  measures who showed up, not how fast the day was. Withheld ("—") below 5
-  scored events, except road races (a marathon only has one or two).</p>
+  steps: (1) each athlete's <strong>form going into the race</strong> — an
+  exponentially-weighted average of their earlier marks in that event —
+  becomes a percentile among all performances in that event and era;
+  (2) average that across the finalists in one event, giving a quality
+  number for this meet's version of that event; (3) <strong>rank that
+  number against every other meet contesting the same event in the same
+  era</strong>; (4) average those per-event ranks across the meet. So
+  <strong>100 means "the strongest field of any meet running these events
+  in this era"</strong> — the top of its peer group, not a field of
+  world-record holders. That's why several meets sit at exactly 100.0: each
+  is first in its own event-and-era grouping. It measures who showed up,
+  not how fast the day was. Withheld ("—") below 5 scored events, except
+  road races (a marathon only has one or two).</p>
+  <p><strong>Strength (PB)</strong> — the previous basis, kept for
+  comparison. It used each athlete's <em>career-best</em> mark instead of
+  their form on the day. That had a leak: the career best was taken over an
+  athlete's whole career, so it included marks set <em>after</em> the meet
+  being scored — and often the mark set <em>at</em> it. A meet was
+  partly scoring itself, which is why the fast record-setting courses sat
+  highest and why every finalist at Berlin scored 99.2-99.4 under it: it
+  could not tell the field apart. Changed 2026-09-03. Where the two columns
+  disagree sharply, the fast courses fall and the tactical ones rise.</p>
   <p><strong>Tier</strong> — fixed by what the meet named itself for most
-  classes (Olympics, Diamond League, age-group…). For road races and
-  anything unclassifiable by name, derived from strength: ≥75 → T1,
-  ≥50 → T2, else T3.</p>
+  classes (Olympics, Diamond League, age-group…). Road races are banded by
+  strength (≥75 → T1, ≥50 → T2, else T3). Meets whose name matches no rule
+  are <strong>never T1</strong> and are split at the median-ish point of
+  the unclassified field, recomputed each build — so a genuinely elite meet
+  whose name we don't recognise is capped at T2. That cap is deliberate,
+  but it does mean <strong>some T2 meets near the top of this list belong
+  higher</strong>; the Doha Diamond League appears as "Doha Meeting" and is
+  unclassified for exactly that reason.</p>
   <p><strong>Click any meet</strong> for its events: winning mark, that
   mark as a share of the world record (direction-aware, so it reads the
   same for times and distances), athletes in the final, and the event's own
   strength before averaging.</p>
-  <p><strong>Known caveats</strong> — the road-race reclassification bug
-  was fixed 2026-09-03 (136 races promoted T2→T1, Tokyo/Boston/NYC Mini 10K
-  among them); <code>comp_name</code>/<code>comp_start</code> gaps were
-  backfilled 2026-09-02. T1 counts are genuinely thin in several early
-  years — that's corpus coverage, not a modelling artifact.</p>
+  <p><strong>Known caveats</strong> — T1 counts are genuinely thin in
+  several early years; that's corpus coverage, not a modelling artifact.
+  Fixed 2026-09-03: strength moved from career-best to current form (see
+  above); 407 meets were promoted out of a tier their own class rule
+  forbade (the Greek, Irish, Belgian, Canadian, Swiss, Dutch and Brazilian
+  national championships among them); three Diamond Leagues that had no
+  name at all — Silesia, Athletissima Lausanne and Weltklasse Zürich, the
+  DL Final — were named and moved to T1; and the <code>asian_games</code>
+  class was split, so the South East Asian Games and a national race-walk
+  grand prix are no longer classed as Asian Games. Earlier: the road-race
+  reclassification bug (136 races promoted T2→T1) and the
+  <code>comp_name</code>/<code>comp_start</code> backfill, both 2026-09-02/03.</p>
+  <p><strong>Still known-wrong</strong> — <code>class</code> is a regex on
+  the meet's name, so a meet named unusually falls to
+  <code>unclassified</code> and is capped at T2 however strong it is. Real
+  cases in this table: the Doha Diamond League ("Doha Meeting"), Grand Slam
+  Track, Athlos NYC, and the United Airlines NYC Half, which is a road race
+  not recognised as one. The World Athletics feed ships its own category
+  code that would catch some of these, but it covers only 42.6% of meets
+  and is multi-valued where it exists, so it is not yet used.</p>
 </details>
 
 <div class="controls">
@@ -395,7 +435,9 @@
           <th data-key="comp_name">Meet<span class="arrow"></span></th>
           <th data-key="class">Class<span class="arrow"></span></th>
           <th data-key="meet_tier">Tier<span class="arrow"></span></th>
-          <th data-key="strength" class="num" title="0-100: each finalist's career-best percentile within their event+era, averaged across the meet's events. See the note above the filters.">Strength<span class="arrow"></span></th>
+          <th data-key="strength" class="num" title="0-100: each finalist's FORM GOING IN as a percentile within their event+era, averaged across the meet's events, then ranked against other meets. See the note above the filters.">Strength<span class="arrow"></span></th>
+          <th data-key="strength_pb" class="num" title="The previous basis: career-best instead of form. It included marks set after -- and often AT -- the meet being scored, so a meet partly scored itself. Kept for comparison.">Strength (PB)<span class="arrow"></span></th>
+          <th data-key="first_date" title="First day of results at this meet. Use it to look the meet up.">Date<span class="arrow"></span></th>
           <th data-key="year" class="num">Year<span class="arrow"></span></th>
           <th data-key="country">Country<span class="arrow"></span></th>
           <th data-key="athletes" class="num">Athletes<span class="arrow"></span></th>
@@ -465,6 +507,10 @@ function applyFilters() {
 function render() {
   const rows = applyFilters();
   document.getElementById("count").textContent = rows.length.toLocaleString() + " meets";
+  // Derived, not hardcoded. The subtitle used to carry a snapshot of the row
+  // count that had to be updated by hand and was wrong by two rebuilds.
+  const ca = document.getElementById("countAll");
+  if (ca) ca.textContent = DATA.length.toLocaleString();
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   page = Math.min(page, totalPages - 1);
   const slice = rows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
@@ -485,6 +531,8 @@ function render() {
         <td class="class-tag">${escapeHtml(d.class)}</td>
         <td><span class="pill ${d.meet_tier}">${tierLabel(d.meet_tier)}</span></td>
         <td class="num">${d.strength != null ? d.strength.toFixed(1) : "—"}</td>
+        <td class="num pb">${pbCell(d)}</td>
+        <td class="date">${escapeHtml(d.first_date || "—")}</td>
         <td class="num">${d.year ?? "—"}</td>
         <td>${escapeHtml(d.country || "—")}</td>
         <td class="num">${d.athletes ?? "—"}</td>
@@ -508,7 +556,7 @@ function render() {
 function detailRow(id) {
   const evs = EVENTS[id];
   if (!evs || !evs.length) {
-    return `<tr class="detail-row"><td colspan="9">
+    return `<tr class="detail-row"><td colspan="11">
       <div class="detail-title">No scored finals recorded for this meet.</div></td></tr>`;
   }
   const rows = evs.map(e => {
@@ -522,7 +570,7 @@ function detailRow(id) {
       <td class="num">${str != null ? str.toFixed(1) : "—"}</td>
     </tr>`;
   }).join("");
-  return `<tr class="detail-row"><td colspan="9">
+  return `<tr class="detail-row"><td colspan="11">
     <div class="detail-title">${evs.length} scored event${evs.length === 1 ? "" : "s"}</div>
     <table class="event-table">
       <thead><tr>
@@ -536,6 +584,19 @@ function detailRow(id) {
     </table></td></tr>`;
 }
 
+// The PB column is only interesting as a COMPARISON, so show the old value with
+// how far the meet moved. A meet that barely shifted needs no attention; one
+// that moved 20 points is telling you something about the course.
+function pbCell(d) {
+  if (d.strength_pb == null) return "—";
+  const pb = d.strength_pb.toFixed(1);
+  if (d.strength == null) return pb;
+  const diff = d.strength - d.strength_pb;
+  if (Math.abs(diff) < 0.05) return `${pb}<span class="delta flat"> =</span>`;
+  const cls = diff > 0 ? "up" : "down";
+  const sign = diff > 0 ? "+" : "";
+  return `${pb}<span class="delta ${cls}"> ${sign}${diff.toFixed(1)}</span>`;
+}
 function tierLabel(t) {
   return t === "T1_elite" ? "T1" : t === "T2_strong" ? "T2" : "T3";
 }
