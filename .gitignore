@@ -28,3 +28,14 @@ data/*
 
 # Blog export staging dir — build artefacts, republished on every run
 blog/
+
+# Archived data awaiting its 90-day retention window. Currently 17 GB, and it
+# had NO ignore rule until 2026-09-04 — so any `git add -A` in this repo would
+# have tried to commit all of it. The contents are already-superseded copies of
+# gitignored `data/` files; nothing here is reviewable source.
+_archive/
+
+# Run logs from backtests and harvests. Machine-generated, regenerated on every
+# run, and no log file has ever been tracked here — written down so that stays
+# a decision rather than an accident.
+*_log.txt
