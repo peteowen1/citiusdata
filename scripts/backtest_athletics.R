@@ -424,6 +424,31 @@ if (FAMILY_DEBIAS) {
 # winner on full history before adopting anything. The median says a screening
 # result will nearly always survive; the max says confirmation is not optional.
 ELITE_HISTORY <- nzchar(Sys.getenv("CITIUS_BT_ELITE_HISTORY", ""))
+
+# RESTRICT THE TRAINING HISTORY BY MEET TIER (Pete's goal, 2026-09-05: "train
+# all T1 and T2 leading up to a T1 event and test on the T1 event").
+#
+#   CITIUS_BT_TRAIN_TIERS=T1_elite,T2_strong
+#
+# DIFFERENT KNOB FROM CITIUS_BT_TIER, and conflating them is the easy mistake:
+# CITIUS_BT_TIER picks which meets are SCORED, leaving the model untouched;
+# this picks which rows the model LEARNS FROM, which changes prior_mu and
+# sigma_between -- population statistics. So this produces a DIFFERENT MODEL,
+# not a subsample of the existing one, exactly as CITIUS_BT_ATHLETES does.
+#
+# IT IS ALSO NOT FREE, and the direction is predictable: ~33% of corpus rows
+# are career-route rows carrying no competition_id at all, so they have no
+# meet_tier and this filter DROPS them. Whether that costs accuracy is the
+# question the arm exists to answer -- the corpus itself was measured worth
+# 10-50x every parameter change of its week, so removing a third of it is a
+# real bet, not a tidy-up.
+#
+# Requires a store built with join_tier = TRUE (true since 2026-09-04).
+TRAIN_TIERS <- trimws(strsplit(Sys.getenv("CITIUS_BT_TRAIN_TIERS", ""), ",")[[1]])
+TRAIN_TIERS <- TRAIN_TIERS[nzchar(TRAIN_TIERS)]
+if (length(TRAIN_TIERS)) cli::cli_alert_info(
+  "Training history restricted to meet_tier {.val {TRAIN_TIERS}} -- this is a DIFFERENT MODEL, not a subsample.")
+
 TIER_FILTER <- Sys.getenv("CITIUS_BT_TIER", "")
 if (USE_MEET_TIER || nzchar(TIER_FILTER) || ELITE_HISTORY) {
   ctl <- setDT(arrow::read_parquet(file.path(OUT, "competition_catalogue.parquet")))
@@ -521,9 +546,14 @@ outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
 # the `wind` note above describes. `venue_country` additionally decides the
 # hemisphere for the seasonal phase, and its absence is what blocked the season
 # effect from being wired on 2026-07-30.
+# `meet_tier` is read when CITIUS_BT_TRAIN_TIERS restricts the training pool,
+# and by .tier_class_of() whenever the column is present (which is how the
+# 2026-09-04 WAC promotion actually reaches the model). Narrowing it away would
+# silently drop the arm back to the feed's `tier` and report a dead heat --
+# the same trap the `wind` and `indoor` notes above describe.
 keep_cols <- c("athlete_id", "event_id", "date", "perf", "age", "round", "tier",
-               "competition_id", "comp_start", "place", "race_key", "wind",
-               "momentum", "indoor", "venue_country")
+               "meet_tier", "competition_id", "comp_start", "place", "race_key",
+               "wind", "momentum", "indoor", "venue_country")
 clean <- clean[, intersect(keep_cols, names(clean)), with = FALSE]
 outcome_rows <- outcome_rows[, intersect(keep_cols, names(outcome_rows)), with = FALSE]
 
@@ -590,6 +620,12 @@ arm_fingerprint <- list(
   adjust_context = ADJUST_CONTEXT, adjust_race = ADJUST_RACE,
   use_meet_tier = USE_MEET_TIER,
   tier_filter = TIER_FILTER, elite_history = ELITE_HISTORY,
+  # Without this, a T1+T2-trained arm and its full-history control share a
+  # cache: the second one read back the first's predictions and the A/B came
+  # home a dead heat. Same failure the project_tier/family_debias/marks_only
+  # fields above were each added to prevent, and it restricts the HISTORY, so
+  # it changes every prediction rather than a subset.
+  train_tiers = paste(TRAIN_TIERS, collapse = ","),
   history_days = HISTORY_DAYS, n_sims = N_SIMS, cohort = COHORT,
   athletes = ATHLETES, peak_gamma = PEAK_GAMMA,
   robust_location = ROBUST_LOCATION, decouple_peak = DECOUPLE_PEAK,
@@ -827,6 +863,19 @@ run_meet <- function(i) {
             event_id %in% meet_events]
   })
   if (!is.null(dev_ids)) past <- past[as.character(athlete_id) %in% dev_ids]
+  # Training-tier restriction. Applied to the HISTORY only -- the meet being
+  # forecast is chosen by TIER_FILTER and is untouched by this.
+  if (length(TRAIN_TIERS)) {
+    if (!"meet_tier" %in% names(past)) {
+      # Silence here would mean the arm ran UNRESTRICTED under a restricted
+      # arm's name and cache, and reported the control's numbers as the
+      # treatment's -- a dead heat that looks like a null result.
+      cli::cli_abort(c(
+        "x" = "{.envvar CITIUS_BT_TRAIN_TIERS} is set but the history carries no {.field meet_tier}.",
+        "i" = "Rebuild the store with {.code join_tier = TRUE} (build_stores.R)."))
+    }
+    past <- past[meet_tier %chin% TRAIN_TIERS]
+  }
   if (!is.null(elite_ids)) {
     # Always union the entrants: an entrant without a prior T1 final still needs
     # their own history, or they would be estimated from nothing.
@@ -1220,7 +1269,13 @@ if (N_WORKERS > 1L) {
                     # every earlier parallel arm happened to run with it TRUE.
                     # Same trap again: run_meet()'s `if (MARKS_ONLY)` check
                     # also runs on every worker unconditionally.
-                    "FAMILY_DEBIAS", "MARKS_ONLY")
+                    "FAMILY_DEBIAS", "MARKS_ONLY",
+                    # run_meet()'s `if (length(TRAIN_TIERS))` check runs on
+                    # every worker regardless of the value, so the binding must
+                    # exist even when empty -- the same reason FAMILY_DEBIAS is
+                    # exported unconditionally one line up, learned the hard way
+                    # when every FALSE parallel arm died on a missing object.
+                    "TRAIN_TIERS")
   # `clean` is the in-memory fallback corpus, potentially gigabytes -- exporting
   # it would copy that to every worker. Only export it when it will actually be
   # read (no store), which is exactly the case the memory cost is unavoidable.

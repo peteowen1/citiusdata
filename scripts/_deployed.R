@@ -21,7 +21,7 @@
 DEPLOYED <- list(
   # Bump on every promotion. Written into prediction outputs so any artefact can
   # be traced to the configuration that produced it.
-  stamp = "2026-08-13 csigma_coast",
+  stamp = "2026-09-04 wac_coast",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -67,7 +67,36 @@ DEPLOYED <- list(
   # The DEPLOYED file carries the trait fitted on the FULL corpus. The excluded
   # refit was a measurement device; there is no leakage when forecasting races
   # that have not happened.
-  calibration = "calibration_corpus_csigma_coast.rds",
+  # PROMOTED 2026-09-04, replacing calibration_corpus_csigma_coast.rds. Same
+  # corpus and the same coasting trait; the ONE input that differs is which
+  # label the tier offsets were fitted on -- the catalogue's meet_tier (WAC:
+  # OW/DF/GW/GL -> T1, A/B/C/D -> T2, E/F -> T3) instead of the feed's
+  # per-result `tier`, which is internally inconsistent (one meeting can carry
+  # four grades across its own results) and whose fitted scale was not even
+  # monotonic (mid corrected 1.43% while low corrected only 1.22%).
+  #
+  # This exact change was REJECTED on 2026-08-29 (T1 marks MAE +3.15% worse,
+  # p=3e-15) and that verdict stood until the catalogue underneath it was
+  # rebuilt. Re-run 2026-09-04 on 53,311 paired T1_elite predictions across 74
+  # events: marks MAE 2.495% -> 2.428% (-2.68%, p=1.9e-283), gold logloss
+  # 0.1675 -> 0.1662 (p=1.3e-04), medal logloss a tie (p=0.785). No metric
+  # traded against another, which is the shape of a real fix rather than a
+  # tuning knob.
+  #
+  # PAIRED WITH build_stores.R's join_tier = TRUE. This file names a
+  # meet_tier-FITTED calibration, so the history it is applied to must CARRY
+  # meet_tier. Promoting one without the other applies offsets fitted on one
+  # label set to a different label set -- silent, and no test fails.
+  #
+  # TWO THINGS TO KNOW BEFORE TRUSTING THIS FURTHER, both recorded rather than
+  # buried. (1) The reversal is not attributed: the 2026-09-04 population is
+  # not size-matched to the run it overturned, so "the catalogue fixes did it"
+  # is likely but unproven, and the test that would settle it was skipped in
+  # favour of shipping. (2) It is not uniform -- ~19 of 67 events got WORSE,
+  # concentrated in Hammer Throw M (+0.233pp), High Jump M (+0.232) and W, the
+  # race walks, and 1500m M. Per-event table:
+  # citiusdata/data/wac_reverify_by_event_0904.csv.
+  calibration = "calibration_corpus_wac_coast_0904.rds",
 
   # AGING -- the blended curve, adopted 2026-07-29.
   aging = "aging.rds",
@@ -169,20 +198,46 @@ deployed_history <- function(dir, events, from, to) {
   )
   ok <- tryCatch({
     d <- flag_implausible(data.table::setDT(readRDS(src)))
-    # A meet_tier join was added here 2026-08-29 to switch this fallback onto
-    # the catalogue's per-competition tier, matching a fix that was then
-    # PROPERLY TESTED and REJECTED (.scratch/athletics-calendar/issues/
-    # 03-diamond-league-tier-defect.md addendum, 2026-08-29): T1 elite
-    # regressed +3.15% (p=3e-15) against the deployed feed-tier calibration.
-    # DEPLOYED$calibration is still fitted on the feed's `tier`, not
-    # `meet_tier` -- joining meet_tier here without a matching calibration
-    # refit would silently apply the wrong offsets to every rescue rebuild.
-    # Reverted 2026-08-30 to keep this fallback consistent with the deployed
-    # calibration until a same-source refit is adopted (see build_stores.R's
-    # matching join_tier = FALSE for the same reason).
+    # This fallback MUST carry meet_tier, because DEPLOYED$calibration is now
+    # fitted on meet_tier (promoted 2026-09-04). It was reverted to feed-tier
+    # on 2026-08-30 when the calibration was feed-tier-fitted, and is restored
+    # here for exactly the same reason it was removed: the label the history
+    # carries has to match the label the offsets were fitted on. A rescue
+    # rebuild that silently dropped meet_tier would apply WAC-fitted offsets
+    # to feed-tier labels on every prediction it served, with nothing failing.
+    # Mirrors build_stores.R's join_tier = TRUE.
+    ctl_f <- file.path(dir, "competition_catalogue.parquet")
+    if (file.exists(ctl_f)) {
+      ctl <- data.table::as.data.table(
+        arrow::read_parquet(ctl_f, col_select = c("competition_id", "meet_tier")))
+      ctl[, competition_id := as.character(competition_id)]
+      d[, .cid := as.character(competition_id)]
+      d <- merge(d, ctl, by.x = ".cid", by.y = "competition_id",
+                 all.x = TRUE, sort = FALSE)
+      d[, .cid := NULL]
+      # Coverage, asserted rather than assumed. The catalogue round-trips
+      # competition_id through parquet as character while the harvest holds an
+      # integer, so a type mismatch here matches nothing and leaves meet_tier
+      # 100% NA -- which looks exactly like "the join did nothing" and falls
+      # back to the feed tier silently. Same trap as everywhere else in this
+      # repo; the difference is that this one says so out loud.
+      cov <- 100 * mean(!is.na(d$meet_tier))
+      if (cov < 50) cli::cli_abort(c(
+        "Rescue rebuild: meet_tier attached to only {round(cov, 1)}% of rows.",
+        i = "DEPLOYED$calibration is meet_tier-fitted, so this store would
+             serve predictions on mismatched labels. Check the
+             competition_id type on both sides of the join."))
+      cli::cli_alert_info("meet_tier attached to {round(cov, 1)}% of rescue-rebuild rows.")
+    } else {
+      cli::cli_abort(c(
+        "Rescue rebuild needs {.file competition_catalogue.parquet} and it is missing.",
+        i = "DEPLOYED$calibration is fitted on the catalogue's meet_tier; without
+             it this store can only carry the feed's tier, which is the wrong
+             label set for those offsets."))
+    }
     keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "round",
-              "tier", "competition_id", "comp_start", "place", "race_key",
-              "sex", "discipline", "wind", "indoor", "comp_name")
+              "tier", "meet_tier", "competition_id", "comp_start", "place",
+              "race_key", "sex", "discipline", "wind", "indoor", "comp_name")
     d <- d[, intersect(keep, names(d)), with = FALSE]
     data.table::setorderv(d, intersect(c("event_id", "date"), names(d)))
     write_results_store(d, file.path(dir, DEPLOYED$history_store))
