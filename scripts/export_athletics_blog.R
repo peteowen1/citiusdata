@@ -71,11 +71,43 @@ lab <- st[, .(event_id, round_index, round, races, advance, fastest_losers,
               counts_source)]
 
 # Trim to what a page actually needs. Everything else is weight on the wire.
+#
+# `field_type`/`field_source` and the field_entrants/field_unmodelled pair are
+# in this list for a reason that is LATENT for Birmingham and load-bearing for
+# the Diamond League cards. Birmingham's field is an official entry list, so its
+# provenance caveat has never mattered and the columns were simply never carried.
+# The Brussels/Budapest cards are built on a field that is NOT an official entry
+# list (World Athletics has published none), and predict_diamond_league_final.R
+# stamps `field_type = "third_party_qualifier_list_unofficial"` plus a
+# `field_source` note on every row to say so. Without these here, the first
+# person to wire a DL card into this export would silently drop that caveat at
+# exactly the moment it matters most -- the same shape as the staleness column
+# this file's own header warns not to tidy away. Found in review 2026-08-31,
+# BEFORE a DL card was wired in, so it never actually shipped mis-stamped.
+#
+# This project's convention is that caveats live in the published data, not
+# hardcoded in the page (so a wrong claim is fixed in one place) -- which only
+# works if the caveat survives this select.
+#
+# `nation_code` is here for the same class of reason, found the same way. The
+# DL cards' entry list gives nationality as free text, mixing bare codes
+# ("USA") with 19-character full names ("Trinidad and Tobago"), and the site
+# renders it into a badge sized for three characters. add_nation_codes.R
+# fetches authoritative codes and patches the card -- but until this list
+# carried the column, that whole step ended here: the card had nation_code at
+# 100% coverage and the exported artefact had none of it, on a correctly
+# ordered run. An enrichment step with no path to a reader. Found in review
+# 2026-08-31, again before anything shipped.
+#
+# intersect() below means a column absent for a given meet just doesn't appear:
+# Birmingham gains field_type = "official_entry_list" and skips the rest.
 KEEP <- c("event_id", "discipline", "sex", "athlete_id", "athlete", "nation",
+          "nation_code",
           "p_gold", "p_medal", "p_final", "p_reach_r2", "p_reach_r3",
           "ability", "sigma", "ability_se", "n_rounds", "field_modelled",
           "generated_at", "cutoff", "config", "counts_source",
-          "combined_rows_excluded")
+          "combined_rows_excluded",
+          "field_type", "field_source", "field_entrants", "field_unmodelled")
 card <- pred[, intersect(KEEP, names(pred)), with = FALSE]
 card[, meet_id := "birmingham2026"]
 
@@ -158,6 +190,96 @@ artefacts <- list(
   "birmingham2026-rounds.parquet"       = lab,
   "birmingham2026-events.parquet"       = ev,
   "birmingham2026-nations.parquet"      = nations)
+
+# --- Diamond League / finals-only cards ---------------------------------------
+# Birmingham's block above assumes a multi-round feed entry list: a round
+# structure csv, a nations parquet, derived heat counts. A Diamond League final
+# has none of that -- one race per event, no heats, no qualifying, no
+# advancement. So these cards publish a SUBSET of Birmingham's artefacts rather
+# than fabricating empty rounds data to fit a shape the meet does not have.
+#
+# THE SITE IS THE CONTRACT. athletics/meet.qmd and athletics/event.qmd are both
+# query-param driven and otherwise meet-agnostic; between them they fetch three
+# objects per meet, so three is what a card must publish:
+#   <meet>-predictions.parquet   the card (meet.qmd + event.qmd)
+#   <meet>-events.parquet        one row per event (meet.qmd's table)
+#   <meet>-rounds.parquet        see below -- required even with no rounds
+#
+# The rounds object is NOT optional and NOT padding. event.qmd deliberately
+# separates "this event genuinely has one round" from "the rounds file did not
+# load", and on a null fetch prints "Round detail is unavailable right now" --
+# which for a one-day meet would report an outage that is not happening. One
+# honest row per event (round_index 1, "Final", one race, nothing advancing)
+# states the true shape instead. `counts_source` is deliberately NOT "derived":
+# that value is what triggers event.qmd's Technical-Delegates note explaining
+# how heat counts were guessed, and there are no heats here to explain.
+# budapest2026 is the same finals-only shape and publishes the same three
+# objects, despite a materially better field source (World Athletics' own
+# qualification standings, IDs pre-resolved) than Brussels' third-party
+# compilation. The shape of the meet, not the provenance of its field, is what
+# decides which artefacts a card needs -- so both belong in this one loop, and
+# the difference in provenance is carried by field_type/field_source per row.
+DL_MEETS <- c("brussels2026", "budapest2026")
+
+for (mid in DL_MEETS) {
+  cf <- file.path(D, sprintf("%s_pretournament.rds", mid))
+  if (!file.exists(cf)) { cli::cli_alert_info("{mid}: no card built yet, skipping."); next }
+
+  # Same gate Birmingham gets: the card is only publishable if its own sanity
+  # script passes, run here rather than trusting that someone remembered.
+  dl_sanity <- file.path(VERSE, "citiusdata", "scripts", "sanity_diamond_league_card.R")
+  rc_dl <- system2("Rscript", c(shQuote(dl_sanity), shQuote(mid)),
+                   stdout = FALSE, stderr = FALSE)
+  if (!identical(rc_dl, 0L)) {
+    cli::cli_abort(c("sanity_diamond_league_card.R FAILED for {mid} (exit {rc_dl}) - nothing published.",
+                     i = "Run it directly to see which check failed."))
+  }
+  cli::cli_alert_success("{mid}: sanity checks passed; the card is publishable.")
+
+  dp <- setDT(readRDS(cf))
+
+  # p_final is STRUCTURAL here, not estimated: in a straight final, being in the
+  # field IS being in the final. event.qmd already knows this -- it prints a
+  # structural 1 as "100%" while refusing to print 100% for any estimate -- but
+  # it needs the column to exist to say so. predict_diamond_league_final.R does
+  # not emit it (there is no round to reach), so it is set here, where the
+  # reason it equals 1 is a property of the meet shape rather than a model
+  # output being rounded up.
+  dp[, p_final := 1]
+
+  dcard <- dp[, intersect(KEEP, names(dp)), with = FALSE]
+  dcard[, meet_id := mid]
+
+  dcard <- merge(dcard, orient, by = "event_id", all.x = TRUE)
+  dcard[, c("pred_mark", "mark_unit") := predicted_mark(ability, orientation)]
+  dcard[, c("orientation", "family") := NULL]
+  stopifnot("every predicted mark must format" = !any(is.na(dcard$pred_mark)))
+
+  setorder(dcard, event_id, -p_gold)
+  dcard[, rank_gold := seq_len(.N), by = event_id]
+
+  # One row per event, same columns Birmingham's events table carries. n_rounds
+  # comes off the card rather than a round structure file, because for these
+  # meets the card is the only thing that knows it.
+  dev <- as.data.table(citius_events())[event_id %in% unique(dcard$event_id),
+           .(event_id, discipline, sex, family, orientation)]
+  dev <- merge(dev, dcard[, .(field = .N, favourite = athlete[1],
+                              p_favourite = p_gold[1],
+                              n_rounds = n_rounds[1]), by = event_id],
+               by = "event_id", all.x = TRUE)
+
+  dlab <- dcard[, .(round_index = 1L, round = "Final", races = 1L,
+                    advance = NA_integer_, fastest_losers = NA_integer_,
+                    counts_source = "single_final"), by = event_id]
+
+  for (x in list(dcard, dev, dlab)) if (is.data.table(x)) x[, generated_at := NOW]
+
+  artefacts[[sprintf("%s-predictions.parquet", mid)]] <- dcard
+  artefacts[[sprintf("%s-rounds.parquet", mid)]]      <- dlab
+  artefacts[[sprintf("%s-events.parquet", mid)]]      <- dev
+  cli::cli_alert_success(
+    "{mid}: {nrow(dcard)} athlete-event{?s} across {uniqueN(dcard$event_id)} event{?s}.")
+}
 
 for (nm in names(artefacts)) {
   write_parquet(artefacts[[nm]], file.path(BLOG, nm))

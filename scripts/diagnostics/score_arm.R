@@ -63,13 +63,27 @@ if (n_races < MIN_RACES) {
            small a sample is genuinely what you want."))
 }
 
-ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+ch <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(ch) || !nrow(ch)) ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 ch[, athlete_id := as.character(athlete_id)]
 act <- ch[!is.na(mark) & !is.na(race_key) & !is.na(place) & place > 0,
           .(race_id = race_key, athlete_id, actual = mark, event_id, date, competition_id)]
 d <- merge(d, act, by = c("race_id", "athlete_id"))
 d <- merge(d, as.data.table(citius_events())[, .(event_id, orientation, family)], by = "event_id")
 cat_tbl <- setDT(arrow::read_parquet(file.path(OUT, "competition_catalogue.parquet")))
+# competition_id round-trips through parquet as character while the harvest
+# holds an integer -- the same trap documented at backtest_athletics.R:254-257
+# and build_calibration_mtier.R:31-32. Uncaught here it aborts the merge
+# outright rather than silently matching nothing, which is at least loud, but
+# it means score_arm.R has never actually completed this join.
+d[, competition_id := as.character(competition_id)]
+cat_tbl[, competition_id := as.character(competition_id)]
 d <- merge(d, cat_tbl[, .(competition_id, class, strength, meet_tier)],
            by = "competition_id", all.x = TRUE)
 
@@ -230,6 +244,16 @@ llf <- function(p, y) { p <- pmin(pmax(p, EPS), 1 - EPS); -(y * log(p) + (1 - y)
 
 pop <- function(dd, label) {
   nr <- uniqueN(dd$race_id); if (nr < 25) return(invisible(NULL))
+  # MARKS_ONLY arms (backtest_athletics.R's simulate_event()-skipping fast
+  # path) never compute p_gold/p_medal -- they're NA by construction, not a
+  # bug. t.test() on an all-NA vector errors, so this arm can only ever
+  # report marks MAE/RMSE; the probability sections are skipped rather than
+  # printing NaN/an error that looks like a real result. Checked on BOTH
+  # sides: the baseline (b_gold, either VS's arm or the simulated last-5
+  # baseline) can be the MARKS_ONLY one too if the two arms in a VS
+  # comparison are given in the other order, and a_gold-only check would
+  # miss that and still crash on t.test(b, a).
+  MARKS_ONLY_ARM <- all(is.na(dd$a_gold)) || all(is.na(dd$b_gold))
   pair <- function(am, bm, nm) {
     t <- t.test(bm, am, paired = TRUE)
     sprintf("  %-16s %9.5f  %9.5f   %+7.2f%%  %s  p=%.3g", nm, mean(am), mean(bm),
@@ -237,10 +261,12 @@ pop <- function(dd, label) {
             ifelse(mean(am) < mean(bm), "ARM ", "base"), t$p.value)
   }
   byrace <- function(f) dd[, .(a = f(.SD, "a"), b = f(.SD, "b")), by = race_id]
-  gB <- byrace(function(s, p) mean((s[[paste0(p, "_gold")]] - s$hit)^2))
-  gL <- byrace(function(s, p) mean(llf(s[[paste0(p, "_gold")]], s$hit)))
-  mB <- byrace(function(s, p) mean((s[[paste0(p, "_medal")]] - s$hit_medal)^2))
-  mL <- byrace(function(s, p) mean(llf(s[[paste0(p, "_medal")]], s$hit_medal)))
+  if (!MARKS_ONLY_ARM) {
+    gB <- byrace(function(s, p) mean((s[[paste0(p, "_gold")]] - s$hit)^2))
+    gL <- byrace(function(s, p) mean(llf(s[[paste0(p, "_gold")]], s$hit)))
+    mB <- byrace(function(s, p) mean((s[[paste0(p, "_medal")]] - s$hit_medal)^2))
+    mL <- byrace(function(s, p) mean(llf(s[[paste0(p, "_medal")]], s$hit_medal)))
+  }
   ea <- 100 * (dd$a_perf - dd$act_perf); eb <- 100 * (dd$b_perf - dd$act_perf)
   eac <- ea - mean(ea, na.rm = TRUE); ebc <- eb - mean(eb, na.rm = TRUE)
   # `post` turns the mean of the per-prediction quantity into the reported
@@ -252,20 +278,25 @@ pop <- function(dd, label) {
     sprintf("  %-16s %9.4f  %9.4f   %+7.2f%%  %s  p=%.3g", nm, ax, ay,
             100 * (ax - ay) / ay, ifelse(ax < ay, "ARM ", "base"), t$p.value)
   }
-  cat(sprintf("\n%s  |  %d races, %s predictions\n", label, nr, format(nrow(dd), big.mark = ",")))
+  cat(sprintf("\n%s  |  %d races, %s predictions%s\n", label, nr, format(nrow(dd), big.mark = ","),
+              if (MARKS_ONLY_ARM) "  [MARKS_ONLY: no p_gold/p_medal]" else ""))
   cat(sprintf("  %-16s %9s  %9s   %8s\n", "", "arm", "base", "rel"))
-  cat(pair(gB$a, gB$b, "gold Brier"), "\n")
-  cat(pair(gL$a, gL$b, "gold logloss"), "\n")
-  cat(pair(mB$a, mB$b, "medal Brier"), "\n")
-  cat(pair(mL$a, mL$b, "medal logloss"), "\n")
+  if (!MARKS_ONLY_ARM) {
+    cat(pair(gB$a, gB$b, "gold Brier"), "\n")
+    cat(pair(gL$a, gL$b, "gold logloss"), "\n")
+    cat(pair(mB$a, mB$b, "medal Brier"), "\n")
+    cat(pair(mL$a, mL$b, "medal logloss"), "\n")
+  }
   cat(mk(ea, eb, "marks MAE", abs), "\n")
   cat(mk(ea, eb, "marks RMSE", function(v) v^2, sqrt), "\n")
   cat(mk(eac, ebc, "marks MAE ctr", abs), "\n")
   cat(mk(eac, ebc, "marks RMSE ctr", function(v) v^2, sqrt), "\n")
-  fa <- dd[, .(w = athlete_id[which.max(a_gold)] == athlete_id[hit == TRUE][1]), by = race_id]
-  fb <- dd[, .(w = athlete_id[which.max(b_gold)] == athlete_id[hit == TRUE][1]), by = race_id]
-  cat(sprintf("  %-16s %8.1f%%  %8.1f%%\n", "favourite wins",
-              100 * mean(fa$w, na.rm = TRUE), 100 * mean(fb$w, na.rm = TRUE)))
+  if (!MARKS_ONLY_ARM) {
+    fa <- dd[, .(w = athlete_id[which.max(a_gold)] == athlete_id[hit == TRUE][1]), by = race_id]
+    fb <- dd[, .(w = athlete_id[which.max(b_gold)] == athlete_id[hit == TRUE][1]), by = race_id]
+    cat(sprintf("  %-16s %8.1f%%  %8.1f%%\n", "favourite wins",
+                100 * mean(fa$w, na.rm = TRUE), 100 * mean(fb$w, na.rm = TRUE)))
+  }
 }
 cli::cli_h1("{ARM} vs {BLAB}   (holdout from {HOLDOUT})")
 # Populations by TIER, not by class. T1 is the tier the catalogue assigns, so it

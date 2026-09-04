@@ -9,7 +9,11 @@
 # GW across its own results, which classify as high, mid, low and top. 117
 # competitions hold more than one tier code. Diamond League marks -- set by
 # exactly the athletes we care about -- are routinely labelled low tier and then
-# given a -1.69% upward context adjustment as though run at a slow meet.
+# given a -1.223% upward context adjustment as though run at a slow meet
+# (deployed offset; -1.69% was a stale 2026-07-29/30 vintage -- see
+# .scratch/athletics-calendar/issues/03-diamond-league-tier-defect.md). The
+# scale is also not monotonic: "mid" corrects harder (-1.432%) than "low"
+# (-1.223%), which is the real defect, not the size of either number.
 #
 # So this script builds two things the feed does not provide:
 #
@@ -27,7 +31,14 @@ suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
 OUT <- here::here("citiusdata", "data")
 
-ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+ch <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(ch) || !nrow(ch)) ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 ch[, athlete_id := as.character(athlete_id)]
 cat(sprintf("harvest: %s results | %s competitions\n",
             format(nrow(ch), big.mark = ","), format(uniqueN(ch$competition_id), big.mark = ",")))
@@ -44,7 +55,13 @@ cat(sprintf("harvest: %s results | %s competitions\n",
 # Every one of these was a false positive in the first pass. They are listed
 # rather than patched away so the next person can see what the names do.
 NOT_THE_EVENT <- paste(
-  "Trials|Qualifier|Qualifying|Anniversary|Open Meeting|Selection|",
+  # `Trials?` not `Trials`: "National Race Walking Grand Prix 1 (WCH & Asian
+  # Games Trial)" -- a national grand prix -- was classified asian_games because
+  # the singular escaped the plural-only pattern. Pre-Tournament and Rehearsal
+  # added for the same reason: "Jakarta Asian Games Pre-Tournament" and
+  # "Rehearsal Rhine-Ruhr FISU World University Games" are not those events.
+  "Trials?|Qualifier|Qualifying|Anniversary|Open Meeting|Selection|",
+  "Pre.?Tournament|Rehearsal|",
   "Warm.?up|Test Event|Festival|Classic -", sep = "")
 
 # Never an elite senior track meeting, whatever else the name contains. A
@@ -52,7 +69,13 @@ NOT_THE_EVENT <- paste(
 # DL banner is a youth meeting. These are applied to the elite classes only, so
 # a road race still classifies correctly as a road race elsewhere.
 NEVER_ELITE <- paste0(
-  "Marathon|Half.?Marathon|10 ?[Kk]m?\\b|5 ?[Kk]m?\\b|Road Race|",
+  # `Marat` with NO word boundary, matching the road_race rule exactly. The
+  # accented spellings were escaping this guard, and a `\b` would then let every
+  # compound form (Halbmarathon, Halvmaraton, Mezzamaratona) escape it instead
+  # -- so a German half marathon could be swept into an elite class by a city or
+  # sponsor match. Both patterns must stay identical or the guard and the
+  # classifier disagree about what a road race is.
+  "Marat|10 ?[Kk]m?\\b|5 ?[Kk]m?\\b|Road Race|",
   "karusell|Bislettmila|Distanseserie|Distance challenge|Bislett Spring|",
   "Bislett Open|KM Oslo|Nasjonalt|Sommerstevne|Elite Series|Street Tour|",
   # `m.odzie` rather than a \\u escape: PCRE2 rejects \\u outright, and the
@@ -70,7 +93,17 @@ RULES <- list(
     "Division II|Division III|Div. II|Div. III|NAIA|NJCAA|Conference USA|",
     "Big Ten|SEC Outdoor|SEC Indoor|Pac-12|ACC Outdoor|ACC Indoor|",
     "Inter-University|Intervarsity|Students Open")),
-  list(class = "ncaa", pat = "NCAA|Division I|Div. I|Collegiate|University Championships"),
+  # Spelled-out Division I power-conference championships added 2026-09-03.
+  # They belong here, NOT in ncaa_lower: that class is for Division II/III
+  # and NAIA. The SEC and Big 12 championships measure strength 90-93,
+  # which is elite-adjacent -- filing them as "lower" would have demoted 44
+  # genuinely strong fields out of the model's corpus. Caught in a dry run
+  # before it shipped.
+  list(class = "ncaa", pat = paste0(
+    "NCAA|Division I|Div. I|Collegiate|University Championships|",
+    "Southeastern Conference|Atlantic Coast Conference|Big Twelve|Big 12|",
+    "Pacific-12|Mountain West|American Athletic Conference|Ivy League|",
+    "Patriot League|Sun Belt Conference|Missouri Valley Conference")),
   list(class = "olympics",       pat = "Olympic Games|XXX+ Olympic"),
   # The body was the IAAF until 2019, so London 2017 and Doha 2019 are "IAAF
   # World Championships in Athletics". Fixing this pattern in the HARVESTER and
@@ -79,6 +112,29 @@ RULES <- list(
   list(class = "world_indoor",   pat = "World (Athletics )?Indoor Championships|IAAF World Indoor"),
   list(class = "world_other",    pat = "World Athletics (Relays|Cross Country|Race Walking|Road Running)|World Half Marathon|World Cross Country|World Race Walking|World Mountain"),
   list(class = "commonwealth",   pat = "Commonwealth Games"),
+  # MUST precede asian_games. Rules are first-match-wins, and the bare string
+  # "Asian Games" also matches "South East Asian Games" and "South Asian Games"
+  # -- so all three were one class, and regional_games' own explicit
+  # "Southeast Asian Games" entry could never fire. Measured 2026-09-03:
+  # asian_games held the Asian Games (581-635 athletes), the SEA Games (228-594)
+  # and the South Asian Games under one label, so no single tier rule could be
+  # right for it. The SEA Games is a sub-regional championship, not a
+  # continental one, which is why it belongs with regional_games.
+  # The European Cross Country Championships: 14 editions, 437-529 athletes
+  # each, every one sitting in `unclassified` because no rule named it. It is
+  # the continental sibling of World Cross Country, which `world_other` already
+  # holds, so it goes there rather than `european_champs` -- deliberately,
+  # because european_champs is in form_ratings.R's MAJ panel and adding a
+  # cross-country championship to the majors metric would change a fixed
+  # reference for reasons unrelated to the majors.
+  # Its `strength` is NA (one or two events), so no strength band could ever
+  # have rescued it -- only a name rule can.
+  list(class = "world_other", pat = "European Cross Country Championships"),
+  # The IAAF World Athletics Final (2001-2009) and the Continental Cup: the
+  # season-ending elite finals of their era. Defunct, so no rule was ever
+  # written, and 20+ editions sat unclassified.
+  list(class = "world_other", pat = "World Athletics Final|Continental Cup|IAAF Grand Prix Final"),
+  list(class = "regional_games", pat = "South\\s*-?\\s*East Asian Games|Southeast Asian Games|South Asian Games"),
   list(class = "asian_games",    pat = "Asian Games"),
   list(class = "panam_games",    pat = "Pan American Games"),
   list(class = "african_games",  pat = "African Games|All-Africa Games"),
@@ -114,19 +170,56 @@ RULES <- list(
   # Elite road racing belongs in T1 (Pete, 2026-07-31) and the strength measure
   # sorts the Berlin marathon from a local half, so the class just needs to
   # exist for the tiering to be honest about what it is looking at.
+  # `Marat` as a bare substring, with NO word boundary. Two bugs in sequence:
+  #
+  #   (a) the pattern listed "Marathon" and "Maraton" and missed every accented
+  #       form, so 135 meets and 8,869 athletes -- Valencia, Sevilla, Barcelona,
+  #       Malaga -- fell to `unclassified`.
+  #   (b) the first fix used `\bMarat`, and the word boundary then broke 48
+  #       road races where "marathon" sits INSIDE a compound word:
+  #       Halbmarathon (German), Halvmaraton (Norwegian), Mezzamaratona
+  #       (Italian), pulmaraton (Czech), Halfmarathon, Venicemarathon.
+  #       It caught 3 of 25 Halbmarathon meets. The Generali Berliner
+  #       Halbmarathon dropped out of T1.
+  #
+  # Measured before removing the boundary rather than after: of 2,888 catalogue
+  # names containing "marat", exactly 7 do not also match an explicit marathon
+  # word, and all 7 ARE road races (Marato Barcelona, a truncated
+  # "Semi-Maratho", Basque "Maratoia", a "Half Marathlon" typo). Zero false
+  # positives, so the bare stem is safe.
+  #
+  # Same word-boundary family as the RAK/Marrakesh and bare-"Championships"
+  # bugs already recorded in this file -- except here the boundary was the bug,
+  # not the fix.
   list(class = "road_race", pat = paste0(
-    "Marathon|Half.?Marathon|\\b10 ?[Kk]m?\\b|\\b5 ?[Kk]m?\\b|",
+    "Marat|\\b10 ?[Kk]m?\\b|\\b5 ?[Kk]m?\\b|",
     "Road Running|Road Race|Elite 10K|10K Elite|Great North Run|",
-    "City Run|Corrida|Maraton")),
+    "City Run|Corrida")),
 
   # The World Indoor Tour is a real elite circuit with Gold/Silver/Bronze
   # levels, and its Gold meetings are the strongest indoor fields outside a
   # championship.
   list(class = "indoor_tour", pat = "World Indoor Tour|Indoor Tour Gold|Millrose|Mill\u00earose"),
+  # Audited 2026-09-03 against asian_games's conflation, and it is a DIFFERENT
+  # shape of problem. asian_games swept in trials and a sub-regional games
+  # under one label with the wrong tier consequence; here the WA category code
+  # (`wac`) on the meets this class covers is overwhelmingly B/C/D, and B/C/D
+  # all map to T2 under apply_wa_category_tier.R -- so WA's own classification
+  # already agrees with the T2 placement. No tier bug to fix.
+  #
+  # The one real thing found: `Central American` bare matched
+  # "Central American Race Walking Championships" and "Central American Cross
+  # Country Championships" -- single-discipline sub-championships, not the
+  # multi-sport Games -- alongside the actual "Central American Championships"
+  # and "Central American Games". Excluded by lookahead so `class` reads
+  # correctly. Measured before shipping: this changes NO meet's tier (their
+  # wac is B/C/D in every case, same T2 outcome via the WA mapping instead) --
+  # it is a metadata-accuracy fix, not a model-affecting one.
   list(class = "regional_games", pat = paste0(
     "Mediterranean Games|Islamic Solidarity|",
     "Universiade|World University|Southeast Asian Games|Bolivarian|",
-    "Central American|South American Games|GCC Games|Military Games|",
+    "Central American(?! Race Walking| Cross Country)|",
+    "South American Games|GCC Games|Military Games|",
     "Military World|Gulf Games|Pacific Games|Maccabiah")),
   # Diamond League by MEETING name, not by city.
   #
@@ -146,7 +239,29 @@ RULES <- list(
                     "Anniversary Games|London Athletics Meet|Meeting de Paris|",
                     "Skolimowska Memorial|BAUHAUS.?galan|Diamond League|",
                     "Mohammed VI|Shanghai Golden Grand Prix|Qatar Athletic|",
-                    "Bauhaus Galan|Dream Mile|Keqiao|Suzhou")),
+                    "Bauhaus Galan|Dream Mile|Keqiao|Suzhou|",
+                    # HISTORICAL SPONSOR NAMES. A Diamond League fixture is
+                    # named after whoever is paying, and the meeting keeps its
+                    # place on the circuit when the sponsor changes. These
+                    # editions were all sitting in `unclassified`, found via
+                    # the WA feed's own GL category on 2026-09-03:
+                    #   Stockholm  -> DN Galan, BAUHAUS Athletics
+                    #   Paris      -> Meeting AREVA
+                    #   New York   -> adidas Grand Prix
+                    #   London     -> Crystal Palace, Aviva London Grand Prix
+                    #   Birmingham -> Muller Grand Prix
+                    #   Doha       -> Doha Meeting, Ooredoo, Seashore Group
+                    # These are MEETING names, not cities -- the first version
+                    # of this pattern matched bare city names and swept in 73
+                    # wrong meets, which is the trap being avoided here.
+                    # `BAUHAUS Athletics` as well as `BAUHAUS.?galan` above:
+                    # the 2015 Stockholm edition dropped "Galan" from the name,
+                    # so the existing alternatives -- which both require
+                    # "galan" to follow -- missed it.
+                    "BAUHAUS Athletics|DN Galan|Meeting AREVA|adidas Grand Prix|",
+                    "Crystal Palace|Aviva London Grand Prix|",
+                    "Müller Grand Prix|Muller Grand Prix|",
+                    "Ooredoo Doha|Seashore Group Doha|Doha Meeting")),
   # Named club-level and warm-up meets. Listed BEFORE continental_tour so a
   # "Bislett Spring" or a "pre-programme" cannot be swept up by a broader rule
   # and land in T1 next to the Olympics -- which is exactly what happened.
@@ -155,8 +270,36 @@ RULES <- list(
     "Bislettmila|karusell|Distanseserie|Distance challenge|",
     "Lambertseter|Sommerstevne|Nasjonalt|KM Oslo|Street Tour|",
     "Boysen Memorial|Aspire Indoor Invitational|Challenge Games")),
-  list(class = "continental_tour", pat = "Continental Tour|Golden Spike|Kusoci|Szewi|Rieti|Zag|Hanzekovic|Padova|Turku|Motonet|Racers Grand Prix|Meeting"),
-  list(class = "national_champs", pat = "National Championships|Championships of|(USA|British|Jamaican|Kenyan|Australian|Japanese|Chinese|German|French|Italian|Spanish|Polish|South African|Canadian|Indian|Nigerian|Ethiopian|Dutch|Swedish|Norwegian|Finnish|Czech|Swiss|Belgian|Irish|Portuguese|Greek|Turkish|Brazilian|Mexican|Cuban|New Zealand) Championships"),
+  # Named international one-day meets added 2026-09-03. These were sitting
+  # unclassified and reaching T2 only via the strength fallback, so this is
+  # mostly a class correction rather than a tier move (192 classified, 30
+  # tier changes measured in a dry run).
+  list(class = "continental_tour", pat = paste0(
+    "Continental Tour|Golden Spike|Kusoci|Szewi|Rieti|Zag|Hanzekovic|",
+    "Padova|Turku|Motonet|Racers Grand Prix|",
+    "FBK Games|Copernicus Cup|Gyulai|Istvan Memorial|Istv.n Memorial|",
+    "New Balance Indoor Grand Prix|ISTAF|Paavo Nurmi|Kip Keino|Trond Mohn|",
+    "Seiko Golden Grand Prix|Maurie Plant|Meeting Madrid|Cybulski|",
+    "Russian Winter|Ostrava|Meeting de Lyon|Miramas|Belgrade Indoor|",
+    "Cyprus International|Meeting Metz|Metz Moselle|Hauts-de-France|",
+    "Mondeville|Tampere Indoor|Ciutat de Barcelona|Canarias Athletics|",
+    "Meeting Internacional|Meeting")),
+  # WIDENED 2026-09-03: the nationality list previously required the word
+  # "Championships" to follow the nationality immediately, so every
+  # "<Nation> Indoor Championships" fell through to unclassified -- 679
+  # meets, including the USA/French/German/Russian/Spanish/Italian indoor
+  # nationals. Allows an optional Indoor/Outdoor/Winter/discipline word in
+  # between, and adds the nationalities that were simply missing.
+  list(class = "national_champs", pat = paste0(
+    "National Championships|Championships of|",
+    "(USA|US|American|British|Jamaican|Kenyan|Australian|Japanese|Chinese|",
+    "German|French|Italian|Spanish|Polish|South African|Canadian|Indian|",
+    "Nigerian|Ethiopian|Dutch|Swedish|Norwegian|Finnish|Czech|Swiss|Belgian|",
+    "Irish|Portuguese|Greek|Turkish|Brazilian|Mexican|Cuban|New Zealand|",
+    "Russian|Ukrainian|Hungarian|Austrian|Danish|Romanian|Bulgarian|",
+    "Slovenian|Croatian)",
+    "\\s+(Indoor|Outdoor|Winter|Combined Events|Throws|Race Walking)?\\s*",
+    "Championships")),
   # Team championships split by division. The Super League and First Division
   # (71-75) are real; the Second Division (57), First League (33) and Third
   # Division (19) are not, and nor are the Pan American race walking cups
@@ -171,8 +314,12 @@ cat_of <- function(nm) {
   # A meet whose name merely REFERENCES a major is not that major.
   excluded <- grepl(NOT_THE_EVENT, nm, ignore.case = TRUE, perl = TRUE)
   for (r in RULES) {
+    # The four continental-games classes were in NEITHER guard list, so a meet
+    # merely REFERENCING them was classified as them -- which is exactly what
+    # NOT_THE_EVENT exists to prevent for every other senior class.
     senior <- r$class %in% c("olympics","world_champs","world_indoor","world_other",
-                             "commonwealth","continental","regional_games")
+                             "commonwealth","continental","regional_games",
+                             "asian_games","african_games","panam_games","european_games")
     elite <- r$class %in% c("olympics","world_champs","world_indoor","commonwealth",
                             "continental","diamond_league")
     never <- grepl(NEVER_ELITE, nm, ignore.case = TRUE, perl = TRUE)
@@ -213,6 +360,22 @@ ch[is.na(pctl), pctl := frank(perf, na.last = "keep") / sum(!is.na(perf)), by = 
 ath_q <- ch[!is.na(pctl), .(a_q = max(pctl)), by = .(athlete_id, event_id)]
 fin_rows <- ch[grepl("final", round, ignore.case = TRUE) &
                  !grepl("semi", round, ignore.case = TRUE)]
+
+# ROAD EVENTS: "final round" is the WHOLE MASS-PARTICIPATION FIELD, not a
+# curated entry list -- a track final is capped at ~8-16 by construction, a
+# marathon's is capped by nothing. Averaging quality across every finisher
+# dilutes the actual elite race with however many club-level qualifiers
+# showed up: measured 2026-09-02, Boston Marathon (a World Marathon Major)
+# scored strength 2.7 from 1,547 cohort-matched finishers, the near-opposite
+# of what it should read. Restrict to each race's own top 10 BY MARK before
+# scoring -- mirrors what a championship final's field size already gives
+# every other event for free, not a new assumption. Uses `perf` (oriented,
+# higher always better) so this is orientation-safe for both directions.
+road_events <- as.data.table(citius_events())[family == "road", event_id]
+fin_rows[event_id %in% road_events, .rk := frank(-perf, ties.method = "first"),
+         by = .(competition_id, event_id)]
+fin_rows <- fin_rows[is.na(.rk) | .rk <= 10L][, .rk := NULL]
+
 fin_rows <- merge(fin_rows, ath_q, by = c("athlete_id", "event_id"), all.x = TRUE)
 # PER EVENT, then averaged -- because breadth is not weakness.
 #
@@ -249,10 +412,22 @@ strength <- ev_q[, .(strength = round(mean(ev_pct), 1), s_raw = round(100 * mean
 # rather than trusted -- the same reason fit_half_life() refuses a boundary
 # optimum and match_event() refuses a fuzzy match.
 MIN_EVENTS_FOR_STRENGTH <- 5L
-thin <- strength[races_won < MIN_EVENTS_FOR_STRENGTH]
+# PURE ROAD competitions are exempt: a road meet never runs more than the
+# Marathon-M/Marathon-W pair (structurally, not thinly) -- this floor was
+# built for a multi-event meet running too FEW of its many possible events,
+# which cannot happen to a class capped at 2. The noise problem the floor
+# exists to catch (a tiny, lucky sample reading implausibly high) is handled
+# per-event for road races by the top-10-by-mark restriction above instead.
+# A MIXED competition (e.g. the Olympics, which runs a marathon alongside 40
+# other events) is NOT exempt -- it's judged on its full breadth as before.
+road_only <- ev_q[, .(all_road = all(event_id %in% road_events)), by = competition_id]
+strength <- merge(strength, road_only, by = "competition_id", all.x = TRUE)
+exempt <- !is.na(strength$all_road) & strength$all_road
+thin <- strength[races_won < MIN_EVENTS_FOR_STRENGTH & !exempt]
 if (nrow(thin)) cli::cli_alert_info(
   "{nrow(thin)} competition{?s} have fewer than {MIN_EVENTS_FOR_STRENGTH} scored events; strength withheld.")
-strength[races_won < MIN_EVENTS_FOR_STRENGTH, strength := NA_real_]
+strength[races_won < MIN_EVENTS_FOR_STRENGTH & !exempt, strength := NA_real_]
+strength[, all_road := NULL]
 
 cat_tbl <- ch[, .(
   # NOT comp_name[1]. Missingness here is per-ROW, not per-competition, so the
@@ -270,6 +445,12 @@ cat_tbl <- ch[, .(
   athletes    = uniqueN(athlete_id),
   events      = uniqueN(event_id),
   races       = uniqueN(race_key),
+  # Literal "Final" only, deliberately. This script's input is
+  # championship_results.rds (the competition route), which contains ZERO
+  # short round codes -- verified 2026-09-03: 3,177,304 rows match the
+  # literal, 0 match "^F[0-9]*$". The short-code handling belongs in
+  # augment_catalogue_coverage.R, whose input (the career route) does use
+  # them. A brief "fix" adding short codes here was reverted as inert.
   finals      = uniqueN(race_key[grepl("final", round, ignore.case = TRUE) &
                                    !grepl("semi", round, ignore.case = TRUE)]),
   tier_codes  = paste(sort(unique(na.omit(tier))), collapse = "/"),
@@ -328,7 +509,15 @@ cat_tbl[, class := cat_of(comp_name)]
 KNOWN_T1 <- c("olympics", "world_champs", "commonwealth", "world_indoor",
               "diamond_league", "world_other", "indoor_tour", "european_champs")
 KNOWN_T2 <- c("continental", "national_champs", "ncaa", "team_champs",
-              "continental_tour", "regional_games")
+              "continental_tour", "regional_games",
+              # These four were in NO tier list, so continental multi-sport
+              # championships fell through to the unclassified strength band and
+              # landed wherever the number put them -- the 19th Asian Games (581
+              # athletes) was T2 by luck of scoring 83.4, while the Southeast
+              # Asian Games sat in T3. They are peers of regional_games, which
+              # was already here. With the split above, asian_games now holds
+              # only the actual Asian Games.
+              "asian_games", "african_games", "panam_games", "european_games")
 KNOWN_T3 <- c("age_group", "club_meet", "ncaa_lower", "team_champs_lower")
 # Road racing spans the Berlin marathon and a local 10K, so it is the one class
 # where measured strength genuinely decides the tier rather than the label.
@@ -414,13 +603,28 @@ oly <- cat_tbl[class == "olympics" & !is.na(meet_tier)]
 wch <- cat_tbl[class == "world_champs" & !is.na(meet_tier)]
 dl  <- cat_tbl[class == "diamond_league" & !is.na(meet_tier)]
 age <- cat_tbl[class == "age_group" & !is.na(meet_tier)]
-ok1 <- anchor("every Olympic Games is T1", all(oly$meet_tier == "T1_elite"),
+
+# POPULATION-SIZE ANCHORS, checked BEFORE the property anchors below.
+# `all(logical(0))` is TRUE in R, so a property anchor over an empty selection
+# reports PASS with nothing actually checked. This is exactly how "every
+# Olympic Games is T1" passed on 2026-08-21 while every Olympics sat in T2 --
+# the majors had lost their `class` upstream (see the IAAF-naming comment
+# above), the selector matched zero rows, and the alarm was disabled by the
+# precise condition it existed to detect. Floors are real facts about the
+# corpus (there have been at least this many of each by 2026), not tuned to
+# today's counts.
+p1 <- anchor("olympics population is non-empty", nrow(oly) >= 8, sprintf("%d rows", nrow(oly)))
+p2 <- anchor("world_champs population is non-empty", nrow(wch) >= 8, sprintf("%d rows", nrow(wch)))
+p3 <- anchor("diamond_league population is non-empty", nrow(dl) >= 20, sprintf("%d rows", nrow(dl)))
+p4 <- anchor("age_group population is non-empty", nrow(age) >= 20, sprintf("%d rows", nrow(age)))
+
+ok1 <- anchor("every Olympic Games is T1", p1 && all(oly$meet_tier == "T1_elite"),
               paste(sort(unique(oly$meet_tier)), collapse = "/"))
-ok2 <- anchor("every senior World Championships is T1", all(wch$meet_tier == "T1_elite"),
+ok2 <- anchor("every senior World Championships is T1", p2 && all(wch$meet_tier == "T1_elite"),
               paste(sort(unique(wch$meet_tier)), collapse = "/"))
-ok3 <- anchor("most Diamond League is T1", mean(dl$meet_tier == "T1_elite") > 0.6,
+ok3 <- anchor("most Diamond League is T1", p3 && mean(dl$meet_tier == "T1_elite") > 0.6,
               sprintf("%.0f%%", 100 * mean(dl$meet_tier == "T1_elite")))
-ok4 <- anchor("no age-group meet is T1", !any(age$meet_tier == "T1_elite"),
+ok4 <- anchor("no age-group meet is T1", p4 && !any(age$meet_tier == "T1_elite"),
               sprintf("%d of %d", sum(age$meet_tier == "T1_elite"), nrow(age)))
 
 # NEGATIVE anchors. The set above only said what must be IN, which is why a

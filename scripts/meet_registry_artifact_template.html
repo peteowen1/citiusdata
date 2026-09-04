@@ -1,0 +1,639 @@
+<!--
+  Meet registry artifact template. To republish:
+  1. Rscript scripts/export_meet_registry_artifact.R   -> data/meet_registry_artifact.json (meet level, ~4MB)
+     Rscript scripts/export_meet_events.R              -> data/meet_registry_events.json  (event level, ~8MB)
+  2. Splice the two MEET_DATA / MEET_EVENTS placeholders in the script
+     block below (each is that name wrapped in double underscores) with
+     those files' contents -- a plain string replace on the raw text, done
+     with a script, not by hand (they're megabytes).
+
+     TWO TRAPS, both hit for real on 2026-09-03:
+     (a) Do NOT write the placeholder tokens literally in this comment.
+         String.replace() takes the FIRST match, so a mention up here gets
+         substituted instead of the real one below, leaving broken JS and
+         a silently empty table.
+     (b) Pass a FUNCTION as the replacement, not the string. A raw string
+         replacement interprets $& / $1 / $` patterns, so any "$" in a meet
+         name would corrupt the output.
+
+       node -e 'const fs=require("fs");
+         const P=s=>"__"+s+"__";
+         let h=fs.readFileSync("scripts/meet_registry_artifact_template.html","utf8");
+         const meets=fs.readFileSync("data/meet_registry_artifact.json","utf8");
+         const events=fs.readFileSync("data/meet_registry_events.json","utf8");
+         h=h.replace(P("MEET_DATA_JSON"), ()=>meets);
+         h=h.replace(P("MEET_EVENTS_JSON"), ()=>events);
+         if (h.includes(P("MEET_DATA_JSON"))||h.includes(P("MEET_EVENTS_JSON")))
+           throw new Error("a placeholder was not replaced");
+         fs.writeFileSync("/tmp/meet_registry_final.html", h);'
+  3. Publish /tmp/meet_registry_final.html as an Artifact, same file path as
+     last time if updating the existing published page (ask the user for
+     that URL, or use Artifact action:"list" to find it).
+
+  SIZE BUDGET: the artifact cap is 16MB. Meet data ~4.2MB + event data
+  ~8.1MB + markup ~15KB leaves little headroom -- the event JSON uses a
+  positional-array encoding for exactly this reason (array-of-objects was
+  36.7MB). If either dataset grows, re-check the total before publishing.
+
+  The subtitle row count is now DERIVED from DATA.length at render time. It
+  used to be a hardcoded snapshot with a note saying "update by hand", and by
+  2026-09-03 it was wrong by two catalogue rebuilds. Anything that has to be
+  updated by hand eventually isn't.
+-->
+<title>Meet Registry</title>
+<style>
+  :root {
+    --bg: #f7f6f3;
+    --surface: #ffffff;
+    --border: #e2ddd3;
+    --text: #23201b;
+    --text-dim: #6b6558;
+    --accent: #1c3f66;
+    --accent-ink: #ffffff;
+    --gold: #b8860b;
+    --t1: #1c3f66;
+    --t1-bg: #e4ecf5;
+    --t2: #8a6d1f;
+    --t2-bg: #f4ecd6;
+    --t3: #7a756a;
+    --t3-bg: #eeece5;
+    --row-hover: #f0ede6;
+    --input-bg: #ffffff;
+    --shadow: 0 1px 2px rgba(35,32,27,0.06), 0 2px 8px rgba(35,32,27,0.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17161a;
+      --surface: #201f24;
+      --border: #34323a;
+      --text: #eae7e0;
+      --text-dim: #9b978d;
+      --accent: #6f9bd6;
+      --accent-ink: #10141c;
+      --gold: #d7ad4a;
+      --t1: #6f9bd6;
+      --t1-bg: #1e2c3d;
+      --t2: #d7ad4a;
+      --t2-bg: #332c17;
+      --t3: #9b978d;
+      --t3-bg: #2a2831;
+      --row-hover: #26242b;
+      --input-bg: #26242b;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 2px 8px rgba(0,0,0,0.2);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17161a;
+    --surface: #201f24;
+    --border: #34323a;
+    --text: #eae7e0;
+    --text-dim: #9b978d;
+    --accent: #6f9bd6;
+    --accent-ink: #10141c;
+    --gold: #d7ad4a;
+    --t1: #6f9bd6;
+    --t1-bg: #1e2c3d;
+    --t2: #d7ad4a;
+    --t2-bg: #332c17;
+    --t3: #9b978d;
+    --t3-bg: #2a2831;
+    --row-hover: #26242b;
+    --input-bg: #26242b;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 2px 8px rgba(0,0,0,0.2);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  @font-face {
+    font-family: "Inter";
+    src: local("Inter");
+  }
+
+  header {
+    padding: 28px 32px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  h1 {
+    font-size: 1.5rem;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  .subtitle {
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    max-width: 62ch;
+    line-height: 1.5;
+  }
+
+  .caveats {
+    margin: 10px 32px 0;
+    padding: 8px 14px;
+    background: var(--t2-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.8rem;
+    color: var(--text);
+    line-height: 1.5;
+    max-width: 900px;
+  }
+  .caveats strong { color: var(--t2); }
+  .caveats summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--t2);
+    list-style: none;
+  }
+  .caveats summary::-webkit-details-marker { display: none; }
+  .caveats summary::before { content: "▸ "; }
+  .caveats[open] summary::before { content: "▾ "; }
+  .caveats p { margin: 10px 0 0; }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: flex-end;
+    padding: 16px 32px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+  }
+  input[type="text"], input[type="number"], select {
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 10px;
+    color: var(--text);
+    font-size: 0.88rem;
+    font-family: inherit;
+  }
+  input[type="text"] { min-width: 220px; }
+  input[type="number"] { width: 90px; }
+  .tier-toggles { display: flex; gap: 6px; }
+  .tier-btn {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .tier-btn[data-active="true"][data-tier="T1_elite"] { background: var(--t1-bg); color: var(--t1); border-color: var(--t1); }
+  .tier-btn[data-active="true"][data-tier="T2_strong"] { background: var(--t2-bg); color: var(--t2); border-color: var(--t2); }
+  .tier-btn[data-active="true"][data-tier="T3_development"] { background: var(--t3-bg); color: var(--t3); border-color: var(--t3); }
+  .field.grow { flex: 1; min-width: 200px; }
+  .count {
+    margin-left: auto;
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    white-space: nowrap;
+    align-self: center;
+  }
+
+  main { padding: 0 32px 40px; }
+  .table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-top: 18px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 0.86rem; }
+  th, td { padding: 9px 12px; text-align: left; white-space: nowrap; }
+  th {
+    position: sticky; top: 0;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+  }
+  th:hover { color: var(--text); }
+  th .arrow { opacity: 0.5; margin-left: 3px; }
+  tbody tr { border-bottom: 1px solid var(--border); }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--row-hover); }
+  td.name { white-space: normal; max-width: 320px; font-weight: 500; }
+  td.num { text-align: right; }
+  /* The PB column is a reference, not the live number -- muted so the eye goes
+     to Strength, with the delta carrying the signal. */
+  td.pb { color: var(--muted); white-space: nowrap; }
+  td.date { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .delta { font-size: 0.82em; font-variant-numeric: tabular-nums; }
+  .delta.up { color: var(--t1); }
+  .delta.down { color: #b4442c; }
+  .delta.flat { opacity: 0.45; }
+  .pill {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 0.74rem;
+    font-weight: 700;
+  }
+  .pill.T1_elite { background: var(--t1-bg); color: var(--t1); }
+  .pill.T2_strong { background: var(--t2-bg); color: var(--t2); }
+  .pill.T3_development { background: var(--t3-bg); color: var(--t3); }
+  .class-tag { color: var(--text-dim); font-size: 0.8rem; }
+
+  tbody tr.meet-row { cursor: pointer; }
+  tbody tr.meet-row .chev {
+    display: inline-block;
+    width: 12px;
+    color: var(--text-dim);
+    font-size: 0.7rem;
+    margin-right: 5px;
+  }
+  tr.detail-row > td {
+    background: var(--bg);
+    padding: 0 12px 14px 34px;
+  }
+  .event-table {
+    width: auto;
+    min-width: 520px;
+    font-size: 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .event-table th {
+    position: static;
+    font-size: 0.66rem;
+    cursor: default;
+    background: var(--bg);
+  }
+  .event-table th:hover { color: var(--text-dim); }
+  .event-table td { padding: 6px 12px; }
+  .event-table tbody tr:hover { background: transparent; }
+  .detail-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    padding: 10px 0 6px;
+  }
+  .wr-bar {
+    display: inline-block;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--accent);
+    vertical-align: middle;
+    margin-right: 6px;
+    min-width: 2px;
+  }
+
+  .pager {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 4px;
+    font-size: 0.82rem;
+    color: var(--text-dim);
+  }
+  .pager button {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 5px 11px;
+    cursor: pointer;
+    font-size: 0.82rem;
+  }
+  .pager button:disabled { opacity: 0.4; cursor: default; }
+
+  .empty {
+    padding: 40px;
+    text-align: center;
+    color: var(--text-dim);
+  }
+</style>
+
+<header>
+  <h1>Meet Registry</h1>
+  <div class="subtitle">Every catalogued athletics competition, tiered by measured field strength. Source: <code>competition_catalogue.parquet</code>, <span id="countAll">…</span> competitions shown here (never-scored, never-classified meets excluded from this view).</div>
+</header>
+
+<details class="caveats">
+  <summary>What strength and tier mean, and what to watch out for</summary>
+  <p><strong>Strength</strong> — a 0-100 score, and it is a ranking
+  <em>against other meets</em>, not against the record book. Built in four
+  steps: (1) each athlete's <strong>form going into the race</strong> — an
+  exponentially-weighted average of their earlier marks in that event —
+  becomes a percentile among all performances in that event and era;
+  (2) average that across the finalists in one event, giving a quality
+  number for this meet's version of that event; (3) <strong>rank that
+  number against every other meet contesting the same event in the same
+  era</strong>; (4) average those per-event ranks across the meet. So
+  <strong>100 means "the strongest field of any meet running these events
+  in this era"</strong> — the top of its peer group, not a field of
+  world-record holders. That's why several meets sit at exactly 100.0: each
+  is first in its own event-and-era grouping. It measures who showed up,
+  not how fast the day was. Withheld ("—") below 5 scored events, except
+  road races (a marathon only has one or two).</p>
+  <p><strong>Strength (PB)</strong> — the previous basis, kept for
+  comparison. It used each athlete's <em>career-best</em> mark instead of
+  their form on the day. That had a leak: the career best was taken over an
+  athlete's whole career, so it included marks set <em>after</em> the meet
+  being scored — and often the mark set <em>at</em> it. A meet was
+  partly scoring itself, which is why the fast record-setting courses sat
+  highest and why every finalist at Berlin scored 99.2-99.4 under it: it
+  could not tell the field apart. Changed 2026-09-03. Where the two columns
+  disagree sharply, the fast courses fall and the tactical ones rise.</p>
+  <p><strong>Tier</strong> — fixed by what the meet named itself for most
+  classes (Olympics, Diamond League, age-group…). Road races are banded by
+  strength (≥75 → T1, ≥50 → T2, else T3). Meets whose name matches no rule
+  are <strong>never T1</strong> and are split at the median-ish point of
+  the unclassified field, recomputed each build — so a genuinely elite meet
+  whose name we don't recognise is capped at T2. That cap is deliberate,
+  but it does mean <strong>some T2 meets near the top of this list belong
+  higher</strong>; the Doha Diamond League appears as "Doha Meeting" and is
+  unclassified for exactly that reason.</p>
+  <p><strong>Click any meet</strong> for its events: winning mark, that
+  mark as a share of the world record (direction-aware, so it reads the
+  same for times and distances), athletes in the final, and the event's own
+  strength before averaging.</p>
+  <p><strong>Known caveats</strong> — T1 counts are genuinely thin in
+  several early years; that's corpus coverage, not a modelling artifact.
+  Fixed 2026-09-03: strength moved from career-best to current form (see
+  above); 407 meets were promoted out of a tier their own class rule
+  forbade (the Greek, Irish, Belgian, Canadian, Swiss, Dutch and Brazilian
+  national championships among them); three Diamond Leagues that had no
+  name at all — Silesia, Athletissima Lausanne and Weltklasse Zürich, the
+  DL Final — were named and moved to T1; and the <code>asian_games</code>
+  class was split, so the South East Asian Games and a national race-walk
+  grand prix are no longer classed as Asian Games. Earlier: the road-race
+  reclassification bug (136 races promoted T2→T1) and the
+  <code>comp_name</code>/<code>comp_start</code> backfill, both 2026-09-02/03.</p>
+  <p><strong>Still known-wrong</strong> — <code>class</code> is a regex on
+  the meet's name, so a meet named unusually falls to
+  <code>unclassified</code> and is capped at T2 however strong it is. Real
+  cases in this table: the Doha Diamond League ("Doha Meeting"), Grand Slam
+  Track, Athlos NYC, and the United Airlines NYC Half, which is a road race
+  not recognised as one. The World Athletics feed ships its own category
+  code that would catch some of these, but it covers only 42.6% of meets
+  and is multi-valued where it exists, so it is not yet used.</p>
+</details>
+
+<div class="controls">
+  <div class="field grow">
+    <label for="q">Search name</label>
+    <input type="text" id="q" placeholder="e.g. Diamond League, Marathon…">
+  </div>
+  <div class="field">
+    <label>Tier</label>
+    <div class="tier-toggles">
+      <button class="tier-btn" data-tier="T1_elite" data-active="true">T1</button>
+      <button class="tier-btn" data-tier="T2_strong" data-active="true">T2</button>
+      <button class="tier-btn" data-tier="T3_development" data-active="true">T3</button>
+    </div>
+  </div>
+  <div class="field">
+    <label for="class">Class</label>
+    <select id="class"><option value="">All</option></select>
+  </div>
+  <div class="field">
+    <label for="yearMin">Year from</label>
+    <input type="number" id="yearMin" placeholder="1974">
+  </div>
+  <div class="field">
+    <label for="yearMax">Year to</label>
+    <input type="number" id="yearMax" placeholder="2026">
+  </div>
+  <div class="field">
+    <label for="strengthMin">Min strength</label>
+    <input type="number" id="strengthMin" placeholder="0" min="0" max="100">
+  </div>
+  <div class="count" id="count"></div>
+</div>
+
+<main>
+  <div class="table-wrap">
+    <table id="tbl">
+      <thead>
+        <tr>
+          <th data-key="comp_name">Meet<span class="arrow"></span></th>
+          <th data-key="class">Class<span class="arrow"></span></th>
+          <th data-key="meet_tier">Tier<span class="arrow"></span></th>
+          <th data-key="strength" class="num" title="0-100: each finalist's FORM GOING IN as a percentile within their event+era, averaged across the meet's events, then ranked against other meets. See the note above the filters.">Strength<span class="arrow"></span></th>
+          <th data-key="strength_pb" class="num" title="The previous basis: career-best instead of form. It included marks set after -- and often AT -- the meet being scored, so a meet partly scored itself. Kept for comparison.">Strength (PB)<span class="arrow"></span></th>
+          <th data-key="first_date" title="First day of results at this meet. Use it to look the meet up.">Date<span class="arrow"></span></th>
+          <th data-key="year" class="num">Year<span class="arrow"></span></th>
+          <th data-key="country">Country<span class="arrow"></span></th>
+          <th data-key="athletes" class="num">Athletes<span class="arrow"></span></th>
+          <th data-key="events" class="num">Events<span class="arrow"></span></th>
+          <th data-key="finals" class="num">Finals<span class="arrow"></span></th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="empty" id="emptyMsg" hidden>No meets match these filters.</div>
+  </div>
+  <div class="pager">
+    <button id="prevPage">Prev</button>
+    <span id="pageInfo"></span>
+    <button id="nextPage">Next</button>
+  </div>
+</main>
+
+<script>
+const DATA = __MEET_DATA_JSON__;
+// Per-meet event detail, keyed by competition_id. Each event is a
+// positional array to keep the payload under the artifact size cap:
+// [label, n_athletes, winning_mark_str, event_strength, wr_pct]
+// `label` carries sex ("100 Metres (M)") -- without it a meet's M and W
+// races render as duplicate rows. `winning_mark_str` is the feed's own
+// display string, not the numeric: a 2.00m high jump formats as "2" from
+// the number, and 5000m as "894.09" instead of 14:54.09.
+const EVENTS = __MEET_EVENTS_JSON__;
+
+let sortKey = "strength", sortDir = -1, page = 0;
+const PAGE_SIZE = 100;
+const activeTiers = new Set(["T1_elite", "T2_strong", "T3_development"]);
+const expanded = new Set();
+
+const classSel = document.getElementById("class");
+const classes = [...new Set(DATA.map(d => d.class))].sort();
+for (const c of classes) {
+  const opt = document.createElement("option");
+  opt.value = c; opt.textContent = c;
+  classSel.appendChild(opt);
+}
+
+function applyFilters() {
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const cls = classSel.value;
+  const yMin = parseFloat(document.getElementById("yearMin").value);
+  const yMax = parseFloat(document.getElementById("yearMax").value);
+  const sMin = parseFloat(document.getElementById("strengthMin").value);
+
+  let rows = DATA.filter(d => activeTiers.has(d.meet_tier));
+  if (q) rows = rows.filter(d => d.comp_name && d.comp_name.toLowerCase().includes(q));
+  if (cls) rows = rows.filter(d => d.class === cls);
+  if (!isNaN(yMin)) rows = rows.filter(d => d.year >= yMin);
+  if (!isNaN(yMax)) rows = rows.filter(d => d.year <= yMax);
+  if (!isNaN(sMin)) rows = rows.filter(d => (d.strength ?? -1) >= sMin);
+
+  rows.sort((a, b) => {
+    let av = a[sortKey], bv = b[sortKey];
+    if (av == null) av = sortKey === "strength" ? -1 : (typeof bv === "number" ? -Infinity : "");
+    if (bv == null) bv = sortKey === "strength" ? -1 : (typeof av === "number" ? -Infinity : "");
+    if (typeof av === "string") return sortDir * av.localeCompare(bv);
+    return sortDir * (av - bv);
+  });
+  return rows;
+}
+
+function render() {
+  const rows = applyFilters();
+  document.getElementById("count").textContent = rows.length.toLocaleString() + " meets";
+  // Derived, not hardcoded. The subtitle used to carry a snapshot of the row
+  // count that had to be updated by hand and was wrong by two rebuilds.
+  const ca = document.getElementById("countAll");
+  if (ca) ca.textContent = DATA.length.toLocaleString();
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  page = Math.min(page, totalPages - 1);
+  const slice = rows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
+
+  const tbody = document.getElementById("tbody");
+  const emptyMsg = document.getElementById("emptyMsg");
+  if (!slice.length) {
+    tbody.innerHTML = "";
+    emptyMsg.hidden = false;
+  } else {
+    emptyMsg.hidden = true;
+    tbody.innerHTML = slice.map(d => {
+      const id = String(d.competition_id);
+      const isOpen = expanded.has(id);
+      const main = `
+      <tr class="meet-row" data-id="${id}">
+        <td class="name"><span class="chev">${isOpen ? "▾" : "▸"}</span>${escapeHtml(d.comp_name || "(unnamed)")}</td>
+        <td class="class-tag">${escapeHtml(d.class)}</td>
+        <td><span class="pill ${d.meet_tier}">${tierLabel(d.meet_tier)}</span></td>
+        <td class="num">${d.strength != null ? d.strength.toFixed(1) : "—"}</td>
+        <td class="num pb">${pbCell(d)}</td>
+        <td class="date">${escapeHtml(d.first_date || "—")}</td>
+        <td class="num">${d.year ?? "—"}</td>
+        <td>${escapeHtml(d.country || "—")}</td>
+        <td class="num">${d.athletes ?? "—"}</td>
+        <td class="num">${d.events ?? "—"}</td>
+        <td class="num">${d.finals ?? "—"}</td>
+      </tr>`;
+      return isOpen ? main + detailRow(id) : main;
+    }).join("");
+  }
+
+  document.getElementById("pageInfo").textContent =
+    `Page ${page + 1} of ${totalPages}`;
+  document.getElementById("prevPage").disabled = page === 0;
+  document.getElementById("nextPage").disabled = page >= totalPages - 1;
+
+  document.querySelectorAll("th[data-key] .arrow").forEach(a => a.textContent = "");
+  const activeTh = document.querySelector(`th[data-key="${sortKey}"] .arrow`);
+  if (activeTh) activeTh.textContent = sortDir === 1 ? "↑" : "↓";
+}
+
+function detailRow(id) {
+  const evs = EVENTS[id];
+  if (!evs || !evs.length) {
+    return `<tr class="detail-row"><td colspan="11">
+      <div class="detail-title">No scored finals recorded for this meet.</div></td></tr>`;
+  }
+  const rows = evs.map(e => {
+    const [disc, nAth, mark, str, wr] = e;
+    const barW = wr != null ? Math.max(2, Math.min(60, Math.round(wr * 0.6))) : 0;
+    return `<tr>
+      <td>${escapeHtml(disc ?? "—")}</td>
+      <td class="num">${mark != null ? mark : "—"}</td>
+      <td class="num">${wr != null ? `<span class="wr-bar" style="width:${barW}px"></span>${wr.toFixed(1)}%` : "—"}</td>
+      <td class="num">${nAth ?? "—"}</td>
+      <td class="num">${str != null ? str.toFixed(1) : "—"}</td>
+    </tr>`;
+  }).join("");
+  return `<tr class="detail-row"><td colspan="11">
+    <div class="detail-title">${evs.length} scored event${evs.length === 1 ? "" : "s"}</div>
+    <table class="event-table">
+      <thead><tr>
+        <th>Event</th>
+        <th class="num">Winning mark</th>
+        <th class="num" title="Winning mark as a share of the world record, direction-aware: 100% equals the WR.">% of WR</th>
+        <th class="num">Athletes</th>
+        <th class="num" title="This single event's strength before it was averaged into the meet's overall score.">Event strength</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></td></tr>`;
+}
+
+// The PB column is only interesting as a COMPARISON, so show the old value with
+// how far the meet moved. A meet that barely shifted needs no attention; one
+// that moved 20 points is telling you something about the course.
+function pbCell(d) {
+  if (d.strength_pb == null) return "—";
+  const pb = d.strength_pb.toFixed(1);
+  if (d.strength == null) return pb;
+  const diff = d.strength - d.strength_pb;
+  if (Math.abs(diff) < 0.05) return `${pb}<span class="delta flat"> =</span>`;
+  const cls = diff > 0 ? "up" : "down";
+  const sign = diff > 0 ? "+" : "";
+  return `${pb}<span class="delta ${cls}"> ${sign}${diff.toFixed(1)}</span>`;
+}
+function tierLabel(t) {
+  return t === "T1_elite" ? "T1" : t === "T2_strong" ? "T2" : "T3";
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+document.getElementById("tbody").addEventListener("click", ev => {
+  const tr = ev.target.closest("tr.meet-row");
+  if (!tr) return;
+  const id = tr.dataset.id;
+  if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
+  render();
+});
+
+document.querySelectorAll("th[data-key]").forEach(th => {
+  th.addEventListener("click", () => {
+    const key = th.dataset.key;
+    if (sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = key === "strength" ? -1 : 1; }
+    page = 0;
+    render();
+  });
+});
+document.querySelectorAll(".tier-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const t = btn.dataset.tier;
+    if (activeTiers.has(t)) { activeTiers.delete(t); btn.dataset.active = "false"; }
+    else { activeTiers.add(t); btn.dataset.active = "true"; }
+    page = 0;
+    render();
+  });
+});
+["q", "class", "yearMin", "yearMax", "strengthMin"].forEach(id => {
+  document.getElementById(id).addEventListener("input", () => { page = 0; render(); });
+});
+document.getElementById("prevPage").addEventListener("click", () => { page--; render(); });
+document.getElementById("nextPage").addEventListener("click", () => { page++; render(); });
+
+render();
+</script>

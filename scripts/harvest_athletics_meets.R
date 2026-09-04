@@ -29,6 +29,7 @@
 
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
+source(here::here("citiusdata", "scripts", "_merge_guards.R"))
 source(here::here("citiusdata", "scripts", "_env.R"))
 
 OUT <- here::here("citiusdata", "data")
@@ -115,7 +116,12 @@ if (nrow(todo_c)) {
 champs <- rbindlist(lapply(list.files(COMP_CACHE, full.names = TRUE), readRDS),
                     use.names = TRUE, fill = TRUE)
 if (nrow(champs)) {
-  saveRDS(champs, file.path(OUT, "championship_results.rds"))
+  # Guarded and atomic, matching merge_referenced.R/merge_t3_*.R -- found by
+  # review 2026-09-04 that this script writes the exact same file those
+  # scripts protect, the same bare-saveRDS-straight-to-final-path way, with
+  # neither the concurrent-run check nor crash-safety.
+  citius_merge_guard("harvest_athletics_meets.R")
+  citius_atomic_write(champs, file.path(OUT, "championship_results.rds"))
   cli::cli_alert_success(
     "{nrow(champs)} result{?s} from {uniqueN(champs$competition_id)} competition{?s}."
   )

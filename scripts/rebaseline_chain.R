@@ -39,7 +39,15 @@ t0 <- Sys.time()
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), ..., "\n", sep = "")
 say("centre=", CENTRE, " max_iter=", MAXIT, " suffix='", SUF, "'")
 
-x <- setDT(readRDS(file.path(OUT, "athletics_corpus.rds")))[!is.na(date)]
+x <- tryCatch(
+  with_citius_db_connection(function(conn) load_athletics_corpus(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to athletics_corpus.rds.")
+    NULL
+  }
+)
+if (is.null(x) || !nrow(x)) x <- setDT(readRDS(file.path(OUT, "athletics_corpus.rds")))
+x <- x[!is.na(date)]
 say("corpus: ", format(nrow(x), big.mark = ","), " rows, ",
     format(uniqueN(x$race_key), big.mark = ","), " races")
 keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "sex", "round",

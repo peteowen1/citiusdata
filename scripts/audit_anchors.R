@@ -52,7 +52,15 @@ d[, n_ev := .N, by = event_id]
 d <- d[n_ev >= 15]
 d[, `:=`(r_form = frank(-l5, ties.method = "min"),
          r_model = frank(-ability, ties.method = "min")), by = event_id]
-nm <- unique(setDT(readRDS(file.path(OUT, "championship_results.rds")))[
+nm_src <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(nm_src) || !nrow(nm_src)) nm_src <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+nm <- unique(nm_src[
   !is.na(athlete_name), .(athlete_id = as.character(athlete_id), athlete_name)],
   by = "athlete_id")
 d <- merge(d, nm, by = "athlete_id", all.x = TRUE)

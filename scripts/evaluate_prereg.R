@@ -36,7 +36,14 @@ if (length(unique(vint)) > 1L) {
                    "*" = "{names(vint)}: {substr(vint, 1, 8)}"))
 }
 
-ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+ch <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(ch) || !nrow(ch)) ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 ch[, athlete_id := as.character(athlete_id)]
 act <- ch[!is.na(mark) & !is.na(race_key) & !is.na(place) & place > 0,
           .(race_id = race_key, athlete_id, actual = mark, event_id, date, competition_id)]

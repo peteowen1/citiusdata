@@ -27,6 +27,7 @@
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
 source(here::here("citiusdata", "scripts", "_env.R"))
+source(here::here("citiusdata", "scripts", "_merge_guards.R"))
 OUT <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "ath_comp_cache_ref")
 dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
@@ -34,10 +35,25 @@ dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
 MAXN <- .env_int("CITIUS_REF_MAX", "6000")
 FROM_YEAR <- .env_int("CITIUS_REF_FROM", "2016")
 
-x <- setDT(readRDS(file.path(OUT, "athletics_corpus.rds")))[!is.na(competition_id)]
+x <- tryCatch(
+  with_citius_db_connection(function(conn) load_athletics_corpus(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to athletics_corpus.rds.")
+    NULL
+  }
+)
+if (is.null(x) || !nrow(x)) x <- setDT(readRDS(file.path(OUT, "athletics_corpus.rds")))
+x <- x[!is.na(competition_id)]
 if (!nrow(x)) cli::cli_abort("athletics_corpus.rds loaded 0 rows (post competition_id filter).")
 cli::cli_alert_info("athletics_corpus.rds: {format(nrow(x), big.mark = ',')} row{?s}, {min(x$date, na.rm = TRUE)}..{max(x$date, na.rm = TRUE)}")
-ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+ch <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(ch) || !nrow(ch)) ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 if (!nrow(ch)) cli::cli_abort("championship_results.rds loaded 0 rows.")
 cli::cli_alert_info("championship_results.rds: {format(nrow(ch), big.mark = ',')} row{?s}, {min(ch$date, na.rm = TRUE)}..{max(ch$date, na.rm = TRUE)}")
 have <- unique(ch$competition_id)
@@ -52,21 +68,35 @@ cli::cli_h2("{nrow(cand)} referenced competitions | {length(done)} cached | {nro
 if (!nrow(todo)) { cli::cli_alert_success("Nothing left."); quit(save = "no") }
 todo <- head(todo, MAXN)
 
-ok <- 0L; empty <- 0L; failed <- 0L; t0 <- Sys.time()
+ok <- 0L; empty <- 0L; fault <- 0L; failed <- 0L; t0 <- Sys.time()
 for (i in seq_len(nrow(todo))) {
   cid <- todo$competition_id[i]
   r <- tryCatch(setDT(athletics_competition_results(cid)),
                 error = function(e) { failed <<- failed + 1L; NULL })
   if (is.null(r)) next
-  if (!nrow(r)) { empty <- empty + 1L; saveRDS(data.table(), file.path(CACHE, paste0(cid, ".rds"))); next }
+  if (!nrow(r)) {
+    # AN EMPTY RESPONSE IS ONLY A FACT IF THE CORPUS AGREES. `todo$rows[i]` is
+    # this competition's already-known row count (line 59-62 above), the exact
+    # thing that was sitting in scope unused before this fix -- see
+    # citius_empty_response_is_fault() in _merge_guards.R for the incident this
+    # closes.
+    if (citius_empty_response_is_fault(todo$rows[i])) {
+      fault <- fault + 1L
+      cli::cli_alert_warning("{cid} EMPTY but the corpus holds {format(todo$rows[i], big.mark=',')} rows -- treating as a fault, not caching")
+      next
+    }
+    empty <- empty + 1L
+    saveRDS(data.table(), file.path(CACHE, paste0(cid, ".rds")))
+    next
+  }
   saveRDS(r, file.path(CACHE, paste0(cid, ".rds"))); ok <- ok + 1L
   if (i %% 25 == 0) {
     el <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
-    cli::cli_alert_info("{i}/{nrow(todo)} | ok {ok} empty {empty} failed {failed} | {round(el)} min | {round(i/el,1)}/min")
+    cli::cli_alert_info("{i}/{nrow(todo)} | ok {ok} empty {empty} fault {fault} failed {failed} | {round(el)} min | {round(i/el,1)}/min")
   }
 }
 el <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
-cli::cli_alert_success("fetched {ok}, empty {empty}, failed {failed} in {round(el)} min")
+cli::cli_alert_success("fetched {ok}, empty {empty}, fault {fault}, failed {failed} in {round(el)} min")
 
 fs <- list.files(CACHE, pattern = "[.]rds$", full.names = TRUE)
 blobs <- Filter(function(z) is.data.table(z) && nrow(z), lapply(fs, readRDS))

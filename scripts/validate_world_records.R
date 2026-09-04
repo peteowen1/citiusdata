@@ -31,7 +31,14 @@ cat("records parsed:", nrow(wr), "of", nrow(fread(file.path(D, "world_records.cs
 miss <- setdiff(fread(file.path(D,"world_records.csv"))$event_id, wr$event_id)
 if (length(miss)) cat("!! event_id not in registry:", paste(miss, collapse=", "), "\n")
 
-res <- setDT(readRDS(file.path(D, "championship_results.rds")))
+res <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(res) || !nrow(res)) res <- setDT(readRDS(file.path(D, "championship_results.rds")))
 res <- flag_implausible(res)[!is.na(perf) & !is.na(mark)]
 # legal == wind-legal where wind is recorded; NA wind means not a wind-affected event
 res <- res[is.na(legal) | legal == TRUE]

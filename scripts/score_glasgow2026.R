@@ -207,7 +207,17 @@ CUT <- min(results$date, na.rm = TRUE)
 # for the next copy to lose.
 STORE <- file.path(OUT, DEPLOYED$history_store)
 USE_STORE <- dir.exists(STORE)
-champs <- if (USE_STORE) NULL else readRDS(file.path(OUT, "championship_results.rds"))
+champs <- if (USE_STORE) NULL else {
+  d <- tryCatch(
+    with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+    error = function(e) {
+      cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+      NULL
+    }
+  )
+  if (is.null(d) || !nrow(d)) d <- readRDS(file.path(OUT, "championship_results.rds"))
+  d
+}
 cal <- deployed_calibration(OUT)
 cli::cli_alert_info("Ranking check on the DEPLOYED model: {DEPLOYED$stamp}")
 clean <- if (USE_STORE) NULL else flag_implausible(champs)[!is.na(event_id) & !is.na(perf)]

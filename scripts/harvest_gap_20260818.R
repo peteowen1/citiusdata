@@ -41,6 +41,7 @@
 # never triggered as a side effect of a harvest).
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(data.table))
+source(here::here("citiusdata", "scripts", "_merge_guards.R"))
 source(here::here("citiusdata", "scripts", "_env.R"))
 
 ns <- asNamespace("citius")
@@ -152,7 +153,12 @@ stopifnot(!any(ch$competition_id == 0, na.rm = TRUE))
 before_n <- nrow(ch); before_c <- uniqueN(ch$competition_id)
 ch2 <- rbind(ch, new, fill = TRUE)
 stopifnot(!any(ch2$competition_id == 0, na.rm = TRUE))
-saveRDS(ch2, ch_f)
+# Guarded and atomic, matching merge_referenced.R/merge_t3_*.R -- found by
+# review 2026-09-04. The manual backup two blocks up (line 140) protects
+# against a bad MERGE; this protects the write itself against a crash
+# mid-saveRDS, which the backup does not.
+citius_merge_guard("harvest_gap_20260818.R")
+citius_atomic_write(ch2, ch_f)
 say("merged -> %d rows / %d competitions (pre-merge base after drop: %d rows / %d comps)",
     nrow(ch2), uniqueN(ch2$competition_id), before_n, before_c)
 say("new max date in championship_results.rds: %s", max(ch2$date, na.rm = TRUE))

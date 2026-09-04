@@ -44,8 +44,15 @@ say("=== athletics ===")
 ath_src <- list()
 
 f <- file.path(D, "championship_results.rds")
-if (file.exists(f)) {
-  h <- setDT(readRDS(f))
+h <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if ((is.null(h) || !nrow(h)) && file.exists(f)) h <- setDT(readRDS(f))
+if (!is.null(h) && nrow(h)) {
   ath_src$worldathletics <- unique(h[!is.na(athlete_name),
     .(source = "worldathletics", athlete_id = as.character(athlete_id),
       athlete_name, country = NA_character_,

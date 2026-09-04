@@ -396,7 +396,14 @@ who <- who[!is.na(who)]
 # this would blank every athlete's name on every per-athlete page and nothing
 # would fail. The ratings table is model-facing and joins on athlete_id, which
 # is why it moved to the corpus and this did not.
-hist <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+hist <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(hist) || !nrow(hist)) hist <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 hist <- hist[as.character(athlete_id) %in% who]
 for (nm in setdiff(HIST_COLS, names(hist))) hist[, (nm) := NA]
 hist <- hist[, ..HIST_COLS]
@@ -564,7 +571,15 @@ names_src <- if ("athlete_name" %in% names(clean_all)) clean_all else {
   # immediately narrowed to the Glasgow athletes and to HIST_COLS, while the name
   # lookup needs every athlete who can reach a rating. Do not "simplify" this
   # into a reuse of `hist` -- it would blank the name of anyone outside that meet.
-  data.table::setDT(readRDS(file.path(OUT, "championship_results.rds")))
+  d2 <- tryCatch(
+    with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+    error = function(e) {
+      cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+      NULL
+    }
+  )
+  if (is.null(d2) || !nrow(d2)) d2 <- data.table::setDT(readRDS(file.path(OUT, "championship_results.rds")))
+  d2
 }
 names_lk <- unique(names_src[!is.na(athlete_name),
                              .(athlete_id = as.character(athlete_id), athlete_name)]
@@ -604,9 +619,96 @@ ratings <- merge(ratings, citius_events()[, .(event_id, sport, discipline, sex, 
 ratings[, c("pred_mark", "mark_unit") := predicted_mark(ability, orientation)]
 ratings[, orientation := NULL]
 
+# --- latest race / SB / PB, to sit next to the predicted mark (blog#586) ------
+# A predicted mark alone gives a reader nothing to judge it against. These three
+# are what they'd compare it to anyway, so publish them rather than make them
+# guess. (The comparison is one the model wins: measured on T1 elite, centred
+# MAE, leakage-safe -- 10.7% better than latest race, 11.7% than SB, 27.4% than
+# PB. It does NOT beat a mean of the athlete's last 5, which is why nothing here
+# claims more than "better than the obvious single-number guesses".)
+#
+# `perf` is orientation-signed (perf = orientation * log(mark)), so HIGHER is
+# always better whether the event is timed or measured. That makes "best" a
+# plain max() and removes the single biggest way this could go wrong -- sorting
+# field events backwards.
+#
+# Scoped to the athletes that actually publish (top 150 per event), not the full
+# 4.5M-row history, and read separately from `hist` above -- that one is narrowed
+# to Glasgow participants and would blank every rated athlete who wasn't there.
+rated_ids <- unique(ratings$athlete_id)
+marks_src <- tryCatch(
+  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  error = function(e) {
+    cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
+    NULL
+  }
+)
+if (is.null(marks_src) || !nrow(marks_src)) {
+  marks_src <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
+}
+# NOT filtered on !is.na(perf) here -- a DNF/DQ/no-height row has no parseable
+# mark (perf is NA whenever mark doesn't parse), but it is still real, current
+# information about the athlete's last competition appearance. Filtering it
+# out here silently reports an OLDER valid race as "latest", contradicting the
+# comment below. Measured on this corpus: 12.7% of (athlete_id, event_id)
+# groups have their true most recent row fail !is.na(perf) -- not a rare edge
+# case. SB/PB (below) DO need a genuine comparable mark, so they filter on
+# !is.na(perf) themselves, downstream of this unfiltered read.
+mk_all <- marks_src[as.character(athlete_id) %in% rated_ids & !is.na(date),
+                    .(athlete_id = as.character(athlete_id), event_id, date, perf,
+                      mark_string, legal)]
+
+# Latest race takes the most recent result whatever the wind, and whatever the
+# outcome -- a DNF/DQ/NM is still an honest answer to "what did they last
+# run", not something to skip past. Ties on the same date (one field-event
+# session legitimately produces several rows via multiple attempts) resolve to
+# the best-perf row via the -perf tertiary key, not an arbitrary one: 6.5% of
+# groups have same-day ties, and 94% of those ties have differing perf values,
+# so the tiebreak genuinely changes what gets published.
+#
+# `perf_na` is an explicit tertiary key, NOT redundant with `-perf`: setorder()
+# does NOT reliably put NA last for a `-col` (descending) sort key once an
+# earlier key has ties -- confirmed directly (setorder(d, g, -d2, -p) left an
+# NA `p` row ahead of a real one within a `d2` tie). Without this, a same-day
+# DNF/DQ row (perf NA) could win the pick over a same-day row with a real
+# mark, publishing a blank latest_mark when a real one was available.
+mk_all[, perf_na := is.na(perf)]
+setorder(mk_all, athlete_id, event_id, -date, perf_na, -perf)
+mk_all[, perf_na := NULL]
+latest_mk <- mk_all[, .(latest_mark = mark_string[1], latest_date = date[1]),
+                    by = .(athlete_id, event_id)]
+# `latest_mark` is legitimately "" for ~5% of athletes: their true most recent
+# row has no mark_string recorded at all in the source feed (a scratch/no-show
+# with nothing else to show, not a formatting issue this script could recover).
+# The blog page should render that as "no result", not as a missing row.
+
+mk <- mk_all[!is.na(perf)]
+
+# SB and PB are record claims, so they take wind-legal marks ONLY. `legal` is
+# FALSE on 166k rows and NA on 4.8k, and `%in% TRUE` excludes both -- deliberate,
+# because a record claim should fail closed. In the men's 100m alone, two of the
+# six best marks by perf are wind-aided (Jacobs 9.67 w+4.1, De Grasse 9.69 w+4.8)
+# and would otherwise publish as somebody's personal best.
+#
+# Indoor and outdoor are pooled, matching how the ability model itself treats
+# them. Conventional athletics splits those records; if that becomes a complaint,
+# split here rather than in the page.
+legal_mk <- mk[legal %in% TRUE]
+setorder(legal_mk, athlete_id, event_id, -perf)
+pb_mk <- legal_mk[, .(pb_mark = mark_string[1]), by = .(athlete_id, event_id)]
+sb_mk <- legal_mk[data.table::year(date) == data.table::year(AS_OF),
+                  .(sb_mark = mark_string[1]), by = .(athlete_id, event_id)]
+
+for (tbl in list(latest_mk, sb_mk, pb_mk)) {
+  ratings <- merge(ratings, tbl, by = c("athlete_id", "event_id"), all.x = TRUE)
+}
+cli::cli_alert_info(
+  "Marks: latest on {round(100 * mean(!is.na(ratings$latest_mark)))}%, SB on {round(100 * mean(!is.na(ratings$sb_mark)))}%, PB on {round(100 * mean(!is.na(ratings$pb_mark)))}% of rating rows.")
+
 RATING_COLS <- c("athlete_id", "athlete_name", "event_id", "sport", "discipline", "sex",
                  "ability", "ability_se", "z", "pct_best", "pct_wr", "pred_mark",
-                 "mark_unit", "n", "w_total", "n_event", "last_date")
+                 "mark_unit", "latest_mark", "latest_date", "sb_mark", "pb_mark",
+                 "n", "w_total", "n_event", "last_date")
 for (nm in setdiff(RATING_COLS, names(ratings))) ratings[, (nm) := NA]
 ratings <- ratings[, ..RATING_COLS]
 ratings[, `:=`(as_of = AS_OF, generated_at = NOW)]

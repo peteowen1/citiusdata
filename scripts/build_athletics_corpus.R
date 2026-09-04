@@ -21,6 +21,14 @@
 # Usage:  Rscript scripts/build_athletics_corpus.R
 VERSE <- here::here()
 suppressMessages({library(citius); library(data.table)})
+# `library(citius)` loads the INSTALLED build, not the source tree. On
+# 2026-09-03 that was 0.1.0 against a 0.1.1 source, so the DuckDB write below
+# called with_citius_db_connection() -- which did not exist in the installed
+# build -- its tryCatch downgraded the failure to a warning, this script exited
+# 0, and citius.duckdb silently stopped being updated. Fail before doing 12
+# minutes of work against the wrong build.
+source(here::here("citiusdata", "scripts", "_env.R"))
+citius_version_guard(strict = TRUE)
 D <- file.path(VERSE, "citiusdata", "data")
 say <- function(...) cat(sprintf(...), "\n", sep = "")
 
@@ -29,6 +37,16 @@ parts <- list()
 f <- file.path(D, "championship_results.rds")
 comp <- setDT(readRDS(f))
 comp[, source := "competition"]
+# Same column-name mismatch as the career route's `competition`/`comp_name`
+# below: this route calls it `sex_code`, `keep` asks for `sex`, and the na_for
+# loop fabricated NA for all 4,544,586 rows -- leaving `sex` 52% populated from
+# the career route alone. Verified safe to adopt before renaming: sex_code is
+# 100% populated, uses the same M/W vocabulary, and agrees with the sex already
+# encoded in the -M/-W event_id suffix on 100.00% of the 4,192,328 rows where
+# both are known. 4,433 rows are coded X; they are left as X rather than mapped,
+# so match_event() returns NA for them instead of guessing a sex.
+if ("sex_code" %in% names(comp) && !"sex" %in% names(comp))
+  data.table::setnames(comp, "sex_code", "sex")
 parts$comp <- comp
 say("competition harvest: %s rows | %s athletes | %s competitions",
     format(nrow(comp), big.mark = ","), format(uniqueN(comp$athlete_id), big.mark = ","),
@@ -37,6 +55,14 @@ say("competition harvest: %s rows | %s athletes | %s competitions",
 f <- file.path(D, "athletics_history.rds")
 car <- setDT(readRDS(f))
 car[, source := "career"]
+# The career route calls the meet name `competition`; the competition route
+# calls it `comp_name`. `keep` below asks for `comp_name`, and the na_for loop
+# FABRICATES a column of NA for any name it does not find -- so this one
+# mismatch silently discarded 4,978,201 meet names (100% of the career sweep)
+# and left comp_name 0% populated on every row of the corpus, while
+# `competition` sat there populated and unread. Rename before the union.
+if ("competition" %in% names(car) && !"comp_name" %in% names(car))
+  data.table::setnames(car, "competition", "comp_name")
 parts$car <- car
 say("career sweep:        %s rows | %s athletes | %s..%s",
     format(nrow(car), big.mark = ","), format(uniqueN(car$athlete_id), big.mark = ","),
@@ -65,13 +91,37 @@ na_for <- list(source = NA_character_, athlete_id = NA_character_,
                venue_country = NA_character_, venue_city = NA_character_,
                venue_stadium = NA_character_, age = NA_real_, sex = NA_character_,
                orientation = NA_real_, perf = NA_real_)
-all <- rbindlist(lapply(parts, function(p) {
-  for (m in setdiff(keep, names(p))) p[[m]] <- na_for[[m]]
+all <- rbindlist(lapply(nm_parts <- names(parts), function(pn) {
+  p <- parts[[pn]]
+  # FABRICATING NA FOR A MISSING COLUMN IS HOW comp_name WAS LOST. The loop
+  # below is legitimate -- the two routes genuinely carry different columns and
+  # the union needs a common shape -- but its failure mode is indistinguishable
+  # from success: a renamed or mistyped column yields a full column of NA, and
+  # the result still has the right rows, the right names and the right types, so
+  # nothing downstream can tell. Say out loud what is being invented, so a
+  # mismatch is visible in the log instead of surviving to the deployed corpus.
+  miss <- setdiff(keep, names(p))
+  if (length(miss))
+    say("  [%s] no source column for: %s -- filling with NA", pn, paste(miss, collapse = ", "))
+  for (m in miss) p[[m]] <- na_for[[m]]
   d <- p[, ..keep]
   d[, competition_id := as.character(competition_id)]
   d
 }), fill = TRUE)
 say("\ncombined: %s rows", format(nrow(all), big.mark = ","))
+
+# COVERAGE, NOT PRESENCE. comp_name was present, correctly typed and 0%
+# populated for months. A schema check cannot see that; only a fill rate can.
+# Print every column's fill rate and abort on any that is completely empty --
+# a column nothing ever populates is either a lost join or a dead column, and
+# both are worth failing the build over rather than shipping.
+.fill <- vapply(all, function(v) mean(!is.na(v) & (!is.character(v) | nzchar(trimws(v)))), numeric(1))
+say("\ncolumn fill rates:")
+for (n in names(sort(.fill))) say("  %-16s %5.1f%%", n, 100 * .fill[[n]])
+.dead <- names(.fill)[.fill == 0]
+if (length(.dead))
+  stop(sprintf("column(s) 100%% empty after the union: %s -- a source column was renamed, mistyped or dropped. Fix the mapping rather than shipping an empty column.",
+               paste(.dead, collapse = ", ")))
 
 # ---- one row per performance -----------------------------------------------
 # Match on WHAT HAPPENED -- athlete, date, event, mark, place -- because the same
@@ -325,3 +375,21 @@ atomic_write(function(p) saveRDS(all, p), file.path(D, "athletics_corpus.rds"))
 atomic_write(function(p) arrow::write_parquet(all, p),
              file.path(D, "athletics_corpus.parquet"))
 say("\nwrote athletics_corpus.{rds,parquet}")
+
+# citius.duckdb MUST be refreshed on the same cadence as the RDS/parquet
+# above, or build_stores.R (which now sources the shipping Arrow store from
+# DuckDB, 2026-08-30) silently builds it from a stale corpus with no error
+# anywhere in the chain. This is a full rebuild every run (mode = "replace"),
+# same as the RDS/parquet writes above.
+tryCatch({
+  citius::with_citius_db_connection(function(conn) {
+    citius::store_athletics_corpus(conn, all, mode = "replace")
+  })
+  say("citius.duckdb athletics_corpus updated to match.")
+}, error = function(e) {
+  cli::cli_warn(c(
+    "Failed to update citius.duckdb: {conditionMessage(e)}",
+    "!" = "athletics_corpus.rds is correct; DuckDB is now BEHIND it.",
+    "i" = "build_stores.R falls back to RDS when DuckDB is stale, but fix this before relying on that."
+  ))
+})
