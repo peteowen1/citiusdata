@@ -451,6 +451,23 @@ ELITE_HISTORY <- nzchar(Sys.getenv("CITIUS_BT_ELITE_HISTORY", ""))
 # real bet, not a tidy-up.
 #
 # Requires a store built with join_tier = TRUE (true since 2026-09-04).
+# Target-race shock add-back. See the application site in run_meet() for what
+# it does and why it refuses without CITIUS_BT_ADJUST_RACE.
+#   CITIUS_BT_SHOCK_ADDBACK=expected_race_shock.csv
+SHOCK_FILE <- Sys.getenv("CITIUS_BT_SHOCK_ADDBACK", "")
+shock_tbl <- NULL
+if (nzchar(SHOCK_FILE)) {
+  .sf <- file.path(OUT, SHOCK_FILE)
+  if (!file.exists(.sf)) cli::cli_abort(
+    "{.envvar CITIUS_BT_SHOCK_ADDBACK} is set to {.file {SHOCK_FILE}}, which does not exist.")
+  shock_tbl <- data.table::setDT(data.table::fread(.sf))
+  req <- c("meet_tier", "round_class", "family", "expected_shock")
+  if (!all(req %chin% names(shock_tbl))) cli::cli_abort(
+    "{.file {SHOCK_FILE}} needs columns {.val {req}}.")
+  cli::cli_alert_info(
+    "Shock add-back ON from {.file {SHOCK_FILE}}: {nrow(shock_tbl)} cell{?s}, median {round(100*(exp(median(shock_tbl$expected_shock))-1), 3)}% of a mark.")
+}
+
 TRAIN_TIERS <- trimws(strsplit(Sys.getenv("CITIUS_BT_TRAIN_TIERS", ""), ",")[[1]])
 TRAIN_TIERS <- TRAIN_TIERS[nzchar(TRAIN_TIERS)]
 if (length(TRAIN_TIERS)) cli::cli_alert_info(
@@ -633,6 +650,10 @@ arm_fingerprint <- list(
   # fields above were each added to prevent, and it restricts the HISTORY, so
   # it changes every prediction rather than a subset.
   train_tiers = paste(TRAIN_TIERS, collapse = ","),
+  # Same reason as every other field here: an arm with the add-back and one
+  # without it must not share a cache and come home a dead heat.
+  shock_addback = SHOCK_FILE,
+  shock_addback_md5 = if (nzchar(SHOCK_FILE)) md5_of(SHOCK_FILE) else NA_character_,
   history_days = HISTORY_DAYS, n_sims = N_SIMS, cohort = COHORT,
   athletes = ATHLETES, peak_gamma = PEAK_GAMMA,
   robust_location = ROBUST_LOCATION, decouple_peak = DECOUPLE_PEAK,
@@ -816,6 +837,9 @@ tick <- function(slot, expr) {
 # blindness. Counted here and reported with the summary.
 AGE_WARN <- new.env(parent = emptyenv())
 AGE_WARN$n <- 0L; AGE_WARN$last <- NA_character_
+# Races that actually received the shock add-back. Reported at the end so a
+# lookup that matched nothing is visible instead of looking like a null arm.
+SHOCK <- new.env(parent = emptyenv()); SHOCK$n <- 0L
 
 # History rows whose event has no registry family, counted the same way and for
 # the same reason: the check below sits INSIDE the per-meet loop, so warning per
@@ -849,6 +873,10 @@ run_meet <- function(i) {
     out
   }
   local_age_warn <- 0L
+  # Counted, not assumed. An add-back whose lookup matched no cell would leave
+  # every prediction un-shifted and come back looking exactly like a null
+  # result -- the vacuous pass this file's other guards exist to prevent.
+  local_shock_applied <- 0L
   local_nofam <- list(rows = 0L, is_nofam_meet = FALSE, events = character())
 
   # Two restrictions make the per-meet refit ~10x cheaper without changing a
@@ -895,17 +923,44 @@ run_meet <- function(i) {
                    union(elite_ids, as.character(block$athlete_id))]
   }
   if (USE_MEET_TIER && "competition_id" %in% names(past)) {
-    past[, .cid := as.character(competition_id)]
-    past <- merge(past, ctl, by.x = ".cid", by.y = "competition_id",
-                  all.x = TRUE, sort = FALSE)
-    past[, .cid := NULL]
+    # The store gained its OWN meet_tier when build_stores.R started passing
+    # join_tier = TRUE, and keep_cols retains it. Merging ctl on top then hit
+    # data.table's duplicate-name rule and produced meet_tier.x / meet_tier.y,
+    # leaving no bare `meet_tier` at all -- so .tier_class_of() took its
+    # `!"meet_tier" %in% names(dt)` early return and silently used the FEED
+    # tier. CITIUS_BT_MEET_TIER=1 announced the catalogue and delivered the
+    # feed. Both columns come from the same catalogue, so prefer the one
+    # already on the rows and only merge when it is genuinely absent.
+    if (!"meet_tier" %in% names(past)) {
+      past[, .cid := as.character(competition_id)]
+      past <- merge(past, ctl, by.x = ".cid", by.y = "competition_id",
+                    all.x = TRUE, sort = FALSE)
+      past[, .cid := NULL]
+      tier_src <- "catalogue merge"
+    } else {
+      tier_src <- "the store (join_tier)"
+    }
+    # Coverage, not presence. The old line computed mean(!is.na(NULL)) and
+    # printed "NaN%" -- a value that named the defect precisely and that I read
+    # past twice. A tier column that is present and 0% populated is the failure
+    # this flag exists to avoid, so it aborts rather than reports.
+    .fill <- if ("meet_tier" %in% names(past)) mean(!is.na(past$meet_tier)) else NA_real_
+    if (!is.finite(.fill) || .fill == 0) {
+      cli::cli_abort(c(
+        "x" = "{.envvar CITIUS_BT_MEET_TIER} is on but no usable {.field meet_tier} reached the history.",
+        "i" = "Columns present: {.val {grep('^meet_tier', names(past), value = TRUE)}}.",
+        "i" = "Without it the context adjustment falls back to the feed tier, silently."))
+    }
     if (i == 1L) cli::cli_alert_info(
-      "meet_tier attached to {round(100*mean(!is.na(past$meet_tier)))}% of history rows.")
+      # NB `{tier_src}`, not `{.src}` -- cli reads a leading dot as an inline
+      # style tag ({.file}, {.val}) and errors on an unknown one.
+      "meet_tier from {tier_src}: {round(100*.fill)}% of history rows.")
   }
   rows <- nrow(past)
   if (rows < 2000L) {
     return(list(cid = cid, out = list(), rows = rows, timing = local_timing,
-                age_warn = local_age_warn, nofam = local_nofam))
+                age_warn = local_age_warn, nofam = local_nofam,
+                shock_applied = local_shock_applied))
   }
   ability <- if (is.null(hl_map)) {
     tick("ability", estimate_ability(past, as_of = cut_date,
@@ -1133,6 +1188,62 @@ run_meet <- function(i) {
       entrants <- project_round(entrants, .mode1(field$round), calibration,
                                 shrink = ROUND_SHRINK)
     }
+    # THE TARGET-RACE SHOCK ADD-BACK -- the missing counterpart of adjust_race.
+    #
+    # adjust_race SUBTRACTS the fitted shock from every historical mark, making
+    # ability conditions-neutral. Nothing put it back for the race being
+    # forecast, so a championship final -- which runs fast -- was predicted from
+    # neutral ability and came out systematically slow. That asymmetry is what
+    # made raw marks MAE look worse when race adjustment was switched on, while
+    # the directional bias it fixes was real and large (optimism for athletes
+    # coming off a shock +0.638 -> +0.353, p = 8.09e-98).
+    #
+    # Only ~9% of a shock is forecastable (R2 0.093 from tier, round, family and
+    # meet strength), so this adds back the small systematic part and leaves the
+    # rest to condition_sd, which is where a race-day lottery belongs.
+    #
+    # UNIFORM ACROSS THE FIELD, like the tier and round projections above and
+    # for the same reason -- it is a property of the race, not of the athlete --
+    # so it commutes with everything applied before it.
+    #
+    # ONLY MEANINGFUL WITH adjust_race ON. Adding a shock back that was never
+    # removed would double-count it, so this refuses rather than silently
+    # shifting every prediction of a control arm.
+    if (!is.null(shock_tbl)) {
+      if (!ADJUST_RACE) cli::cli_abort(c(
+        "x" = "{.envvar CITIUS_BT_SHOCK_ADDBACK} is set but {.envvar CITIUS_BT_ADJUST_RACE} is not.",
+        "i" = "The add-back is the counterpart of removing the shock from history.
+               Applied alone it double-counts the shock into every prediction."))
+      # meet_tier comes from the CATALOGUE, not the field. championship_results
+      # carries only the feed's per-result `tier` -- no meet_tier column at all
+      # -- so reading it off `field` silently yielded NA and every lookup
+      # missed. Caught by the zero-application guard below on the first smoke
+      # test; without that guard this arm would have run to completion with
+      # every prediction unshifted and scored as a clean null.
+      .tier1 <- NA_character_
+      if (exists("ctl", inherits = TRUE)) {
+        .ct <- ctl[competition_id == as.character(cid)]
+        if (nrow(.ct)) .tier1 <- .ct$meet_tier[1]
+      }
+      if (is.na(.tier1)) .tier1 <- .tier_class_of(field)[1]
+      .rc1 <- .round_class(.mode1(field$round))
+      .fam1 <- .citius_event_registry$family[match(ev, .citius_event_registry$event_id)]
+      k <- shock_tbl[.(.tier1, .rc1, .fam1), on = .(meet_tier, round_class, family),
+                     nomatch = NULL]
+      if (!nrow(k)) k <- shock_tbl[.(.tier1, .rc1), on = .(meet_tier, round_class),
+                                   nomatch = NULL][1]
+      if (nrow(k) && is.finite(k$expected_shock[1])) {
+        entrants[, ability := ability + k$expected_shock[1]]
+        # `<-`, NOT `<<-`. This loop is in run_meet()'s own body, so `<<-` would
+        # skip run_meet's scope and assign a GLOBAL, leaving the returned
+        # counter at zero while the add-back was in fact being applied. Copied
+        # from the `local_age_warn <<-` a few lines up, which is correct only
+        # because it sits inside a warning handler -- a nested function, one
+        # scope deeper. Cost a wrong diagnosis: the zero-count guard fired and
+        # I went looking for a broken lookup that was working.
+        local_shock_applied <- local_shock_applied + 1L
+      }
+    }
     # FAMILY-POOL DEBIAS, applied LAST -- after aging and the tier/round
     # projections, immediately before simulation. Order matters less here than
     # for selection shrinkage: this offset was fit against the FINAL predicted
@@ -1241,7 +1352,8 @@ run_meet <- function(i) {
         merged = .merged))
   }
   list(cid = cid, out = out, rows = rows, timing = local_timing,
-       age_warn = local_age_warn, nofam = local_nofam)
+       age_warn = local_age_warn, nofam = local_nofam,
+       shock_applied = local_shock_applied)
 }
 
 # CITIUS_BT_WORKERS=1 (default) is byte-for-byte the original single-process
@@ -1287,7 +1399,11 @@ if (N_WORKERS > 1L) {
                     # exist even when empty -- the same reason FAMILY_DEBIAS is
                     # exported unconditionally one line up, learned the hard way
                     # when every FALSE parallel arm died on a missing object.
-                    "TRAIN_TIERS")
+                    "TRAIN_TIERS",
+                    # run_meet() reads shock_tbl and ADJUST_RACE on every worker
+                    # regardless of whether the add-back is on, so both bindings
+                    # must exist even when NULL -- the FAMILY_DEBIAS trap again.
+                    "shock_tbl", "ADJUST_RACE")
   # `clean` is the in-memory fallback corpus, potentially gigabytes -- exporting
   # it would copy that to every worker. Only export it when it will actually be
   # read (no store), which is exactly the case the memory cost is unavoidable.
@@ -1324,6 +1440,7 @@ if (N_WORKERS > 1L) {
     TIMING$ability <- TIMING$ability + r$timing$ability
     TIMING$sim <- TIMING$sim + r$timing$sim
     AGE_WARN$n <- AGE_WARN$n + r$age_warn
+    SHOCK$n <- SHOCK$n + (if (is.null(r$shock_applied)) 0L else r$shock_applied)
     if (isTRUE(r$nofam$is_nofam_meet)) {
       NOFAM$rows <- NOFAM$rows + r$nofam$rows
       NOFAM$meets <- NOFAM$meets + 1L
@@ -1345,6 +1462,7 @@ if (N_WORKERS > 1L) {
     TIMING$ability <- TIMING$ability + r$timing$ability
     TIMING$sim <- TIMING$sim + r$timing$sim
     AGE_WARN$n <- AGE_WARN$n + r$age_warn
+    SHOCK$n <- SHOCK$n + (if (is.null(r$shock_applied)) 0L else r$shock_applied)
     if (isTRUE(r$nofam$is_nofam_meet)) {
       NOFAM$rows <- NOFAM$rows + r$nofam$rows
       NOFAM$meets <- NOFAM$meets + 1L
@@ -1403,6 +1521,14 @@ medal <- score_predictions(pred[race_id %in% keep],
                            outc[race_id %in% keep, .(race_id, athlete_id, hit = hit_medal)],
                            "p_medal")
 
+if (nzchar(SHOCK_FILE)) {
+  if (SHOCK$n == 0L) cli::cli_abort(c(
+    "x" = "The shock add-back was configured but applied to ZERO races.",
+    "i" = "Every prediction is unshifted, so this arm is identical to its control
+           and would score as a clean null. Check the tier/round/family keys in
+           {.file {SHOCK_FILE}} against what the scored races actually carry."))
+  cli::cli_alert_success("Shock add-back applied to {SHOCK$n} race{?s}.")
+}
 if (NOFAM$rows > 0L) {
   cli::cli_alert_warning(
     "{format(NOFAM$rows, big.mark = ',')} history row{?s} across {length(NOFAM$events)} event{?s} had no registry family on {NOFAM$meets} meet{?s}; estimated at half_life = {half_life}.")
