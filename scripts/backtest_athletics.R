@@ -368,8 +368,15 @@ if (!is.na(SEL_SHRINK)) cli::cli_alert_info(
 # here as a fixed lookup, not refit per meet -- same "single global correction"
 # shape as TIER_SHRINK/ROUND_SHRINK above and SEL_SHRINK below, if applied.
 FAMILY_DEBIAS <- nzchar(Sys.getenv("CITIUS_BT_FAMILY_DEBIAS", ""))
+# WHICH offsets file. Defaulted so existing callers are unchanged, but
+# parameterised because the offsets are now something we sweep: fitted on
+# [2016, 2020) they OVER-correct the 2020+ era (every family flips from
+# over-optimistic to pessimistic), so the scale is a free parameter that has
+# to be measured rather than assumed. The file's md5 is already in the arm
+# fingerprint below, so two scales cannot share a cache.
+.fp_file <- Sys.getenv("CITIUS_BT_FAMILY_DEBIAS_FILE", "family_pool_offsets.rds")
 if (FAMILY_DEBIAS) {
-  .fp_path <- here::here("citiusdata", "data", "family_pool_offsets.rds")
+  .fp_path <- here::here("citiusdata", "data", .fp_file)
   if (!file.exists(.fp_path)) cli::cli_abort(
     "{.envvar CITIUS_BT_FAMILY_DEBIAS} is set but {.file {.fp_path}} does not ",
     "exist. Run {.file fit_family_pool_offsets.R} first.")
@@ -643,7 +650,12 @@ arm_fingerprint <- list(
   # must never read back cached meets from an arm run without it.
   sigma_scale = if (is.na(SIGMA_SCALE)) "" else format(SIGMA_SCALE),
   family_debias = FAMILY_DEBIAS,
-  family_debias_md5 = if (FAMILY_DEBIAS) md5_of("family_pool_offsets.rds") else NA_character_,
+  # Hash the file this arm ACTUALLY read, not the default name. Hashing the
+  # default while reading a scaled variant would let every scale in a sweep
+  # share one cache and come back a dead heat -- the exact failure the rest of
+  # this fingerprint exists to prevent, reintroduced by parameterising the path.
+  family_debias_file = if (FAMILY_DEBIAS) .fp_file else NA_character_,
+  family_debias_md5 = if (FAMILY_DEBIAS) md5_of(.fp_file) else NA_character_,
   family_debias_holdout = if (FAMILY_DEBIAS) format(as.Date(.fp$fit_holdout)) else NA_character_,
   # Same failure class as project_tier/round and family_debias above, for two
   # flags added alongside them: MARKS_ONLY changes every predicted column's
