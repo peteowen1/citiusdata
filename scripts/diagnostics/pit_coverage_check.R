@@ -56,6 +56,10 @@ TAG    <- Sys.getenv("CITIUS_PIT_TAG", "")                   # suffix for the ou
 # scores that month's races against it, so staleness is bounded at ~30 days --
 # the same as-of discipline backtest_athletics.R applies per meet, at 1/30 the cost.
 REFIT  <- Sys.getenv("CITIUS_PIT_REFIT", "monthly")           # once | monthly
+# sigma_parts for the "athlete" arm (default = deployed). "weight" alone gives
+# the two-sided sigma_raw instead of the one-sided sigma_rob estimator.
+# CITIUS_SIGMA_PSEUDO_N and CITIUS_SIGMA_SCALE are read inside the package.
+ATH_PARTS <- trimws(strsplit(Sys.getenv("CITIUS_PIT_SIGMA_PARTS", "estimator,weight"), ",")[[1]])
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), sprintf(...), "\n", sep = "")
 
 cal <- readRDS(file.path(OUT, CAL))
@@ -92,7 +96,7 @@ say("hold-out: %s finals with >= %d entrants (%s athlete-rows)",
 stopifnot(uniqueN(test$race_key) >= 50)
 
 fit <- function(mode, as_of = FROM) {
-  parts <- if (mode == "event") c("estimator", "weight", "target") else c("estimator", "weight")
+  parts <- if (mode == "event") c("estimator", "weight", "target") else ATH_PARTS
   ab <- deployed_ability_with(x[date < as_of], mode, parts, as_of = as_of)
   ab[, athlete_id := as.character(athlete_id)]
   ab
@@ -137,7 +141,9 @@ score_arm <- function(ab, label, races = unique(test$race_key)) {
 
 test[, month := as.Date(format(date, "%Y-%m-01"))]
 cuts <- if (REFIT == "monthly") sort(unique(test$month)) else FROM
-say("as-of refit: %s (%d fit date%s)", REFIT, length(cuts), if (length(cuts) == 1) "" else "s")
+say("as-of refit: %s (%d fit date%s) | athlete sigma_parts %s | pseudo-n %s | scale %s", REFIT, length(cuts),
+    if (length(cuts) == 1) "" else "s", paste(ATH_PARTS, collapse = ","),
+    Sys.getenv("CITIUS_SIGMA_PSEUDO_N", "default"), Sys.getenv("CITIUS_SIGMA_SCALE", "1"))
 pit <- rbindlist(lapply(ARMS, function(a) {
   rbindlist(lapply(cuts, function(cut) {
     races <- if (REFIT == "monthly") unique(test[month == cut]$race_key) else unique(test$race_key)
