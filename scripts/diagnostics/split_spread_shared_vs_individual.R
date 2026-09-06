@@ -58,7 +58,15 @@ say  <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), ...,
 cal <- readRDS(file.path(OUT, CAL))
 x   <- flag_implausible(setDT(readRDS(file.path(OUT, "athletics_corpus.rds"))))
 x   <- x[!is.na(mark) & !is.na(race_key) & !is.na(date)]
-x[, perf := to_perf(mark, event_id)]
+# The corpus already carries `perf` (built by source_athletics.R). Recompute it
+# only if absent -- and from the ORIENTATION, not the event id: to_perf() takes
+# -1/+1, and passing the id either aborts or NAs every row (see
+# measure_course_offset.R, which hit exactly that).
+if (!"perf" %in% names(x)) {
+  x[citius_events(), on = "event_id", orientation := i.orientation]
+  stopifnot("orientation missing for some rows" = !anyNA(x$orientation))
+  x[, perf := to_perf(mark, orientation)]
+}
 x   <- x[is.finite(perf)]
 say(sprintf("corpus %s rows", format(nrow(x), big.mark = ",")))
 
@@ -100,9 +108,23 @@ shared_obs <- unique(d[, .(race_key, event_id, race_mean)], by = "race_key")[
   , .(n_races = .N, shared_sd = sd(race_mean)), by = event_id]
 
 # Individual: within-athlete-event spread of the race-removed residual.
+# Two views. The POOLED sd answers "is the sigma term the right size overall".
+# The PER-ATHLETE sd, set against that athlete's own assigned sigma, answers the
+# separate question the 2026-09-05 incident raised: does sigma track WHO is
+# consistent? A pooled ratio of 1.0 with a per-athlete correlation near zero is
+# a right-sized term allocated to the wrong people, and that is a placings
+# problem even when the total spread is fine.
 d[, n_ae := .N, by = .(athlete_id, event_id)]
+ae <- d[n_ae >= MINR, .(sd_indiv_ae = sd(indiv), sigma = sigma[1L], n_ae = .N),
+        by = .(athlete_id, event_id)]
 indiv_obs <- d[n_ae >= MINR, .(n_ae_groups = uniqueN(paste(athlete_id, event_id)),
                                indiv_sd = sd(indiv)), by = event_id]
+alloc <- ae[is.finite(sd_indiv_ae) & is.finite(sigma) & sigma > 0,
+            .(n_athletes      = .N,
+              med_ae_ratio    = median(sd_indiv_ae / sigma),
+              alloc_spearman  = if (.N >= 20L) cor(sd_indiv_ae, sigma, method = "spearman") else NA_real_),
+            by = event_id]
+fwrite(ae, file.path(OUT, "spread_split_per_athlete.csv"))
 
 ev <- as.data.table(cal$events)[, .(event_id, condition_sd,
                                     sigma_target = if ("sigma_target" %in% names(cal$events))
@@ -110,7 +132,7 @@ ev <- as.data.table(cal$events)[, .(event_id, condition_sd,
 mod_sigma <- ab[, .(model_sigma = median(sigma, na.rm = TRUE)), by = event_id]
 
 cmp <- Reduce(function(a, b) merge(a, b, by = "event_id", all = FALSE),
-              list(shared_obs, indiv_obs, ev, mod_sigma))
+              list(shared_obs, indiv_obs, alloc, ev, mod_sigma))
 cmp[, shared_ratio := shared_sd / condition_sd]
 cmp[, indiv_ratio  := indiv_sd  / model_sigma]
 setorder(cmp, -n_races)
@@ -121,13 +143,18 @@ print(cmp[, .(event_id, n_races,
               shared_obs = round(shared_sd, 5), cond_sd = round(condition_sd, 5),
               shared_ratio = round(shared_ratio, 3),
               indiv_obs = round(indiv_sd, 5), sigma = round(model_sigma, 5),
-              indiv_ratio = round(indiv_ratio, 3))], nrows = 60)
+              indiv_ratio = round(indiv_ratio, 3),
+              ae_ratio = round(med_ae_ratio, 3), alloc_rho = round(alloc_spearman, 3),
+              n_ath = n_athletes)], nrows = 60)
 
 cat("\n=== the verdict ===\n")
 cat(sprintf("shared term (condition_sd): median observed/predicted = %.3f  on %d events\n",
             median(cmp$shared_ratio, na.rm = TRUE), sum(is.finite(cmp$shared_ratio))))
 cat(sprintf("individual term (sigma)   : median observed/predicted = %.3f  on %d events\n",
             median(cmp$indiv_ratio, na.rm = TRUE), sum(is.finite(cmp$indiv_ratio))))
+cat(sprintf("sigma ALLOCATION          : median per-athlete obs/sigma = %.3f; median Spearman(obs sd, sigma) = %.3f on %d events, %s athlete-events\n",
+            median(cmp$med_ae_ratio, na.rm = TRUE), median(cmp$alloc_spearman, na.rm = TRUE),
+            sum(is.finite(cmp$alloc_spearman)), format(sum(cmp$n_athletes), big.mark = ",")))
 cat("\nA ratio near 1.0 means that term is right and the OTHER one carries the\n")
 cat("+35%. Which matters: condition_sd moves only absolute marks (a shared shock\n")
 cat("cancels from every pairwise comparison), while sigma moves placings and so\n")
