@@ -78,21 +78,36 @@ say("rows with an ability and a race effect: %s", format(nrow(x), big.mark = ","
 x[, a_loo := (n_ab * a_i - (perf - c_r)) / (n_ab - 1)]
 setorder(x, athlete_id, event_id, date)
 x[, `:=`(perf_next = shift(perf, -1L), date_next = shift(date, -1L), e_next = shift(e_cell, -1L),
-         excess_next = shift(excess, -1L)), by = .(athlete_id, event_id)]
+         excess_next = shift(excess, -1L),
+         # the athlete's own residual in the race BEFORE the shock: their form
+         # trajectory going in, so an athlete already improving is not read as
+         # "the shock persisted"
+         prev_resid = shift(perf - a_i - c_r, 1L)), by = .(athlete_id, event_id)]
 p <- x[is.finite(perf_next) & as.numeric(date_next - date) <= GAP & as.numeric(date_next - date) > 0]
 p[, gap := as.numeric(date_next - date)]
 p[, y := perf_next - a_loo - e_next]
 p[, x_ex := excess]
+p[, month_next := factor(format(date_next, "%m"))]
+p[!is.finite(prev_resid), prev_resid := 0]
 say("%s athlete race pairs within %d days", format(nrow(p), big.mark = ","), GAP)
 stopifnot(nrow(p) > 10000)
 
-fit <- function(d) {
+# CONTROLS (2026-09-06, 23:45). The raw slope reads in-season progression as
+# persistence: a fast field in June is fast again in July because it is July.
+# Month-of-next-race dummies absorb that; the athlete's own residual in the
+# race before the shock absorbs an individual trajectory. CITIUS_SHOCK_CONTROLS=0
+# gives the raw slope for comparison; both are printed.
+CONTROLS <- Sys.getenv("CITIUS_SHOCK_CONTROLS", "1") == "1"
+fit <- function(d, controls = CONTROLS) {
   if (nrow(d) < 200) return(list(beta = NA_real_, se = NA_real_))
-  m <- stats::lm(y ~ x_ex, data = d)
+  f <- if (controls && length(unique(d$month_next)) > 1) y ~ x_ex + prev_resid + month_next else y ~ x_ex
+  m <- stats::lm(f, data = d)
   s <- summary(m)$coefficients
   list(beta = unname(s["x_ex", "Estimate"]), se = unname(s["x_ex", "Std. Error"]))
 }
 overall <- fit(p)
+raw_overall <- fit(p, controls = FALSE)
+by_tier_raw <- p[, {f <- fit(.SD, controls = FALSE); .(n = .N, beta_raw = round(f$beta, 4))}, by = tier_class][order(-n)]
 by_fam <- p[, {f <- fit(.SD); .(n = .N, beta = round(f$beta, 4), se = round(f$se, 4), sd_excess = round(sd(x_ex), 4))}, by = family][order(-n)]
 p[, gap_band := cut(gap, c(0, 14, 30, 60, 120, 180), include.lowest = TRUE)]
 by_gap <- p[, {f <- fit(.SD); .(n = .N, beta = round(f$beta, 4), se = round(f$se, 4))}, by = gap_band][order(gap_band)]
@@ -102,11 +117,12 @@ by_size <- p[, .(n = .N, mean_excess = round(mean(x_ex), 4), mean_y = round(mean
 by_tier <- p[, {f <- fit(.SD); .(n = .N, beta = round(f$beta, 4), se = round(f$se, 4))}, by = tier_class][order(-n)]
 
 cat("\n=== persistence of a race's excess into the athlete's next race (beta = slope of y on excess) ===\n")
-cat(sprintf("overall: beta %.4f (se %.4f) on %s pairs\n", overall$beta, overall$se, format(nrow(p), big.mark = ",")))
+cat(sprintf("overall: beta %.4f (se %.4f) on %s pairs | controls %s | raw slope %.4f\n", overall$beta, overall$se,
+            format(nrow(p), big.mark = ","), CONTROLS, raw_overall$beta))
 cat("\nby family:\n"); print(by_fam)
 cat("\nby gap to the next race:\n"); print(by_gap)
 cat("\nby size of the excess (mean_y / mean_excess = implied beta; + excess = the field went better than usual):\n"); print(by_size)
-cat("\nby tier class of the shocked race:\n"); print(by_tier)
+cat("\nby tier class of the shocked race (with controls; beta_raw = plain slope):\n"); print(merge(by_tier, by_tier_raw[, .(tier_class, beta_raw)], by = "tier_class")[order(-n)])
 cat("\nReading: beta is the share of a shock that shows up in the athlete's next result.\n")
 cat("The strip removes (1 - beta) * excess from that historical mark. beta ~ 0 means\n")
 cat("the whole excess was the day, not the athlete; beta ~ 1 means it was real form.\n")
