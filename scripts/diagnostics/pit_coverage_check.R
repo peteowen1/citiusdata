@@ -151,10 +151,12 @@ score_arm <- function(ab, label, races = unique(test$race_key)) {
     k <- k + 1L
     nn <- function(x) if (is.null(x) || !length(x)) NA_real_ else as.numeric(x)[1]
     ix <- match(colnames(p), ent$athlete_id)
-    med <- apply(p, 2L, stats::median)
+    med <- apply(p, 2L, function(v) stats::median(v[is.finite(v)]))
     res[[k]] <- data.table(arm = label, race_key = rk, event_id = ev,
                            athlete_id = colnames(p), pit = pit, is_fav = seq_along(pit) == fav,
-                           pred_sd = apply(p, 2L, sd), sigma = ent$sigma[ix],
+                           # sd over FINITE draws: a simulated foul is -Inf, which
+                           # would NA the whole column and every ratio built on it.
+                           pred_sd = apply(p, 2L, function(v) stats::sd(v[is.finite(v)])), sigma = ent$sigma[ix],
                            # The terms the simulator adds, so observed residual variance
                            # can be set against each one (see the decomposition below).
                            ability_se = if ("ability_se" %in% names(ent)) ent$ability_se[ix] else NA_real_,
