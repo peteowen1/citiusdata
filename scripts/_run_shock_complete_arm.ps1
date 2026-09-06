@@ -2,7 +2,7 @@
 #   strip    -- calibration_race_eb_perevent.rds (evidence-weighted shrinkage)
 #   add back -- expected_race_shock.csv (T1 final +1.51%, by tier x round)
 #
-# FRESH CACHE (bt_cache_shock_v2). The first launch ran with CITIUS_BT_MEET_TIER=1
+# FRESH CACHE (bt_cache_shock_v3). The first launch ran with CITIUS_BT_MEET_TIER=1
 # silently degraded to the feed tier by a meet_tier.x/.y merge collision. The arm
 # fingerprint records use_meet_tier=1, which was ALSO 1 during the broken run --
 # the behaviour changed but the fingerprint did not, so reusing the old cache
@@ -15,7 +15,7 @@ $env:CITIUS_BT_CALIBRATION    = "calibration_race_eb_perevent.rds"
 $env:CITIUS_BT_ADJUST_RACE    = "1"
 $env:CITIUS_BT_SHOCK_ADDBACK  = "expected_race_shock.csv"
 $env:CITIUS_BT_STORE          = "athletics_corpus_store"
-$env:CITIUS_BT_CACHE          = "bt_cache_shock_v2"
+$env:CITIUS_BT_CACHE          = "bt_cache_shock_v3"
 $env:CITIUS_BT_OUT            = "backtest_shock_complete.rds"
 $env:CITIUS_BT_TIER           = "T1_elite"
 $env:CITIUS_BT_MEET_TIER      = "1"
