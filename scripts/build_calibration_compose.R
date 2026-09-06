@@ -20,7 +20,11 @@ OUT <- here::here("citiusdata", "data")
 DST <- Sys.getenv("CITIUS_COMPOSE_OUT", "calibration_corpus_wac_coast_0904_full.rds")
 say <- function(...) cat(sprintf(...), "\n", sep = "")
 
-base   <- readRDS(file.path(OUT, "calibration_corpus_wac_coast_0904_ctxsd_scaled.rds"))
+# The scales file: the METHOD was validated out of sample (fit 2022+2023+2025,
+# judge 2024: pooled 0.488 / 0.897 / PIT sd 0.273); the deployed table is then
+# fitted on all four seasons, which is what _scaled_all carries.
+SCALES <- Sys.getenv("CITIUS_COMPOSE_SCALES", "calibration_corpus_wac_coast_0904_ctxsd_scaled_all.rds")
+base   <- readRDS(file.path(OUT, SCALES))
 shock  <- readRDS(file.path(OUT, "calibration_race_eb_perevent_persist.rds"))
 stopifnot(inherits(base, "citius_calibration"), inherits(shock, "citius_calibration"),
           !is.null(base$condition_sd_context), !is.null(base$spread_scales),
@@ -34,7 +38,7 @@ out$race       <- shock$race
 out$race_shock <- shock$race_shock
 out$provenance$composed <- list(
   race_and_shock_from = "calibration_race_eb_perevent_persist.rds",
-  context_and_scales_from = "calibration_corpus_wac_coast_0904_ctxsd_scaled.rds",
+  context_and_scales_from = SCALES,
   built = Sys.time())
 saveRDS(out, file.path(OUT, DST))
 say("wrote %s: race table %s rows, race_shock beta %.3f (%d tier rows), condition_sd_context %d cells, spread_scales %d families",
