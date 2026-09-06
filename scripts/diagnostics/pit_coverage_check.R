@@ -42,6 +42,13 @@ EVS   <- Sys.getenv("CITIUS_PIT_EVENTS", paste(c(
   "AT-ShotPut-M", "AT-ShotPut-W", "AT-JavelinThrow-M", "AT-JavelinThrow-W"), collapse = ","))
 EVS   <- trimws(strsplit(EVS, ",")[[1]])
 MIN_FIELD <- 5L
+# Toggles added 2026-09-06 after the first run showed the centring, not the
+# width, is the larger defect in T1 finals: size it by round and with the
+# deployed debias off.
+DEBIAS <- Sys.getenv("CITIUS_PIT_DEBIAS", "1") == "1"      # apply DEPLOYED$family_debias
+ROUND  <- Sys.getenv("CITIUS_PIT_ROUND", "final")            # final | heat | all
+ARMS   <- trimws(strsplit(Sys.getenv("CITIUS_PIT_ARMS", "athlete,event"), ",")[[1]])
+TAG    <- Sys.getenv("CITIUS_PIT_TAG", "")                   # suffix for the output files
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), sprintf(...), "\n", sep = "")
 
 cal <- readRDS(file.path(OUT, CAL))
@@ -67,7 +74,10 @@ if ("meet_tier" %in% names(test)) {
                                              table(test$meet_tier, useNA = "ifany"), sep = "=", collapse = " "))
   test <- test[meet_tier %in% c("T1_elite", "T1")]
 }
-test <- test[grepl("final", tolower(round)) & !grepl("semi|quarter", tolower(round))]
+is_final <- grepl("final", tolower(test$round)) & !grepl("semi|quarter", tolower(test$round))
+is_heat  <- grepl("heat|round 1|qualif|prelim", tolower(test$round))
+test <- switch(ROUND, final = test[is_final], heat = test[is_heat], all = test)
+say("round filter %s | debias %s | arms %s", ROUND, DEBIAS, paste(ARMS, collapse = ","))
 test[, n_field := .N, by = race_key]
 test <- test[n_field >= MIN_FIELD]
 say("hold-out: %s finals with >= %d entrants (%s athlete-rows)",
@@ -93,7 +103,7 @@ deployed_ability_with <- function(past, mode, parts) {
     estimate_ability(g[, !"family"], as_of = FROM, half_life = hl, calibration = cal,
                      sigma_parts = parts, sigma_mode = mode)
   }), fill = TRUE)
-  deployed_debias(ab)
+  if (DEBIAS) deployed_debias(ab) else ab
 }
 
 reg <- as.data.table(citius_events())[, .(event_id, family, orientation)]
@@ -118,10 +128,11 @@ score_arm <- function(ab, label) {
   rbindlist(res)
 }
 
-say("fitting arm: athlete (deployed)"); ab_a <- fit("athlete")
-say("fitting arm: event");              ab_e <- fit("event")
-say("scoring %d races x 2 arms at %d sims", uniqueN(test$race_key), NSIM)
-pit <- rbind(score_arm(ab_a, "athlete"), score_arm(ab_e, "event"))
+pit <- rbindlist(lapply(ARMS, function(a) {
+  say("fitting arm: %s", a); ab <- fit(a)
+  say("scoring %d races at %d sims", uniqueN(test$race_key), NSIM)
+  score_arm(ab, a)
+}))
 pit <- merge(pit, reg, by = "event_id")
 say("%s PITs scored per arm", format(nrow(pit[arm == "athlete"]), big.mark = ","))
 
@@ -148,6 +159,6 @@ print(dcast(h, decile ~ arm, value.var = "share"))
 cat("\nNote on direction: PIT is on perf (higher = better performance), so below05 =\n")
 cat("actual much WORSE than predicted, above95 = actual much BETTER than predicted.\n")
 
-fwrite(pit, file.path(OUT, "pit_coverage_rows.csv"))
-fwrite(byf, file.path(OUT, "pit_coverage_by_family.csv"))
+fwrite(pit, file.path(OUT, paste0("pit_coverage_rows", TAG, ".csv")))
+fwrite(byf, file.path(OUT, paste0("pit_coverage_by_family", TAG, ".csv")))
 say("wrote pit_coverage_rows.csv, pit_coverage_by_family.csv")
