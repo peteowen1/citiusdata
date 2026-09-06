@@ -97,7 +97,9 @@ say("mu0 (global) = %.3f | %d family x sex cells | %d events", mu0, length(fs_ma
 
 out <- list(mu0 = mu0, fs_map = fs_map, ev_map = ev_map,
            fit_holdout = FIT_HOLDOUT, fit_arm = ARM, fitted_at = Sys.time())
-f <- file.path(OUT, "family_pool_offsets.rds")
+# Output name, env-driven since 2026-09-06 so a refit on a recent window can be
+# compared against the deployed file instead of overwriting it.
+f <- file.path(OUT, Sys.getenv("CITIUS_FAMILY_POOL_OUT", "family_pool_offsets.rds"))
 saveRDS(out, f)
 say("wrote %s", f)
 

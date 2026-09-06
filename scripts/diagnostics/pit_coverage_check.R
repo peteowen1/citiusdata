@@ -46,6 +46,15 @@ MIN_FIELD <- 5L
 # width, is the larger defect in T1 finals: size it by round and with the
 # deployed debias off.
 DEBIAS <- Sys.getenv("CITIUS_PIT_DEBIAS", "1") == "1"      # apply DEPLOYED$family_debias
+# Alternate offsets file (same shape as DEPLOYED$family_debias$file), for
+# testing a refit on a recent window against the deployed one.
+DEBIAS_FILE <- Sys.getenv("CITIUS_PIT_DEBIAS_FILE", "")
+# AGING. The first runs applied the field prior but NOT the aging projection,
+# which the backtest (run_meet) and every predict script apply through
+# deployed_field(). bias_by_context.R on the backtest's own predictions shows
+# T1 finals +1.3..+1.8% OPTIMISTIC in sprint/jump/throw/hurdles while this
+# harness without aging showed them centred; aging is the candidate.
+AGING  <- Sys.getenv("CITIUS_PIT_AGING", "1") == "1"
 ROUND  <- Sys.getenv("CITIUS_PIT_ROUND", "final")            # final | heat | all
 ARMS   <- trimws(strsplit(Sys.getenv("CITIUS_PIT_ARMS", "athlete,event"), ",")[[1]])
 TAG    <- Sys.getenv("CITIUS_PIT_TAG", "")                   # suffix for the output files
@@ -63,6 +72,7 @@ ATH_PARTS <- trimws(strsplit(Sys.getenv("CITIUS_PIT_SIGMA_PARTS", "estimator,wei
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), sprintf(...), "\n", sep = "")
 
 cal <- readRDS(file.path(OUT, CAL))
+aging_curve <- if (AGING) deployed_aging(OUT) else NULL
 cols <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "round", "tier",
           "meet_tier", "competition_id", "race_key", "wind", "momentum", "indoor",
           "venue_country")
@@ -88,7 +98,7 @@ if ("meet_tier" %in% names(test)) {
 is_final <- grepl("final", tolower(test$round)) & !grepl("semi|quarter", tolower(test$round))
 is_heat  <- grepl("heat|round 1|qualif|prelim", tolower(test$round))
 test <- switch(ROUND, final = test[is_final], heat = test[is_heat], all = test)
-say("round filter %s | debias %s | arms %s", ROUND, DEBIAS, paste(ARMS, collapse = ","))
+say("round filter %s | debias %s | aging %s | arms %s", ROUND, DEBIAS, AGING, paste(ARMS, collapse = ","))
 test[, n_field := .N, by = race_key]
 test <- test[n_field >= MIN_FIELD]
 say("hold-out: %s finals with >= %d entrants (%s athlete-rows)",
@@ -114,7 +124,13 @@ deployed_ability_with <- function(past, mode, parts, as_of = FROM) {
     estimate_ability(g[, !"family"], as_of = as_of, half_life = hl, calibration = cal,
                      sigma_parts = parts, sigma_mode = mode)
   }), fill = TRUE)
-  if (DEBIAS) deployed_debias(ab) else ab
+  if (!DEBIAS) return(ab)
+  if (nzchar(DEBIAS_FILE)) {
+    o <- readRDS(file.path(OUT, DEBIAS_FILE))
+    o$families <- DEPLOYED$family_debias$families; o$file <- DEBIAS_FILE
+    return(deployed_debias(ab, o))
+  }
+  deployed_debias(ab)
 }
 
 reg <- as.data.table(citius_events())[, .(event_id, family, orientation)]
@@ -125,16 +141,27 @@ score_arm <- function(ab, label, races = unique(test$race_key)) {
     ev <- r$event_id[1]
     ent <- ab[event_id == ev & athlete_id %in% r$athlete_id]
     if (nrow(ent) < MIN_FIELD) next
-    ent <- deployed_field(ent)                       # field prior, no aging (no ages here)
+    ages <- if (AGING && "age" %in% names(r)) unique(r[!is.na(age), .(athlete_id, age_now = as.numeric(age))], by = "athlete_id") else NULL
+    ent <- deployed_field(ent, aging = aging_curve, ages = ages)   # prior, then aging, as deployed
     sim <- simulate_event(ent, n_sims = NSIM, calibration = cal, seed = 1L)
     p <- if (!is.null(sim$perf_std)) sim$perf_std else sim$perf
     act <- r[match(colnames(p), athlete_id), perf]
     pit <- vapply(seq_len(ncol(p)), function(j) mean(p[, j] <= act[j], na.rm = TRUE), numeric(1))
     fav <- which.max(ent$ability[match(colnames(p), ent$athlete_id)])
     k <- k + 1L
+    nn <- function(x) if (is.null(x) || !length(x)) NA_real_ else as.numeric(x)[1]
+    ix <- match(colnames(p), ent$athlete_id)
+    med <- apply(p, 2L, stats::median)
     res[[k]] <- data.table(arm = label, race_key = rk, event_id = ev,
                            athlete_id = colnames(p), pit = pit, is_fav = seq_along(pit) == fav,
-                           pred_sd = apply(p, 2L, sd), sigma = ent$sigma[match(colnames(p), ent$athlete_id)])
+                           pred_sd = apply(p, 2L, sd), sigma = ent$sigma[ix],
+                           # The terms the simulator adds, so observed residual variance
+                           # can be set against each one (see the decomposition below).
+                           ability_se = if ("ability_se" %in% names(ent)) ent$ability_se[ix] else NA_real_,
+                           cond_sd    = nn(sim$settings$condition_sd),
+                           form_sd    = nn(sim$settings$form_sd),
+                           tail_df    = nn(sim$settings$df),
+                           resid      = act - med)
   }
   rbindlist(res)
 }
@@ -176,6 +203,40 @@ h[, decile := rep(1:10, times = .N / 10)]
 print(dcast(h, decile ~ arm, value.var = "share"))
 cat("\nNote on direction: PIT is on perf (higher = better performance), so below05 =\n")
 cat("actual much WORSE than predicted, above95 = actual much BETTER than predicted.\n")
+
+# --- which term is oversized? -----------------------------------------------
+# Observed residual variance (actual - simulated median), split into the part
+# shared by a race (race-mean residual) and the rest, against the simulator's
+# own terms: sigma^2 (scaled by the t-tail), ability_se^2, form_sd^2 and
+# cond_sd^2. Ratios near 1 mean that term is the right size on this population.
+pit[, race_mean_resid := mean(resid), by = .(arm, race_key)]
+pit[, indiv_resid := resid - race_mean_resid]
+tvar <- function(df) ifelse(is.finite(df) & df > 2, df / (df - 2), 1)
+dec <- pit[, .(n = .N,
+               mean_resid     = mean(resid),
+               obs_total_var  = var(resid),
+               obs_shared_var = var(unique(.SD, by = "race_key")$race_mean_resid),
+               obs_indiv_var  = var(indiv_resid),
+               sigma2_t       = mean(sigma^2 * tvar(tail_df)),
+               se2            = mean(ability_se^2, na.rm = TRUE),
+               form2          = mean(form_sd^2),
+               cond2          = mean(cond_sd^2),
+               pred_var       = mean(pred_sd^2)),
+           by = .(arm, family)]
+dec[, `:=`(bias_pct     = round(-100 * mean_resid, 3),
+           ratio_total  = round(obs_total_var / pred_var, 3),
+           ratio_shared = round(obs_shared_var / cond2, 3),
+           ratio_indiv  = round(obs_indiv_var / (sigma2_t + se2 + form2), 3),
+           share_cond   = round(cond2 / pred_var, 2),
+           share_sigma  = round(sigma2_t / pred_var, 2),
+           share_se     = round(se2 / pred_var, 2))]
+cat("\n=== variance decomposition: observed / simulated, by family ===\n")
+cat("bias_pct: predicted median minus actual, in % of mark; + = optimistic (same sign as bias_by_context.R).\n")
+cat("ratio_total: obs resid var / simulated var. ratio_shared: race-mean resid var / cond_sd^2.\n")
+cat("ratio_indiv: within-race resid var / (sigma^2 * t-inflation + ability_se^2 + form_sd^2).\n")
+cat("share_*: fraction of the simulated variance each term contributes.\n\n")
+print(dec[, .(arm, family, n, bias_pct, ratio_total, ratio_shared, ratio_indiv, share_cond, share_sigma, share_se)])
+fwrite(dec, file.path(OUT, paste0("pit_variance_decomp", TAG, ".csv")))
 
 fwrite(pit, file.path(OUT, paste0("pit_coverage_rows", TAG, ".csv")))
 fwrite(byf, file.path(OUT, paste0("pit_coverage_by_family", TAG, ".csv")))
