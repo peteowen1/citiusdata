@@ -26,7 +26,7 @@ DEPLOYED <- list(
   # stamp is the only thing a reader of a published card can use to tell which
   # model produced it. Dropping the `_0904` made the stamp name a different arm
   # from the file it actually loads.
-  stamp = "2026-09-04 wac_coast_0904",
+  stamp = "2026-09-06 wac_coast_0904 debias4fam",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -143,7 +143,48 @@ DEPLOYED <- list(
   # History depth per estimate. TWELVE YEARS, and do not shorten it on the
   # argument that old marks carry negligible weight -- w_total is a SUM and it
   # drives shrinkage. Cutting to seven years moved p_gold by up to 0.246.
-  history_days = 4380L
+  history_days = 4380L,
+
+  # FAMILY-POOL MARKS DEBIAS, gated to four families. PROMOTED 2026-09-06.
+  #
+  # WHAT IT CORRECTS. The coasting trait (see CALIBRATION above) lifts jogged
+  # heats, which raises ability LEVELS, so absolute marks run fast. That cost
+  # was recorded there as "correctable, and queued" on 2026-08-13. Measured on
+  # 2026-09-05 (docs/reviews/marks-lose-to-last5-2026-09-05.md) it is a
+  # PER-FAMILY level bias that cancels globally: throw +2.03%, jump +1.41%,
+  # hurdles +1.37%, sprint +1.30% optimistic, road -1.79% PESSIMISTIC, pooled
+  # -0.05%. Every global bias check therefore called the model unbiased.
+  #
+  # WHAT THIS DOES. Subtracts a fitted per-event level offset (percent of mark,
+  # event shrunk toward family x sex, fit by fit_family_pool_offsets.R on the
+  # WAC control arm with data strictly before 2020-01-01) from `ability` in
+  # deployed_ability(). It is a per-event CONSTANT, so every entrant in a race
+  # moves together and placings, p_gold and p_medal are unchanged bit-for-bit;
+  # only the predicted mark moves. check_deployed_debias.R asserts both.
+  #
+  # WHY GATED. Applied blanket on the T1_elite 2020+ goal set the debias took
+  # events beating last-5 on marks from 18 to 25 of 54 with zero event-level
+  # regressions, but pooled MAE got WORSE (+23.7%) because road/marathon are
+  # 36% of predictions and were pushed the wrong way. Per family, control ->
+  # debias marks MAE (goal_by_event_fullhistory_0905 vs _debias_0905):
+  #   sprint  -21.2% (8 of 8 events better)   road     +40.8% (1 of 6 better)
+  #   hurdles -18.3% (5 of 6)                 middle    +9.5% (1 of 6)
+  #   jump    -10.4% (8 of 8)                 combined  +5.0% (0 of 2)
+  #   throw    -9.8% (7 of 8)                 distance  +3.7% (4 of 8)
+  #                                           walk      +1.8% (0 of 2)
+  # The gate is the four families where it wins -- exactly the four the family
+  # bias table predicted. Every one of the +6 flipped events is in them, so the
+  # gated version keeps the whole gain and drops every regression.
+  #
+  # OPEN, recorded not resolved: road's +40.8% under a ~1pp correction is too
+  # large for a level shift alone (Marathon M 2.90% -> 4.27%). Its fitted
+  # offset is -0.98 (fs_map road|M) while the family runs 1.79% pessimistic, so
+  # the sign should HELP. Something about how the offsets are fitted for road
+  # is wrong and has not been chased; the gate makes it moot for shipping.
+  family_debias = list(
+    file     = "family_pool_offsets.rds",
+    families = c("sprint", "hurdles", "jump", "throw")
+  )
 )
 
 # --- accessors ---------------------------------------------------------------
@@ -268,7 +309,12 @@ deployed_history <- function(dir, events, from, to) {
 #' `estimate_ability()` takes a single half-life, so the history is split by
 #' family and stacked. Each event belongs to exactly one family, so no
 #' athlete-event is estimated twice.
-deployed_ability <- function(past, as_of, calibration) {
+deployed_ability <- function(past, as_of, calibration,
+                             debias = deployed_debias_offsets()) {
+  deployed_debias(.deployed_ability_raw(past, as_of, calibration), debias)
+}
+
+.deployed_ability_raw <- function(past, as_of, calibration) {
   hl_map <- DEPLOYED$hl_family
   if (!length(hl_map)) {
     return(estimate_ability(past, as_of = as_of, half_life = DEPLOYED$half_life,
@@ -297,6 +343,70 @@ deployed_ability <- function(past, as_of, calibration) {
     estimate_ability(g[, !"family"], as_of = as_of, half_life = hl,
                      calibration = calibration)
   }), fill = TRUE)
+}
+
+#' Read the family-pool marks offsets DEPLOYED names, or NULL when none is set.
+#'
+#' Returns the fitted list from fit_family_pool_offsets.R (`mu0`, `fs_map`,
+#' `ev_map`, provenance) with the family gate and file name attached.
+deployed_debias_offsets <- function(dir = here::here("citiusdata", "data")) {
+  cfg <- DEPLOYED$family_debias
+  if (is.null(cfg)) return(NULL)
+  f <- file.path(dir, cfg$file)
+  if (!file.exists(f)) cli::cli_abort(c(
+    "DEPLOYED names family-pool offsets {.file {f}} but the file does not exist.",
+    "i" = "Run {.file citiusdata/scripts/fit_family_pool_offsets.R} first."))
+  o <- readRDS(f)
+  if (!all(c("mu0", "fs_map", "ev_map") %in% names(o))) cli::cli_abort(
+    "{.file {f}} is not a family-pool offsets object (needs mu0, fs_map, ev_map).")
+  o$families <- cfg$families
+  o$file <- cfg$file
+  o
+}
+
+#' Subtract the fitted per-event level offset from `ability`, gated by family.
+#'
+#' The offset is a per-event CONSTANT (percent of mark): every entrant in a race
+#' moves by the same amount, so placings and every probability are unchanged
+#' and only the predicted mark moves. Lookup order matches the backtest arm
+#' that measured it (backtest_athletics.R, CITIUS_BT_FAMILY_DEBIAS): event map,
+#' else family x sex map, else the grand mean. Events outside the family gate
+#' get 0. `ability_peak` is shifted too when present so the two columns keep
+#' their relationship; medal_probs() reads the mark from `ability`.
+#'
+#' Adds a `debias_offset` column (pp, 0 where not applied) so any output can be
+#' audited for what was subtracted.
+deployed_debias <- function(ab, offsets = deployed_debias_offsets()) {
+  if (!data.table::is.data.table(ab)) ab <- data.table::as.data.table(ab)
+  if (is.null(offsets) || !nrow(ab)) {
+    ab[, debias_offset := 0]
+    return(ab[])
+  }
+  reg <- data.table::as.data.table(citius_events())[, c("event_id", "family", "sex")]
+  reg[, fs := paste(family, sex, sep = "|")]
+  k   <- match(ab$event_id, reg$event_id)
+  fam <- reg$family[k]
+  fs  <- reg$fs[k]
+  off <- unname(offsets$ev_map[ab$event_id])
+  miss <- is.na(off)
+  off[miss] <- unname(offsets$fs_map[fs[miss]])
+  off[is.na(off)] <- offsets$mu0
+  gate <- !is.na(fam) & fam %in% offsets$families
+  off[!gate] <- 0
+  # A gated family with every offset zero means the lookup matched nothing --
+  # the same "flag is on, behaviour is off" shape as the meet_tier no-op of
+  # 2026-09-06. Say so instead of shipping the control model under a new stamp.
+  if (any(gate) && !any(off[gate] != 0)) cli::cli_abort(
+    "family-pool debias: {sum(gate)} ability rows are in gated families and every offset resolved to zero.")
+  ab[, debias_offset := off]
+  ab[, ability := ability - debias_offset / 100]
+  if ("ability_peak" %in% names(ab)) ab[, ability_peak := ability_peak - debias_offset / 100]
+  n_hit <- sum(off != 0)
+  cli::cli_alert_info(paste0(
+    "family-pool debias ({offsets$file}): shifted {n_hit} of {nrow(ab)} ability rows ",
+    "across {length(unique(ab$event_id[off != 0]))} events in {.val {offsets$families}}; ",
+    "mean offset {round(mean(off[off != 0]), 3)}pp."))
+  ab[]
 }
 
 #' Apply the field-conditional prior and the aging projection to one race field.
