@@ -35,6 +35,12 @@ for ($w = 0; $w -lt 720; $w++) {
   if ((Test-Path $SHOCK) -and (Select-String -Path $SHOCK -Pattern "ALL DONE" -Quiet)) { break }
   Start-Sleep -Seconds 30
 }
+# The PIT coverage check (diagnostics/pit_coverage_check.R, ~10 min, ~2.5 GB) runs
+# here, between the shock arm ending and this arm starting, because it could not
+# survive alongside two arms and another session's job (39 MB available at 14:20).
+"=== PIT coverage check $(Get-Date) ===" | Out-File -Append -Encoding utf8 $LOG
+& Rscript "citiusdata\scripts\diagnostics\pit_coverage_check.R" 2>&1 |
+  Out-File -Encoding utf8 "C:\dev\citiusverse\citiusdata\pit_coverage_log.txt"
 "=== START $(Get-Date) ===" | Out-File -Append -Encoding utf8 $LOG
 $env:CITIUS_BT_CALIBRATION    = "calibration_corpus_wac_coast_0904.rds"
 $env:CITIUS_BT_STORE          = "athletics_corpus_store"
