@@ -50,6 +50,11 @@ ex  <- as.data.table(cal$race_shock$expected)[event_id == EVENT & tier_class == 
 e_cell <- if (nrow(ex)) ex$e_cell[1] else NA_real_
 bt <- as.data.table(cal$race_shock$by_tier)
 beta <- if (nrow(bt) && tcl %in% bt$tier_class) bt[tier_class == tcl]$beta[1] else cal$race_shock$beta
+beta_src <- "tier"
+if (!is.null(cal$race_shock$by_race)) {
+  br <- as.data.table(cal$race_shock$by_race)
+  if (RK %in% br$race_key) { beta <- br[race_key == RK]$beta[1]; beta_src <- "this race (pb share, wind, size)" }
+}
 beta <- min(max(beta, 0), 1)
 excess <- rr$c_r - e_cell
 ev <- as.data.table(cal$events)[event_id == EVENT]
@@ -61,7 +66,7 @@ cat(sprintf("\n%s\nTHE RACE %s | %s | tier %s (%s) | round %s (%s) | %d in race\
 cat(sprintf("shrunk race effect c_r      %+.4f  (%+.2f%% of a mark)\n", rr$c_r, 100 * rr$c_r))
 cat(sprintf("expected for this kind      %+.4f  (event x %s x %s, %d races)\n", e_cell, tcl, rcl, if (nrow(ex)) ex$n_cell[1] else 0L))
 cat(sprintf("excess                      %+.4f  (%+.2f%%)\n", excess, 100 * excess))
-cat(sprintf("beta (tier %s)              %.3f   -> strip share %.3f\n", tcl, beta, 1 - beta))
+cat(sprintf("beta (%s)  %.3f   -> strip share %.3f\n", beta_src, beta, 1 - beta))
 cat(sprintf("field-size weight           %.3f   (n/(n+k), k = %.2f)\n", wt, k))
 cat(sprintf("STRIPPED from each mark     %+.4f  (%+.2f%%, about %.2f s on a 20 s race)\n", strip, 100 * strip, 20 * strip))
 

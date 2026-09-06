@@ -65,7 +65,7 @@ expected <- unique(expected, by = c("event_id", "tier_class", "round_class"))
 
 # --- 2. next-race persistence ------------------------------------------------
 store <- file.path(OUT, "athletics_corpus_store")
-x <- as.data.table(read_results_store(store, columns = c("athlete_id", "event_id", "date", "perf", "race_key")))
+x <- as.data.table(read_results_store(store, columns = c("athlete_id", "event_id", "date", "perf", "race_key", "wind")))
 x <- x[is.finite(perf) & !is.na(race_key) & !is.na(date)]
 x[, athlete_id := as.character(athlete_id)]
 x[, date := as.Date(date)]
@@ -74,6 +74,21 @@ x <- merge(x, ab, by = c("athlete_id", "event_id"))
 x <- merge(x, rr[, .(race_key, c_r, excess, e_cell, family, tier_class, round_class)], by = "race_key")
 x <- x[n_ab >= 2L]
 say("rows with an ability and a race effect: %s", format(nrow(x), big.mark = ","))
+
+# --- race-level features that might separate "the day" from "real form" -----
+# pb: did this athlete beat their own best-before in this race (needs 3+ prior
+# results so a debutant's first mark is not a "PB"). pb_frac: share of the
+# field that did. wind_mean: the race's mean legal reading where recorded.
+setorder(x, athlete_id, event_id, date)
+x[, n_before := seq_len(.N) - 1L, by = .(athlete_id, event_id)]
+x[, best_before := shift(cummax(perf), 1L), by = .(athlete_id, event_id)]
+x[, pb := n_before >= 3L & is.finite(best_before) & perf > best_before]
+race_feat <- x[, .(pb_frac = if (sum(n_before >= 3L) >= 3L) mean(pb[n_before >= 3L]) else NA_real_,
+                   wind_mean = if ("wind" %in% names(x)) mean(wind[is.finite(wind)]) else NA_real_,
+                   month_shock = as.integer(format(date[1], "%m"))), by = race_key]
+x <- merge(x, race_feat, by = "race_key")
+x[!is.finite(pb_frac), pb_frac := 0]
+x[!is.finite(wind_mean), wind_mean := 0]
 # leave-one-out ability: a_i is mean(perf - c_r) over the athlete-event's rows
 x[, a_loo := (n_ab * a_i - (perf - c_r)) / (n_ab - 1)]
 setorder(x, athlete_id, event_id, date)
@@ -116,6 +131,34 @@ by_size <- p[, .(n = .N, mean_excess = round(mean(x_ex), 4), mean_y = round(mean
                  implied_beta = round(mean(y) / mean(x_ex), 3)), by = ex_band][order(ex_band)]
 by_tier <- p[, {f <- fit(.SD); .(n = .N, beta = round(f$beta, 4), se = round(f$se, 4))}, by = tier_class][order(-n)]
 
+# --- per-race beta: does the persistence depend on what the race looked like? --
+# y ~ excess * (tier + pb_frac + wind + big) + controls. The interaction
+# coefficients say how beta moves with each feature; the fitted beta for every
+# race in the calibration is stored so the strip can use it directly.
+p[, big := as.numeric(x_ex > 0.02)]
+p[, tier_f := factor(tier_class, levels = c("low", "mid", "high", "top"))]
+m_int <- stats::lm(y ~ x_ex * (tier_f + pb_frac + wind_mean + big) + prev_resid + month_next, data = p)
+co <- summary(m_int)$coefficients
+cat("\n=== how beta moves with the race's features (interaction terms with the excess) ===\n")
+print(round(co[grepl("^x_ex", rownames(co)), c("Estimate", "Std. Error")], 4))
+rr_feat <- merge(rr[, .(race_key, event_id, tier_class, excess, c_r)], race_feat, by = "race_key", all.x = TRUE)
+rr_feat[!is.finite(pb_frac), pb_frac := 0]; rr_feat[!is.finite(wind_mean), wind_mean := 0]
+rr_feat[, big := as.numeric(excess > 0.02)]
+rr_feat[, tier_f := factor(tier_class, levels = c("low", "mid", "high", "top"))]
+# beta_r = d y / d excess at this race's features (month and prev_resid drop out)
+beta_of <- function(d) {
+  b <- co[, "Estimate"]
+  out <- b["x_ex"] + ifelse(d$tier_f == "mid", b["x_ex:tier_fmid"], 0) +
+    ifelse(d$tier_f == "high", b["x_ex:tier_fhigh"], 0) + ifelse(d$tier_f == "top", b["x_ex:tier_ftop"], 0) +
+    b["x_ex:pb_frac"] * d$pb_frac + b["x_ex:wind_mean"] * d$wind_mean + b["x_ex:big"] * d$big
+  unname(out)
+}
+rr_feat[, beta_race := pmin(pmax(beta_of(rr_feat), 0), 1)]
+by_race <- rr_feat[, .(race_key, beta = round(beta_race, 4), pb_frac = round(pb_frac, 3), wind_mean = round(wind_mean, 2), big)]
+cat("\nper-race beta: quantiles over all races\n"); print(round(quantile(by_race$beta, c(0.01, 0.1, 0.5, 0.9, 0.99)), 3))
+cat("per-race beta for big excess (> 2%) races with pb_frac >= 0.5:\n")
+print(round(quantile(by_race[big == 1 & pb_frac >= 0.5]$beta, c(0.1, 0.5, 0.9)), 3))
+
 cat("\n=== persistence of a race's excess into the athlete's next race (beta = slope of y on excess) ===\n")
 cat(sprintf("overall: beta %.4f (se %.4f) on %s pairs | controls %s | raw slope %.4f\n", overall$beta, overall$se,
             format(nrow(p), big.mark = ","), CONTROLS, raw_overall$beta))
@@ -132,6 +175,10 @@ cal$race_shock <- list(beta = overall$beta, beta_se = overall$se,
                        # high 0.72, mid 0.86, low 1.02 on the first fit) and is what the
                        # strip uses first; family is kept for the record only.
                        by_tier = by_tier[, .(tier_class, beta, se, n)],
+                       # per-race beta from the interaction fit; the strip uses
+                       # this first, then by_tier, then the overall value
+                       by_race = by_race[, .(race_key, beta)],
+                       interaction_coefficients = co[grepl("^x_ex", rownames(co)), c("Estimate", "Std. Error")],
                        by_gap = by_gap,
                        by_family = by_fam[, .(family, beta, se, n)],
                        expected = expected, gap_days = GAP, min_cell = MINC,
