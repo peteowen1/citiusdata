@@ -26,7 +26,7 @@ DEPLOYED <- list(
   # stamp is the only thing a reader of a published card can use to tell which
   # model produced it. Dropping the `_0904` made the stamp name a different arm
   # from the file it actually loads.
-  stamp = "2026-09-06 wac_coast_0904 debias4fam",
+  stamp = "2026-09-06 wac_coast_0904_full debias4fam ctxsd",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -101,7 +101,14 @@ DEPLOYED <- list(
   # concentrated in Hammer Throw M (+0.233pp), High Jump M (+0.232) and W, the
   # race walks, and 1500m M. Per-event table:
   # citiusdata/data/wac_reverify_by_event_0904.csv.
-  calibration = "calibration_corpus_wac_coast_0904.rds",
+  # PROMOTED 2026-09-06 (evening): the same calibration with three tables
+  # attached by build_calibration_compose.R -- $condition_sd_context (shared
+  # shock per event x tier x round), $spread_scales (per-family multipliers
+  # fitted on hold-out residuals, method validated out of sample: 2024 finals
+  # 50% interval covers 48.8%, 90% covers 89.7%, from 62.5% / 96.2%), and
+  # $race_shock with the EB-shrunk race table (read only when adjust_race is
+  # TRUE). Everything the old file had is unchanged in this one.
+  calibration = "calibration_corpus_wac_coast_0904_full.rds",
 
   # AGING -- the blended curve, adopted 2026-07-29.
   aging = "aging.rds",
@@ -202,7 +209,7 @@ DEPLOYED <- list(
   # shock and the mark-distribution spread are the cell's values (a T1 final
   # shares 0.33-0.96 of the event-wide shock by family) rather than the
   # corpus-wide ones. Judged by pit_coverage_check.R on 2024 and 2025 finals.
-  race_context = list(enabled = FALSE, meet_tier = "T1_elite")
+  race_context = list(enabled = TRUE, meet_tier = "T1_elite")
 )
 
 # --- accessors ---------------------------------------------------------------
