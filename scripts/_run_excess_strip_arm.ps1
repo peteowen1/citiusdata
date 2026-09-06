@@ -20,14 +20,19 @@
 #   schtasks /run /tn citius_excess_strip
 $ErrorActionPreference = "Continue"
 Set-Location "C:\dev\citiusverse"
-$LOG = "C:\dev\citiusverse\citiusdata\excess_strip_log.txt"
+# Variant via env before launch: CITIUS_STRIP_CAL (persist file), CITIUS_STRIP_TAG
+# (suffix for cache/out/log/csv). Default = the first arm (tier-only beta).
+if (-not $env:CITIUS_STRIP_CAL) { $env:CITIUS_STRIP_CAL = "calibration_race_eb_perevent_persist.rds" }
+if (-not $env:CITIUS_STRIP_TAG) { $env:CITIUS_STRIP_TAG = "" }
+$TAG = $env:CITIUS_STRIP_TAG
+$LOG = "C:\dev\citiusverse\citiusdata\excess_strip${TAG}_log.txt"
 "=== START $(Get-Date) ===" | Out-File -Append -Encoding utf8 $LOG
-$env:CITIUS_BT_CALIBRATION    = "calibration_race_eb_perevent_persist.rds"
+$env:CITIUS_BT_CALIBRATION    = $env:CITIUS_STRIP_CAL
 $env:CITIUS_BT_ADJUST_RACE    = "1"
 $env:CITIUS_BT_MARKS_ONLY     = "1"
 $env:CITIUS_BT_STORE          = "athletics_corpus_store"
-$env:CITIUS_BT_CACHE          = "bt_cache_excess_strip"
-$env:CITIUS_BT_OUT            = "backtest_excess_strip.rds"
+$env:CITIUS_BT_CACHE          = "bt_cache_excess_strip$TAG"
+$env:CITIUS_BT_OUT            = "backtest_excess_strip$TAG.rds"
 $env:CITIUS_BT_TIER           = "T1_elite"
 $env:CITIUS_BT_MEET_TIER      = "1"
 $env:CITIUS_BT_MEETS          = "450"
@@ -40,18 +45,18 @@ foreach ($v in "CITIUS_BT_SHOCK_ADDBACK", "CITIUS_BT_TRAIN_TIERS", "CITIUS_BT_FA
 }
 for ($i = 1; $i -le 6; $i++) {
   & Rscript "citiusdata\scripts\backtest_athletics.R" 2>&1 | Out-File -Append -Encoding utf8 $LOG
-  if (Test-Path "citiusdata\data\backtest_excess_strip.rds") {
-    $f = Get-Item "citiusdata\data\backtest_excess_strip.rds"
+  if (Test-Path "citiusdata\data\backtest_excess_strip$TAG.rds") {
+    $f = Get-Item "citiusdata\data\backtest_excess_strip$TAG.rds"
     if ($f.LastWriteTime -gt (Get-Date).AddMinutes(-15)) { break }
   }
   Start-Sleep -Seconds 30
 }
 "--- scoring $(Get-Date) ---" | Out-File -Append -Encoding utf8 $LOG
-$env:CITIUS_GOAL_ARM        = "backtest_excess_strip.rds"
+$env:CITIUS_GOAL_ARM        = "backtest_excess_strip$TAG.rds"
 $env:CITIUS_GOAL_MARKS_ONLY = "1"
 & Rscript "citiusdata\scripts\diagnostics\score_goal_by_event.R" 2>&1 | Out-File -Append -Encoding utf8 $LOG
-Copy-Item "citiusdata\data\goal_by_event.csv" "citiusdata\data\goal_by_event_excess_strip.csv" -Force
+Copy-Item "citiusdata\data\goal_by_event.csv" "citiusdata\data\goal_by_event_excess_strip$TAG.csv" -Force
 Remove-Item Env:\CITIUS_GOAL_MARKS_ONLY -ErrorAction SilentlyContinue
-$env:CITIUS_BIAS_ARM = "backtest_excess_strip.rds"
+$env:CITIUS_BIAS_ARM = "backtest_excess_strip$TAG.rds"
 & Rscript "citiusdata\scripts\diagnostics\bias_by_context.R" 2>&1 | Out-File -Append -Encoding utf8 $LOG
 "=== ALL DONE $(Get-Date) ===" | Out-File -Append -Encoding utf8 $LOG
