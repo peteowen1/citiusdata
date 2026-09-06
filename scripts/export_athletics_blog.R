@@ -105,7 +105,15 @@ KEEP <- c("event_id", "discipline", "sex", "athlete_id", "athlete", "nation",
           "nation_code",
           "p_gold", "p_medal", "p_final", "p_reach_r2", "p_reach_r3",
           "ability", "sigma", "ability_se", "n_rounds", "field_modelled",
-          "generated_at", "cutoff", "config", "counts_source",
+          # cutoff_requested and history_max_date added 2026-09-07: `cutoff` is
+          # now clamped to the last date actually in the history, so on its own
+          # it no longer tells you whether it was clamped. These two carry the
+          # date that was asked for and the data boundary, which is what lets a
+          # page say "locked from data before X" honestly. Without them in KEEP
+          # the columns are written to data/ and then dropped here, which is
+          # what happened when the clamp first shipped.
+          "generated_at", "cutoff", "cutoff_requested", "history_max_date",
+          "config", "counts_source",
           "combined_rows_excluded",
           "field_type", "field_source", "field_entrants", "field_unmodelled")
 card <- pred[, intersect(KEEP, names(pred)), with = FALSE]
