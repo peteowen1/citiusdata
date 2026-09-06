@@ -21,7 +21,12 @@
 DEPLOYED <- list(
   # Bump on every promotion. Written into prediction outputs so any artefact can
   # be traced to the configuration that produced it.
-  stamp = "2026-09-04 wac_coast",
+  # Must contain the arm exactly as derived from the calibration FILENAME
+  # (`calibration_corpus_wac_coast_0904.rds` -> `wac_coast_0904`), because the
+  # stamp is the only thing a reader of a published card can use to tell which
+  # model produced it. Dropping the `_0904` made the stamp name a different arm
+  # from the file it actually loads.
+  stamp = "2026-09-04 wac_coast_0904",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
