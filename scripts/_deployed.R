@@ -26,7 +26,7 @@ DEPLOYED <- list(
   # stamp is the only thing a reader of a published card can use to tell which
   # model produced it. Dropping the `_0904` made the stamp name a different arm
   # from the file it actually loads.
-  stamp = "2026-09-06 wac_coast_0904_full debias4fam ctxsd",
+  stamp = "2026-09-07 wac_coast_0904_full2 debias4fam ctxsd strip4fam",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -108,7 +108,13 @@ DEPLOYED <- list(
   # 50% interval covers 48.8%, 90% covers 89.7%, from 62.5% / 96.2%), and
   # $race_shock with the EB-shrunk race table (read only when adjust_race is
   # TRUE). Everything the old file had is unchanged in this one.
-  calibration = "calibration_corpus_wac_coast_0904_full.rds",
+  # 2026-09-07 05:15: _full2 adds the per-race, family-gated race-shock strip
+  # ($race_shock with by_race beta and families = sprint/hurdles/jump/throw,
+  # composed from calibration_race_eb_perevent_persist5.rds). Full-simulation
+  # arm vs the control: medal logloss pooled -0.41% (sprint -1.93%, throw
+  # -0.29%, jump +0.40%, hurdles +0.10%), marks MAE pooled -0.27% (sprint
+  # -0.85%, jump -1.08%, throw -1.12%). Jumps are the watch item.
+  calibration = "calibration_corpus_wac_coast_0904_full2.rds",
 
   # AGING -- the blended curve, adopted 2026-07-29.
   aging = "aging.rds",
@@ -200,7 +206,7 @@ DEPLOYED <- list(
   # from every historical mark; beta by tier of the shocked race (top 0.53,
   # high 0.72, mid 0.86, low 1.02 on the 2026-09-06 fit). Judged by the
   # marks-only arm `backtest_excess_strip.rds` against ctrl_tierfix.
-  adjust_race = FALSE,
+  adjust_race = TRUE,
 
   # RACE CONTEXT for the simulation (built 2026-09-06, NOT YET PROMOTED --
   # flip `enabled` with a calibration that carries $condition_sd_context and
