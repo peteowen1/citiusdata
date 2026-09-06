@@ -138,6 +138,17 @@ if (miss) cli::cli_alert_warning("{miss} medallist{?s} still have no nation.")
 #              and more accurate, but it is NOT a forecast and is never scored.
 pick_newest <- function(pattern) {
   f <- list.files(OUT, pattern = pattern, full.names = TRUE)
+  # FABLE-redteam-2026-09-07 F1: the 2026-09-02 cleanup sweep moved every
+  # timestamped Glasgow snapshot into _archive/ on the belief nothing read them;
+  # this script does, and the export then died here four mornings running and
+  # froze the athlete-ratings page (which is built further down this file).
+  # Fall back to the archive, loudly, rather than abort.
+  if (!length(f)) {
+    f <- list.files(file.path(OUT, "..", "_archive"), pattern = pattern,
+                    full.names = TRUE, recursive = TRUE)
+    if (length(f)) cli::cli_alert_warning(
+      "{.val {pattern}} not in {.path {OUT}}; using archived copy {.file {basename(f[which.max(file.info(f)$mtime)])}}. Restore it to data/ (see FABLE-redteam-2026-09-07 F1).")
+  }
   if (!length(f)) return(NULL)
   f[which.max(file.info(f)$mtime)]
 }

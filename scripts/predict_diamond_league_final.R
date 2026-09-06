@@ -117,6 +117,24 @@ stopifnot(
     max(past$date, na.rm = TRUE) < MEET_START)
 cli::cli_alert_info("History: {format(nrow(past), big.mark = ',')} row{?s}, {min(past$date)} to {max(past$date)}.")
 
+# FABLE-redteam-2026-09-07 F3: the calendar's prediction_cutoff is a PLAN (the
+# day before the meet), not the data boundary. Run on 2026-08-31 from a corpus
+# ending 2026-08-27, the cards were stamped cutoff 2026-09-10 / 2026-09-03 and
+# the site printed "locked from data before <cutoff>", claiming 1-10 September
+# results were used. They were not. The stamped cutoff is now the smaller of the
+# requested cutoff and the last date actually in the history; the requested
+# date and the history boundary are stamped alongside it so the page can say
+# both. CUT itself (the as_of for ability decay and ages) is deliberately left
+# as the meet-relative date -- that is a modelling choice, not a provenance one.
+CUT_REQUESTED <- CUT
+HISTORY_MAX_DATE <- as.Date(max(past$date, na.rm = TRUE))
+CUT_STAMPED <- min(CUT_REQUESTED, HISTORY_MAX_DATE)
+if (CUT_STAMPED < CUT_REQUESTED) {
+  cli::cli_alert_warning(
+    "Requested cutoff {CUT_REQUESTED} is after the last history date {HISTORY_MAX_DATE}; stamping cutoff = {CUT_STAMPED}.")
+}
+stopifnot("stamped cutoff must not be later than the run date" = CUT_STAMPED <= Sys.Date())
+
 ability <- deployed_ability(past, as_of = CUT, calibration = calibration)
 # The store's athlete_id is integer; the resolve script's ids/ages are
 # character (it builds them from championship_results.rds's aid <-
@@ -253,7 +271,10 @@ pred <- merge(pred, info, by = "athlete_id", all.x = TRUE)
 setnames(pred, "country", "nation")
 pred <- merge(pred, as.data.table(citius_events())[, .(event_id, discipline, sex)], by = "event_id", all.x = TRUE)
 pred[, `:=`(
-  generated_at = Sys.time(), cutoff = CUT, meet = MEET, competition_id = COMPETITION_ID,
+  # FABLE-redteam-2026-09-07 F3: cutoff is the data boundary, never a future plan.
+  generated_at = Sys.time(), cutoff = CUT_STAMPED, cutoff_requested = CUT_REQUESTED,
+  history_max_date = HISTORY_MAX_DATE,
+  meet = MEET, competition_id = COMPETITION_ID,
   # THE HONEST STAMP, per meet -- see FIELD above for why these differ between
   # Brussels and Budapest. Birmingham/Glasgow both say "official_entry_list";
   # neither DL-shaped meet can honestly claim that, and they cannot claim the
@@ -271,7 +292,7 @@ arrow::write_parquet(pred, f)
 saveRDS(pred, file.path(D, paste0(MEET, "_pretournament.rds")))
 
 cli::cli_alert_success("{format(nrow(pred), big.mark = ',')} row{?s} across {uniqueN(pred$event_id)} event{?s} -> {basename(f)}")
-cli::cli_alert_info("Config: {DEPLOYED$stamp} | cutoff {CUT} | {N_SIMS} sims.")
+cli::cli_alert_info("Config: {DEPLOYED$stamp} | cutoff {CUT_STAMPED} (requested {CUT_REQUESTED}, history to {HISTORY_MAX_DATE}) | {N_SIMS} sims.")
 
 chk <- pred[, .(gold = round(sum(p_gold, na.rm = TRUE), 3), medal = round(sum(p_medal, na.rm = TRUE), 3), n = .N), by = event_id]
 bad <- chk[abs(gold - 1) > 0.01 | abs(medal - 3) > 0.05]
