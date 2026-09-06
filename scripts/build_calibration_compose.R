@@ -25,7 +25,8 @@ say <- function(...) cat(sprintf(...), "\n", sep = "")
 # fitted on all four seasons, which is what _scaled_all carries.
 SCALES <- Sys.getenv("CITIUS_COMPOSE_SCALES", "calibration_corpus_wac_coast_0904_ctxsd_scaled_all.rds")
 base   <- readRDS(file.path(OUT, SCALES))
-shock  <- readRDS(file.path(OUT, "calibration_race_eb_perevent_persist.rds"))
+SHOCK  <- Sys.getenv("CITIUS_COMPOSE_SHOCK", "calibration_race_eb_perevent_persist5.rds")
+shock  <- readRDS(file.path(OUT, SHOCK))
 stopifnot(inherits(base, "citius_calibration"), inherits(shock, "citius_calibration"),
           !is.null(base$condition_sd_context), !is.null(base$spread_scales),
           !is.null(shock$race_shock), !is.null(shock$race))
@@ -37,7 +38,7 @@ out <- base
 out$race       <- shock$race
 out$race_shock <- shock$race_shock
 out$provenance$composed <- list(
-  race_and_shock_from = "calibration_race_eb_perevent_persist.rds",
+  race_and_shock_from = SHOCK,
   context_and_scales_from = SCALES,
   built = Sys.time())
 saveRDS(out, file.path(OUT, DST))
