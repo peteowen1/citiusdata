@@ -15,6 +15,16 @@
 # sigma_within rather than the registry's cv_prior. No code change, so it is
 # safe to launch while another arm has backtest_athletics.R in flight.
 #
+# THIS IS A RE-TEST. refuted-hypotheses.md records that `sigma_mode = "event"`
+# (arm backtest_flat.rds, pre-2026-08-11) LOST on every probability metric,
+# gold Brier +2.93% p=5.9e-07, and the write-up concluded the per-athlete
+# term is the model pricing consistency. The shoot-out says it does NOT track
+# consistency, so one of those readings is wrong or the term carries something
+# else (upside/peak). What differs from the refuted run: the target is now the
+# measured sigma_within ("target" in SIGMA_PARTS) rather than the registry's
+# cv_prior, and the model underneath is the coasting + WAC calibration. If it
+# loses again, the next move is decouple_peak, not another sigma knob.
+#
 # Compare to backtest_ctrl_tierfix.rds (same code, same config, no arm), NOT
 # to backtest_wac_trt_0904.rds, which predates the tier-weight fix.
 # Marks MAE cannot move (sigma is a spread parameter); this arm is judged on
