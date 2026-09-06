@@ -162,6 +162,7 @@ score_arm <- function(ab, label, races = unique(test$race_key)) {
                            # sd over FINITE draws: a simulated foul is -Inf, which
                            # would NA the whole column and every ratio built on it.
                            pred_sd = apply(p, 2L, function(v) stats::sd(v[is.finite(v)])), sigma = ent$sigma[ix],
+                           sigma_marks = if ("sigma_marks" %in% names(ent)) ent$sigma_marks[ix] else NA_real_,
                            # The terms the simulator adds, so observed residual variance
                            # can be set against each one (see the decomposition below).
                            ability_se = if ("ability_se" %in% names(ent)) ent$ability_se[ix] else NA_real_,
@@ -224,7 +225,7 @@ dec <- pit[, .(n = .N,
                obs_total_var  = var(resid),
                obs_shared_var = var(unique(.SD, by = "race_key")$race_mean_resid),
                obs_indiv_var  = var(indiv_resid),
-               sigma2_t       = mean(sigma^2 * tvar(tail_df)),
+               sigma2_t       = mean(ifelse(is.finite(sigma_marks), sigma_marks, sigma)^2 * tvar(tail_df)),
                se2            = mean(ability_se^2, na.rm = TRUE),
                form2          = mean(form_sd^2),
                cond2          = mean(cond_sd^2),

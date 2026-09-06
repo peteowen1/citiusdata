@@ -28,19 +28,23 @@
 #   CITIUS_SCALES_PSEUDO  pseudo-races for shrinkage toward 1 (default 20)
 suppressMessages(library(data.table))
 OUT  <- here::here("citiusdata", "data")
-ROWS <- Sys.getenv("CITIUS_SCALES_ROWS", "pit_coverage_rows_finals_2023_ctx.csv")
+ROWS <- Sys.getenv("CITIUS_SCALES_ROWS", "pit_coverage_rows_finals_2022_ctx.csv,pit_coverage_rows_finals_2023_ctx.csv,pit_coverage_rows_finals_2025_ctx.csv")
 SRC  <- Sys.getenv("CITIUS_SCALES_SRC", "calibration_corpus_wac_coast_0904_ctxsd.rds")
 DST  <- Sys.getenv("CITIUS_SCALES_OUT", "calibration_corpus_wac_coast_0904_ctxsd_scaled.rds")
 M    <- as.numeric(Sys.getenv("CITIUS_SCALES_PSEUDO", "20"))
 say <- function(...) cat(sprintf(...), "\n", sep = "")
 stopifnot(DST != SRC)
 
-d <- fread(file.path(OUT, ROWS))
+# Several fit-window files may be given, comma-separated, and are pooled.
+d <- rbindlist(lapply(trimws(strsplit(ROWS, ",")[[1]]), function(r) fread(file.path(OUT, r))), fill = TRUE)
 req <- c("family", "race_key", "resid", "race_mean_resid", "indiv_resid", "sigma", "ability_se", "cond_sd", "tail_df", "form_sd")
 stopifnot(all(req %in% names(d)))
 d <- d[is.finite(resid) & is.finite(sigma) & is.finite(cond_sd)]
 d[, n_field := .N, by = race_key]
 tvar <- function(df) ifelse(is.finite(df) & df > 2, df / (df - 2), 1)
+# The mark distribution is drawn from sigma_marks when the ability table carries
+# it (2026-09-06 package change), so that is the term k_indiv must scale.
+if ("sigma_marks" %in% names(d)) d[is.finite(sigma_marks), sigma := sigma_marks]
 d[, sigma2_t := sigma^2 * tvar(tail_df)]
 d[, se2 := ifelse(is.finite(ability_se), ability_se^2, 0)]
 d[, form2 := ifelse(is.finite(form_sd), form_sd^2, 0)]
@@ -56,7 +60,7 @@ sh <- merge(races[, .(n_races = .N, obs_shared_var = var(race_mean_resid), leak 
 sh[, k_shared2_raw := pmax(obs_shared_var - leak, 0) / cond2]
 
 sc <- merge(ind[, .(family, n, k_indiv2_raw)], sh[, .(family, n_races, k_shared2_raw, obs_shared_var, leak, cond2)], by = "family")
-clamp <- function(x) pmin(pmax(x, 0.25), 4)     # on the variance scale: sd factor in [0.5, 2]
+clamp <- function(x) pmin(pmax(x, 0.1), 4)      # on the variance scale: sd factor in [0.32, 2]
 sc[, k_indiv2  := (n_races * clamp(k_indiv2_raw)  + M * 1) / (n_races + M)]
 sc[, k_shared2 := (n_races * clamp(k_shared2_raw) + M * 1) / (n_races + M)]
 sc[, `:=`(k_indiv = sqrt(k_indiv2), k_shared = sqrt(k_shared2))]
