@@ -118,7 +118,8 @@ for (ev in unique(entries$event_id)) {
   ent <- ability[event_id == ev & athlete_id %in% field_ids]
   if (nrow(ent) < 3L) next
   ent <- deployed_field(ent, aging = aging, ages = ages[event_id == ev, .(athlete_id, age_now)])
-  sim <- simulate_event(ent, n_sims = N_SIMS, calibration = calibration, seed = 20260727L)
+  sim <- simulate_event(ent, n_sims = N_SIMS, calibration = calibration, seed = 20260727L,
+                        context = deployed_race_context("final"))
   mp <- medal_probs(sim)
   mp[, event_id := ev]
   res[[length(res) + 1L]] <- mp

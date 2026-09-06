@@ -184,7 +184,25 @@ DEPLOYED <- list(
   family_debias = list(
     file     = "family_pool_offsets.rds",
     families = c("sprint", "hurdles", "jump", "throw")
-  )
+  ),
+
+  # RACE SHOCK, excess strip with fitted persistence (built 2026-09-06, NOT YET
+  # PROMOTED -- flip to TRUE together with a calibration that carries
+  # $race_shock). estimate_ability(adjust_race = TRUE) then strips
+  # (1 - beta) * (race effect - expected effect for that event x tier x round)
+  # from every historical mark; beta by tier of the shocked race (top 0.53,
+  # high 0.72, mid 0.86, low 1.02 on the 2026-09-06 fit). Judged by the
+  # marks-only arm `backtest_excess_strip.rds` against ctrl_tierfix.
+  adjust_race = FALSE,
+
+  # RACE CONTEXT for the simulation (built 2026-09-06, NOT YET PROMOTED --
+  # flip `enabled` with a calibration that carries $condition_sd_context and
+  # $spread_scales). When enabled, every shipping simulate_event() call gets
+  # list(meet_tier, round_class) via deployed_race_context(), so the shared
+  # shock and the mark-distribution spread are the cell's values (a T1 final
+  # shares 0.33-0.96 of the event-wide shock by family) rather than the
+  # corpus-wide ones. Judged by pit_coverage_check.R on 2024 and 2025 finals.
+  race_context = list(enabled = FALSE, meet_tier = "T1_elite")
 )
 
 # --- accessors ---------------------------------------------------------------
@@ -309,6 +327,16 @@ deployed_history <- function(dir, events, from, to) {
 #' `estimate_ability()` takes a single half-life, so the history is split by
 #' family and stacked. Each event belongs to exactly one family, so no
 #' athlete-event is estimated twice.
+#' The race context every shipping simulate_event() call passes, or NULL while
+#' DEPLOYED$race_context$enabled is FALSE (then simulate_event() behaves exactly
+#' as before). `round_class` is "final" for a medal forecast; the live Glasgow
+#' script passes the round it is simulating.
+deployed_race_context <- function(round_class = "final",
+                                  meet_tier = DEPLOYED$race_context$meet_tier) {
+  if (!isTRUE(DEPLOYED$race_context$enabled)) return(NULL)
+  list(meet_tier = meet_tier, round_class = round_class)
+}
+
 deployed_ability <- function(past, as_of, calibration,
                              debias = deployed_debias_offsets()) {
   deployed_debias(.deployed_ability_raw(past, as_of, calibration), debias)
@@ -341,7 +369,8 @@ deployed_ability <- function(past, as_of, calibration,
     fam <- g$family[1]
     hl <- if (!is.na(fam) && fam %in% names(hl_map)) hl_map[[fam]] else DEPLOYED$half_life
     estimate_ability(g[, !"family"], as_of = as_of, half_life = hl,
-                     calibration = calibration)
+                     calibration = calibration,
+                     adjust_race = isTRUE(DEPLOYED$adjust_race))
   }), fill = TRUE)
 }
 

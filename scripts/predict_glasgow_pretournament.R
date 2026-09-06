@@ -73,7 +73,8 @@ sim_event <- function(field, ab, ev, cal, label) {
                                  event = ev, as_of = CUT, size = nrow(f)),
                    error = function(e) NULL)
   if (is.null(proj) || !nrow(proj)) return(NULL)
-  sim <- tryCatch(simulate_event(proj, n_sims = N_SIMS, calibration = cal),
+  sim <- tryCatch(simulate_event(proj, n_sims = N_SIMS, calibration = cal,
+                                 context = deployed_race_context("final")),
                   error = function(e) NULL)
   if (is.null(sim)) return(NULL)
   # simulate_event returns the raw simulation matrices; medal_probs() reduces

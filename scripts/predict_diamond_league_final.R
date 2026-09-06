@@ -153,7 +153,8 @@ sim_event <- function(field_ids, ev) {
   proj <- tryCatch(project_field(ab_ev, event = ev, as_of = CUT, size = nrow(f)),
                    error = function(e) NULL)
   if (is.null(proj) || !nrow(proj)) return(data.table(event_id = ev, skipped = TRUE, n = nrow(ab_ev)))
-  sim <- tryCatch(simulate_event(proj, n_sims = N_SIMS, calibration = calibration, seed = SEED),
+  sim <- tryCatch(simulate_event(proj, n_sims = N_SIMS, calibration = calibration, seed = SEED,
+                                 context = deployed_race_context("final")),
                   error = function(e) NULL)
   if (is.null(sim)) return(data.table(event_id = ev, skipped = TRUE, n = nrow(proj)))
   s <- tryCatch(medal_probs(sim), error = function(e) NULL)
