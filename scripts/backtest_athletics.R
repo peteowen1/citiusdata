@@ -271,6 +271,15 @@ ADJUST_CONTEXT <- !identical(tolower(Sys.getenv("CITIUS_BT_CONTEXT", "on")), "of
 ADJUST_RACE <- nzchar(Sys.getenv("CITIUS_BT_ADJUST_RACE", ""))
 if (ADJUST_RACE) cli::cli_alert_info(
   "Race effect ON: applying {.field calibration$race} at prediction time.")
+# CONTEXT-CONDITIONAL condition_sd (2026-09-06): pass each race's catalogue
+# meet_tier and round class to simulate_event(). Only does anything when the
+# calibration file carries a condition_sd_context table
+# (build_calibration_condsd_context.R). A shared shock cannot move placings,
+# so this arm is judged on marks-distribution calibration (PIT) first; the
+# medal metrics move only through athlete sensitivity.
+COND_CONTEXT <- nzchar(Sys.getenv("CITIUS_BT_COND_CONTEXT", ""))
+if (COND_CONTEXT) cli::cli_alert_info(
+  "Context-conditional condition_sd ON: simulate_event() gets meet_tier x round_class.")
 # Use the catalogue's meet_tier for the context adjustment instead of the feed's
 # per-result `tier`, which varies within a single meet and labels the Diamond
 # League "low". Off by default so it is measured as its own arm.
@@ -671,6 +680,7 @@ arm_fingerprint <- list(
   # must never read back cached meets from an arm run without it.
   sigma_scale = if (is.na(SIGMA_SCALE)) "" else format(SIGMA_SCALE),
   family_debias = FAMILY_DEBIAS,
+  cond_context = COND_CONTEXT,
   # Hash the file this arm ACTUALLY read, not the default name. Hashing the
   # default while reading a scaled variant would let every scale in a sweep
   # share one cache and come back a dead heat -- the exact failure the rest of
@@ -1290,8 +1300,18 @@ run_meet <- function(i) {
         median_mark = perf_to_mark(entrants$ability, .orient)
       )
     } else {
+      .ctx <- NULL
+      if (COND_CONTEXT) {
+        .ctx_tier <- NA_character_
+        if (exists("ctl", inherits = TRUE)) {
+          .ct <- ctl[competition_id == as.character(cid)]
+          if (nrow(.ct)) .ctx_tier <- .ct$meet_tier[1]
+        }
+        .ctx <- list(meet_tier = .ctx_tier, round_class = .round_class(.mode1(field$round)))
+      }
       sim <- tick("sim", simulate_event(entrants, n_sims = N_SIMS,
-                                        calibration = calibration, seed = 11L))
+                                        calibration = calibration, seed = 11L,
+                                        context = .ctx))
       mp <- medal_probs(sim)
     }
     key <- rk
@@ -1393,7 +1413,7 @@ if (N_WORKERS > 1L) {
                     # every earlier parallel arm happened to run with it TRUE.
                     # Same trap again: run_meet()'s `if (MARKS_ONLY)` check
                     # also runs on every worker unconditionally.
-                    "FAMILY_DEBIAS", "MARKS_ONLY",
+                    "FAMILY_DEBIAS", "MARKS_ONLY", "COND_CONTEXT",
                     # run_meet()'s `if (length(TRAIN_TIERS))` check runs on
                     # every worker regardless of the value, so the binding must
                     # exist even when empty -- the same reason FAMILY_DEBIAS is

@@ -15,17 +15,19 @@ $env:CITIUS_PIT_ROUND = "final"
 Remove-Item Env:\CITIUS_SIGMA_PSEUDO_N -ErrorAction SilentlyContinue
 Remove-Item Env:\CITIUS_SIGMA_SCALE -ErrorAction SilentlyContinue
 Remove-Item Env:\CITIUS_PIT_SIGMA_PARTS -ErrorAction SilentlyContinue
-# Third pass (18:05): the aging projection was missing from this harness while
-# the backtest applies it. Deployed path exactly (aging on, debias on), then
-# aging on with debias off, then the recent-window offsets file.
-foreach ($v in @(@("1", "1", "", "_finals_aging1_debias1"),
-                 @("1", "0", "", "_finals_aging1_debias0"),
-                 @("1", "1", "family_pool_offsets_recent.rds", "_finals_aging1_recent"))) {
-  $env:CITIUS_PIT_AGING       = $v[0]
-  $env:CITIUS_PIT_DEBIAS      = $v[1]
-  $env:CITIUS_PIT_DEBIAS_FILE = $v[2]
-  $env:CITIUS_PIT_TAG         = $v[3]
+# Fourth pass (20:40): the context-conditional condition_sd. Same deployed path
+# (aging on, debias on) on the _ctxsd calibration with the context passed, on
+# finals and on heats. The baseline is pit_coverage_log_finals_aging1_debias1.txt
+# (same code path, context off).
+$env:CITIUS_PIT_CAL          = "calibration_corpus_wac_coast_0904_ctxsd.rds"
+$env:CITIUS_PIT_AGING        = "1"
+$env:CITIUS_PIT_DEBIAS       = "1"
+$env:CITIUS_PIT_DEBIAS_FILE  = ""
+$env:CITIUS_PIT_COND_CONTEXT = "1"
+foreach ($v in @(@("final", "_finals_ctx_on"), @("heat", "_heats_ctx_on"))) {
+  $env:CITIUS_PIT_ROUND = $v[0]
+  $env:CITIUS_PIT_TAG   = $v[1]
   & Rscript "citiusdata\scripts\diagnostics\pit_coverage_check.R" 2>&1 |
-    Out-File -Encoding utf8 "C:\dev\citiusverse\citiusdata\pit_coverage_log$($v[3]).txt"
+    Out-File -Encoding utf8 "C:\dev\citiusverse\citiusdata\pit_coverage_log$($v[1]).txt"
 }
 "PIT VARIANTS DONE $(Get-Date)" | Out-File -Encoding utf8 "C:\dev\citiusverse\citiusdata\pit_variants_done.txt"

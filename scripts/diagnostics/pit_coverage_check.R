@@ -55,6 +55,10 @@ DEBIAS_FILE <- Sys.getenv("CITIUS_PIT_DEBIAS_FILE", "")
 # T1 finals +1.3..+1.8% OPTIMISTIC in sprint/jump/throw/hurdles while this
 # harness without aging showed them centred; aging is the candidate.
 AGING  <- Sys.getenv("CITIUS_PIT_AGING", "1") == "1"
+# CONTEXT-CONDITIONAL condition_sd: pass the race's catalogue tier and round
+# class to simulate_event(); only does anything when the calibration named by
+# CITIUS_PIT_CAL carries a condition_sd_context table.
+COND_CTX <- Sys.getenv("CITIUS_PIT_COND_CONTEXT", "0") == "1"
 ROUND  <- Sys.getenv("CITIUS_PIT_ROUND", "final")            # final | heat | all
 ARMS   <- trimws(strsplit(Sys.getenv("CITIUS_PIT_ARMS", "athlete,event"), ",")[[1]])
 TAG    <- Sys.getenv("CITIUS_PIT_TAG", "")                   # suffix for the output files
@@ -98,7 +102,7 @@ if ("meet_tier" %in% names(test)) {
 is_final <- grepl("final", tolower(test$round)) & !grepl("semi|quarter", tolower(test$round))
 is_heat  <- grepl("heat|round 1|qualif|prelim", tolower(test$round))
 test <- switch(ROUND, final = test[is_final], heat = test[is_heat], all = test)
-say("round filter %s | debias %s | aging %s | arms %s", ROUND, DEBIAS, AGING, paste(ARMS, collapse = ","))
+say("round filter %s | debias %s | aging %s | cond context %s | cal %s | arms %s", ROUND, DEBIAS, AGING, COND_CTX, CAL, paste(ARMS, collapse = ","))
 test[, n_field := .N, by = race_key]
 test <- test[n_field >= MIN_FIELD]
 say("hold-out: %s finals with >= %d entrants (%s athlete-rows)",
@@ -143,7 +147,8 @@ score_arm <- function(ab, label, races = unique(test$race_key)) {
     if (nrow(ent) < MIN_FIELD) next
     ages <- if (AGING && "age" %in% names(r)) unique(r[!is.na(age), .(athlete_id, age_now = as.numeric(age))], by = "athlete_id") else NULL
     ent <- deployed_field(ent, aging = aging_curve, ages = ages)   # prior, then aging, as deployed
-    sim <- simulate_event(ent, n_sims = NSIM, calibration = cal, seed = 1L)
+    ctx <- if (COND_CTX) list(meet_tier = r$meet_tier[1], round_class = .round_class(r$round[1])) else NULL
+    sim <- simulate_event(ent, n_sims = NSIM, calibration = cal, seed = 1L, context = ctx)
     p <- if (!is.null(sim$perf_std)) sim$perf_std else sim$perf
     act <- r[match(colnames(p), athlete_id), perf]
     pit <- vapply(seq_len(ncol(p)), function(j) mean(p[, j] <= act[j], na.rm = TRUE), numeric(1))
