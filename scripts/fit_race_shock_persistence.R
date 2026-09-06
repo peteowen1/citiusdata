@@ -137,7 +137,8 @@ by_tier <- p[, {f <- fit(.SD); .(n = .N, beta = round(f$beta, 4), se = round(f$s
 # race in the calibration is stored so the strip can use it directly.
 p[, big := as.numeric(x_ex > 0.02)]
 p[, tier_f := factor(tier_class, levels = c("low", "mid", "high", "top"))]
-m_int <- stats::lm(y ~ x_ex * (tier_f + pb_frac + wind_mean + big) + prev_resid + month_next, data = p)
+p[, family_f := factor(family, levels = c("sprint", "hurdles", "jump", "throw", "middle", "distance", "road", "walk", "combined"))]
+m_int <- stats::lm(y ~ x_ex * (tier_f + family_f + pb_frac + wind_mean + big) + prev_resid + month_next, data = p)
 co <- summary(m_int)$coefficients
 cat("\n=== how beta moves with the race's features (interaction terms with the excess) ===\n")
 print(round(co[grepl("^x_ex", rownames(co)), c("Estimate", "Std. Error")], 4))
@@ -145,10 +146,14 @@ rr_feat <- merge(rr[, .(race_key, event_id, tier_class, excess, c_r)], race_feat
 rr_feat[!is.finite(pb_frac), pb_frac := 0]; rr_feat[!is.finite(wind_mean), wind_mean := 0]
 rr_feat[, big := as.numeric(excess > 0.02)]
 rr_feat[, tier_f := factor(tier_class, levels = c("low", "mid", "high", "top"))]
+rr_feat <- merge(rr_feat, reg, by = "event_id", all.x = TRUE)
+rr_feat[, family_f := factor(family, levels = levels(p$family_f))]
 # beta_r = d y / d excess at this race's features (month and prev_resid drop out)
 beta_of <- function(d) {
   b <- co[, "Estimate"]
-  out <- b["x_ex"] + ifelse(d$tier_f == "mid", b["x_ex:tier_fmid"], 0) +
+  fam_term <- vapply(as.character(d$family_f), function(fm) {
+    nm <- paste0("x_ex:family_f", fm); if (nm %in% names(b)) unname(b[nm]) else 0 }, numeric(1))
+  out <- b["x_ex"] + fam_term + ifelse(d$tier_f == "mid", b["x_ex:tier_fmid"], 0) +
     ifelse(d$tier_f == "high", b["x_ex:tier_fhigh"], 0) + ifelse(d$tier_f == "top", b["x_ex:tier_ftop"], 0) +
     b["x_ex:pb_frac"] * d$pb_frac + b["x_ex:wind_mean"] * d$wind_mean + b["x_ex:big"] * d$big
   unname(out)
