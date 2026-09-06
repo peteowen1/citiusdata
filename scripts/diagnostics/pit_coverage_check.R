@@ -49,6 +49,13 @@ DEBIAS <- Sys.getenv("CITIUS_PIT_DEBIAS", "1") == "1"      # apply DEPLOYED$fami
 ROUND  <- Sys.getenv("CITIUS_PIT_ROUND", "final")            # final | heat | all
 ARMS   <- trimws(strsplit(Sys.getenv("CITIUS_PIT_ARMS", "athlete,event"), ",")[[1]])
 TAG    <- Sys.getenv("CITIUS_PIT_TAG", "")                   # suffix for the output files
+# AS-OF REFIT. The first runs fitted ability once at FROM and scored six months
+# of races against it. That reads in-season progression as model pessimism: the
+# heats variant put 35% of PITs in the top two deciles, which the as-of backtest
+# never shows. "monthly" refits ability at the start of each calendar month and
+# scores that month's races against it, so staleness is bounded at ~30 days --
+# the same as-of discipline backtest_athletics.R applies per meet, at 1/30 the cost.
+REFIT  <- Sys.getenv("CITIUS_PIT_REFIT", "monthly")           # once | monthly
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), sprintf(...), "\n", sep = "")
 
 cal <- readRDS(file.path(OUT, CAL))
@@ -84,32 +91,32 @@ say("hold-out: %s finals with >= %d entrants (%s athlete-rows)",
     format(uniqueN(test$race_key), big.mark = ","), MIN_FIELD, format(nrow(test), big.mark = ","))
 stopifnot(uniqueN(test$race_key) >= 50)
 
-fit <- function(mode) {
+fit <- function(mode, as_of = FROM) {
   parts <- if (mode == "event") c("estimator", "weight", "target") else c("estimator", "weight")
-  ab <- deployed_ability_with(train, mode, parts)
+  ab <- deployed_ability_with(x[date < as_of], mode, parts, as_of = as_of)
   ab[, athlete_id := as.character(athlete_id)]
   ab
 }
 # Same half-life-by-family stacking as deployed_ability(), with the sigma knobs
 # exposed. Debias is applied too (it is deployed), though it cannot move a PIT
 # by more than the level it corrects.
-deployed_ability_with <- function(past, mode, parts) {
+deployed_ability_with <- function(past, mode, parts, as_of = FROM) {
   reg_f <- as.data.table(citius_events()[, c("event_id", "family")])
   pf <- merge(as.data.table(past), reg_f, by = "event_id", all.x = TRUE)
   pf[is.na(family), family := ""]
   ab <- rbindlist(lapply(split(pf, pf$family), function(g) {
     fam <- g$family[1]
     hl <- if (fam %in% names(DEPLOYED$hl_family)) DEPLOYED$hl_family[[fam]] else DEPLOYED$half_life
-    estimate_ability(g[, !"family"], as_of = FROM, half_life = hl, calibration = cal,
+    estimate_ability(g[, !"family"], as_of = as_of, half_life = hl, calibration = cal,
                      sigma_parts = parts, sigma_mode = mode)
   }), fill = TRUE)
   if (DEBIAS) deployed_debias(ab) else ab
 }
 
 reg <- as.data.table(citius_events())[, .(event_id, family, orientation)]
-score_arm <- function(ab, label) {
-  res <- vector("list", uniqueN(test$race_key)); k <- 0L
-  for (rk in unique(test$race_key)) {
+score_arm <- function(ab, label, races = unique(test$race_key)) {
+  res <- vector("list", length(races)); k <- 0L
+  for (rk in races) {
     r <- test[race_key == rk]
     ev <- r$event_id[1]
     ent <- ab[event_id == ev & athlete_id %in% r$athlete_id]
@@ -128,10 +135,15 @@ score_arm <- function(ab, label) {
   rbindlist(res)
 }
 
+test[, month := as.Date(format(date, "%Y-%m-01"))]
+cuts <- if (REFIT == "monthly") sort(unique(test$month)) else FROM
+say("as-of refit: %s (%d fit date%s)", REFIT, length(cuts), if (length(cuts) == 1) "" else "s")
 pit <- rbindlist(lapply(ARMS, function(a) {
-  say("fitting arm: %s", a); ab <- fit(a)
-  say("scoring %d races at %d sims", uniqueN(test$race_key), NSIM)
-  score_arm(ab, a)
+  rbindlist(lapply(cuts, function(cut) {
+    races <- if (REFIT == "monthly") unique(test[month == cut]$race_key) else unique(test$race_key)
+    say("arm %s | as of %s | %d races", a, format(cut), length(races))
+    score_arm(fit(a, as_of = cut), a, races)
+  }))
 }))
 pit <- merge(pit, reg, by = "event_id")
 say("%s PITs scored per arm", format(nrow(pit[arm == "athlete"]), big.mark = ","))
@@ -161,4 +173,4 @@ cat("actual much WORSE than predicted, above95 = actual much BETTER than predict
 
 fwrite(pit, file.path(OUT, paste0("pit_coverage_rows", TAG, ".csv")))
 fwrite(byf, file.path(OUT, paste0("pit_coverage_by_family", TAG, ".csv")))
-say("wrote pit_coverage_rows.csv, pit_coverage_by_family.csv")
+say("wrote pit_coverage_rows%s.csv, pit_coverage_by_family%s.csv (refit %s, round %s, debias %s)", TAG, TAG, REFIT, ROUND, DEBIAS)

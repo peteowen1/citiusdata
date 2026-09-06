@@ -6,7 +6,11 @@
 $ErrorActionPreference = "Continue"
 Set-Location "C:\dev\citiusverse"
 $env:CITIUS_PIT_ARMS = "athlete"
-foreach ($v in @(@("final", "0", "_finals_debias0"), @("heat", "1", "_heats_debias1"), @("all", "1", "_all_debias1"))) {
+# Second pass (16:20): the once-only fit at FROM read six months of in-season
+# progression as pessimism. CITIUS_PIT_REFIT=monthly (now the script default)
+# refits at each month start. Tags carry _monthly so the first pass stays readable.
+$env:CITIUS_PIT_REFIT = "monthly"
+foreach ($v in @(@("final", "1", "_finals_debias1_monthly"), @("final", "0", "_finals_debias0_monthly"), @("heat", "1", "_heats_debias1_monthly"))) {
   $env:CITIUS_PIT_ROUND  = $v[0]
   $env:CITIUS_PIT_DEBIAS = $v[1]
   $env:CITIUS_PIT_TAG    = $v[2]
