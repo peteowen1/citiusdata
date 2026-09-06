@@ -59,7 +59,8 @@ d <- merge(as.data.table(b$predictions)[, .(race_id, athlete_id = as.character(a
 ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 ch[, athlete_id := as.character(athlete_id)]
 act <- ch[!is.na(mark) & !is.na(race_key) & !is.na(place) & place > 0,
-          .(race_id = race_key, athlete_id, actual = mark, event_id, date)]
+          .(race_id = race_key, athlete_id, actual = mark, event_id, date,
+            round = if ("round" %in% names(ch)) round else NA_character_)]
 act <- unique(act, by = c("race_id", "athlete_id"))
 d <- merge(d, act, by = c("race_id", "athlete_id"))
 reg <- as.data.table(citius_events())[, .(event_id, orientation, sex, family)]
@@ -67,6 +68,24 @@ d <- merge(d, reg, by = "event_id")
 
 d[, `:=`(act_perf = orientation * log(actual), a_perf = orientation * log(a_mark))]
 d <- d[!is.na(act_perf) & !is.na(a_perf) & date >= HOLDOUT_LO & date < FIT_HOLDOUT]
+# ROUND FILTER (2026-09-07). The offsets are fitted with rounds pooled, and PIT
+# coverage on T1 finals says the resulting correction OVERSHOOTS there: finals
+# come out 1.2-1.7% pessimistic in jumps and throws while the pooled bias is
+# right. If the level bias differs by round -- heats are coasted, finals are
+# not -- then one number per family cannot centre both. CITIUS_FAMILY_POOL_ROUNDS
+# = all (default, unchanged) | final | nonfinal fits on that slice only.
+ROUNDS <- Sys.getenv("CITIUS_FAMILY_POOL_ROUNDS", "all")
+if (!ROUNDS %in% c("all", "final", "nonfinal")) {
+  stop("CITIUS_FAMILY_POOL_ROUNDS must be all, final or nonfinal; got ", ROUNDS)
+}
+if (ROUNDS != "all") {
+  d[, .rcl := citius:::.round_class(round)]
+  n_before <- nrow(d)
+  d <- if (ROUNDS == "final") d[.rcl == "final"] else d[.rcl != "final"]
+  say("round filter %s: %s of %s rows kept", ROUNDS,
+      format(nrow(d), big.mark = ","), format(n_before, big.mark = ","))
+  stopifnot("round filter kept nothing" = nrow(d) > 1000)
+}
 d[, em := 100 * (a_perf - act_perf)]
 d[, fs := paste(family, sex, sep = "|")]
 say("fit population: %s rows, %s races", format(nrow(d), big.mark=","), format(uniqueN(d$race_id), big.mark=","))
