@@ -107,6 +107,27 @@ jobs:
         # ordinary run dies on script one with "there is no package called
         # 'pdftools'", before anything else is exercised.
 
+      # wrangler is how export_athletics_blog.R uploads to R2, and it calls it
+      # through system2(), which fails with R's generic "error in running
+      # command" when the executable is simply not on PATH. That is what the
+      # first live-publish run died on (34117033667): every step passed, all
+      # four artefacts were written, and the chain fell over on the upload with
+      # a message that says nothing about wrangler.
+      #
+      # Pinned to v4 because the `--remote` flag the upload uses is required
+      # there and absent earlier.
+      - name: Setup Node for wrangler
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install wrangler
+        run: |
+          npm install -g wrangler@4
+          # Prove it is callable HERE rather than 8 minutes later inside R,
+          # where the error does not name it.
+          wrangler --version
+
       - name: Download the deployed inputs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
