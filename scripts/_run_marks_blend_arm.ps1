@@ -36,12 +36,28 @@ $env:CITIUS_BT_STORE         = "athletics_corpus_store"
 $env:CITIUS_BT_TIER          = "T1_elite"
 $env:CITIUS_BT_MEET_TIER     = "1"
 $env:CITIUS_BT_MEETS         = "450"
-$env:CITIUS_BT_WORKERS       = "2"
+# ONE worker, not two. The 2-worker run of this arm was OOM-killed at 16:30 on
+# 2026-09-07 with ~1 of 394 meets cached after an hour: each worker holds its
+# own copy of the narrowed history, and 3.1 GB free at fork time is not enough
+# for a second. Serial is roughly twice the wall clock and finishes, which beats
+# half the speed of nothing. Raise it again only after checking
+# `Get-Counter '\Memory\Available MBytes'` -- FreePhysicalMemory reads high
+# while the machine is already thrashing.
+$env:CITIUS_BT_WORKERS       = "1"
 $env:CITIUS_HALF_LIFE_FAMILY = "road=1095,walk=730,hurdles=180"
 foreach ($v in "CITIUS_BT_FAMILY_DEBIAS", "CITIUS_BT_SHOCK_ADDBACK", "CITIUS_BT_TRAIN_TIERS",
                "CITIUS_BT_SIGMA_MODE", "CITIUS_BT_SIGMA_PARTS", "CITIUS_SIGMA_PSEUDO_N",
                "CITIUS_SIGMA_SCALE", "CITIUS_BT_COND_CONTEXT") {
   Remove-Item "Env:\$v" -ErrorAction SilentlyContinue
+}
+
+# Do not even start if the machine cannot hold the run. An arm that dies at
+# meet 240 costs an hour and leaves a half-built cache; a refusal costs nothing.
+$availMB = (Get-Counter '\Memory\Available MBytes').CounterSamples.CookedValue
+"available memory at start: $availMB MB" | Out-File -Append -Encoding utf8 $LOG
+if ($availMB -lt 5000) {
+  "!!! only $availMB MB available, need ~5000. NOT STARTING." | Out-File -Append -Encoding utf8 $LOG
+  exit 1
 }
 
 foreach ($arm in @(@{name="blend0"; blend="0"}, @{name="blend6"; blend="0.6"})) {
