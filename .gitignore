@@ -45,3 +45,4 @@ _archive/
 *_log*.txt
 *_log*.err
 *_speed.txt
+*.log
