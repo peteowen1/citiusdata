@@ -65,14 +65,30 @@ bm <- merge(k[, .(pid, athlete_id, event_id, month)], bm, by = "pid")
 
 # `last_n` keeps only an athlete's N most recent marks, the way last-5 does.
 # NA means use them all, decayed, which is what the model does.
+#
+# `rank_hl` is the SMOOTH version of `last_n`. A cap is a cliff -- result 20
+# counts fully, result 21 counts zero -- and Pete's objection to it is fair.
+# The mechanism a cap is groping at is that form is indexed by RACES RUN, not by
+# days elapsed: an athlete who races 30 times a year and one who races 5 times
+# are not equally different from their year-ago selves, and a calendar decay
+# treats them identically. So decay in race-count space as well, multiplicatively
+# with the calendar decay: an extra factor of 0.5^(k / rank_hl) where k is 0 for
+# the most recent mark, 1 for the one before, and so on.
+#
+# This is one parameter, like the cap, but continuous, and it degrades gracefully
+# for an athlete with a thin history instead of doing nothing until they cross a
+# threshold. If it matches or beats the cap, ship this and the hackiness is gone.
 predict_at <- function(hl = DEPLOYED$half_life, trim = 0.25, shrink = 1, adj = 1,
-                       last_n = NA_integer_, decay = TRUE) {
-  p <- pairs
-  if (!is.na(last_n)) {
-    setorder(p, pid, age_days)
-    p <- p[p[, .I[seq_len(min(.N, last_n))], by = pid]$V1]
-  }
+                       last_n = NA_integer_, decay = TRUE, rank_hl = NA_real_) {
+  # Order ONCE, up front, and derive everything from the ordered table. Sorting
+  # after `w` is computed silently misaligns the two -- no error, just wrong
+  # numbers -- which is the whole failure mode this lab exists to avoid.
+  p <- data.table::copy(pairs)
+  setorder(p, pid, age_days)
+  p[, .k := seq_len(.N) - 1L, by = pid]          # 0 = most recent
+  if (!is.na(last_n)) p <- p[.k < last_n]
   w <- if (decay) p$w_static * 0.5^(p$age_days / hl) else rep(1, nrow(p))
+  if (!is.na(rank_hl)) w <- w * 0.5^(p$.k / rank_hl)
   p_use <- p$perf_raw + adj * (p$perf - p$perf_raw)
   keep <- if (trim <= 0) rep(TRUE, nrow(p)) else
     !(p$tactical & !is.na(p$rk) & p$rk <= floor(p$grp_n * trim))
@@ -191,4 +207,46 @@ if (best$variant %in% c("last 3", "last 30")) {
       "wrong and this number is not an optimum. Widen it before believing it.\n", sep = "")
 }
 fwrite(sw, file.path(OUT, "marks_window_sweep.csv"))
-say("wrote marks_why_last5.csv and marks_window_sweep.csv")
+
+# --- THE SMOOTH VERSION, and whether the cap is needed at all ----------------
+cat("\n=== race-count decay: the cap without the cliff ===\n")
+rk <- rbindlist(lapply(c(3, 5, 8, 12, 20, 30, 50, 80), function(r)
+  score(sprintf("rank half-life %d", r), "", rank_hl = r)))
+print(rk[, .(variant, beat_fair, of, mae, vs_fair, excess_bias)])
+bestr <- rk[which.min(mae)]
+cat(sprintf("\nbest smooth: %s -> %d of %d, MAE %.4f (%+.2f%%)\n",
+            bestr$variant, bestr$beat_fair, bestr$of, bestr$mae, bestr$vs_fair))
+cat(sprintf("best cap:    %s -> %d of %d, MAE %.4f (%+.2f%%)\n",
+            best$variant, best$beat_fair, best$of, best$mae, best$vs_fair))
+cat(if (bestr$mae <= best$mae)
+  "=> the SMOOTH version is at least as good. Ship that: same one parameter, no\n   cliff, and it degrades gracefully for an athlete with a thin history.\n"
+  else
+  "=> the cap still wins on MAE. Either the cliff is doing something real, or\n   the rank grid is wrong -- check whether the best value sits at an edge.\n")
+if (bestr$variant %in% c("rank half-life 3", "rank half-life 80"))
+  cat("WARNING: best rank half-life is at the edge of the grid; widen it.\n")
+
+# Does the cap add anything ON TOP of the smooth decay? If not, drop the cap.
+cat("\n=== both together, to see whether the cap adds anything ===\n")
+rhl <- as.numeric(sub("\\D+", "", bestr$variant))
+print(rbindlist(lapply(c(NA, 20, 30), function(n)
+  score(if (is.na(n)) sprintf("rank %g, no cap", rhl) else sprintf("rank %g + cap %d", rhl, n),
+        "", rank_hl = rhl, last_n = if (is.na(n)) NA_integer_ else as.integer(n))
+))[, .(variant, beat_fair, of, mae, vs_fair, excess_bias)])
+fwrite(rk, file.path(OUT, "marks_rank_decay_sweep.csv"))
+
+# --- does the CALENDAR half-life still want to be 365 once races decay too? ---
+# The two decays overlap: an athlete who races often accumulates both calendar
+# age and rank at once. Adding one without re-checking the other is how a
+# parameter ends up carrying a job it was never fitted for, so this sweeps the
+# calendar half-life at the chosen rank half-life and again with it off.
+cat("\n=== calendar half-life, with and without race-count decay ===\n")
+hl_grid <- c(180, 270, 365, 540, 730, 1095)
+joint <- rbindlist(c(
+  lapply(hl_grid, function(h) score(sprintf("hl %d, no rank decay", h), "", hl = h)),
+  lapply(hl_grid, function(h) score(sprintf("hl %d, rank %g", h, rhl), "", hl = h, rank_hl = rhl))))
+print(joint[, .(variant, beat_fair, of, mae, vs_fair, excess_bias)])
+cat(sprintf("\nbest overall: %s -> %d of %d, MAE %.4f (%+.2f%%)\n",
+            joint[which.min(mae)]$variant, joint[which.min(mae)]$beat_fair,
+            joint[which.min(mae)]$of, joint[which.min(mae)]$mae, joint[which.min(mae)]$vs_fair))
+fwrite(joint, file.path(OUT, "marks_joint_decay.csv"))
+say("wrote marks_why_last5.csv, marks_window_sweep.csv, marks_rank_decay_sweep.csv, marks_joint_decay.csv")
