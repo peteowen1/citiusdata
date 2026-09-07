@@ -39,3 +39,9 @@ _archive/
 # run, and no log file has ever been tracked here — written down so that stays
 # a decision rather than an accident.
 *_log.txt
+
+# Diagnostic run logs written next to the scripts. Regenerable, and they
+# accumulate one per arm.
+*_log*.txt
+*_log*.err
+*_speed.txt

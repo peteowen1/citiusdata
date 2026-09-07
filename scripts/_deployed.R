@@ -26,7 +26,7 @@ DEPLOYED <- list(
   # stamp is the only thing a reader of a published card can use to tell which
   # model produced it. Dropping the `_0904` made the stamp name a different arm
   # from the file it actually loads.
-  stamp = "2026-09-07 wac_coast_0904_full2 ctxsd strip4fam (debias OFF)",
+  stamp = "2026-09-07 wac_coast_0904_full2 ctxsd strip4fam blend0.6 (debias OFF)",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -214,6 +214,28 @@ DEPLOYED <- list(
   # CURRENT model, judged on the standard apparatus with the strip on.
   family_debias = NULL,
 
+  # ---------------------------------------------------------------------------
+  # LIVE LEVERS THAT MOVE THE LEVEL OF PREDICTIONS. Keep this list current.
+  #
+  # It exists because on 2026-09-07 the family debias and the race-shock excess
+  # strip were promoted eight hours apart, each validated against a control
+  # lacking the other, and together they removed the same optimism twice --
+  # marks 16-28% worse per family. No fingerprint could catch it, because both
+  # arms were internally valid. Before promoting anything that shifts the level
+  # of a prediction, read this list and ask what else already shifts the same
+  # quantity for the same population.
+  #
+  #   adjust_race       ON   strips non-persistent race shock from history;
+  #                          lowers ability in sprint/hurdles/jump/throw
+  #   family_debias     OFF  refuted on top of the strip, see below
+  #   marks_blend       ON   MARKS ONLY -- pulls the predicted mark toward
+  #                          recent raw form. Cannot touch a ranking or a medal
+  #                          probability, asserted in test-marks-blend.R, so it
+  #                          does not interact with the two above for placings.
+  #                          It DOES compose with them on marks.
+  #   race_context      ON   changes spread, not centre
+  # ---------------------------------------------------------------------------
+
   # RACE SHOCK, excess strip with fitted persistence (built 2026-09-06, NOT YET
   # PROMOTED -- flip to TRUE together with a calibration that carries
   # $race_shock). estimate_ability(adjust_race = TRUE) then strips
@@ -230,8 +252,25 @@ DEPLOYED <- list(
   # shock and the mark-distribution spread are the cell's values (a T1 final
   # shares 0.33-0.96 of the event-wide shock by family) rather than the
   # corpus-wide ones. Judged by pit_coverage_check.R on 2024 and 2025 finals.
-  race_context = list(enabled = TRUE, meet_tier = "T1_elite")
+  race_context = list(enabled = TRUE, meet_tier = "T1_elite"),
+
+  # MARKS RECENCY BLEND (promoted 2026-09-07). estimate_ability() emits
+  # `recent_mean`, the mean of the athlete's last five RAW marks;
+  # simulate_event() centres the MARK distribution on
+  # (1 - b) * ability + b * recent_mean. The ranking keeps plain `ability`.
+  #
+  # The blend is applied at simulation time rather than stored, so it tracks
+  # whatever the backtest's aging and momentum steps do to `ability` first.
+  #
+  # Held out on 2024+, 35 events: events beating a last-5 baseline 10 -> 30,
+  # pooled mark error +1.7% -> -3.1% against that baseline. Both 100m flip.
+  # docs/reviews/marks-blend-2026-09-07.md.
+  #
+  # Set through the package's own env var so a backtest arm can vary it without
+  # a second source of truth for the number.
+  marks_blend = 0.6
 )
+Sys.setenv(CITIUS_MARKS_BLEND = as.character(DEPLOYED$marks_blend))
 
 # --- accessors ---------------------------------------------------------------
 

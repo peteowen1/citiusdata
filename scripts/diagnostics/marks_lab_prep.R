@@ -76,7 +76,17 @@ reg <- as.data.table(citius_events())[, .(event_id, orientation, family)]
 need_adj  <- !file.exists(file.path(CACHE, "adj.rds"))
 need_base <- !file.exists(file.path(CACHE, "base.rds"))
 months <- sort(unique(test$month))
-need_sig <- months[!file.exists(file.path(CACHE, "sigma", paste0(format(months), ".rds")))]
+# THE ONLY SLOW INGREDIENT is one real estimate_ability() run per as-of date,
+# used for the per-athlete spread. Everything else in the lab is vectorised
+# arithmetic. The spread moves slowly, so it can be sampled every N months and
+# carried forward; marks_pairs.R's gate measures exactly what that costs, so
+# this is a trade with a number on it rather than an assumption.
+EVERY <- as.integer(Sys.getenv("CITIUS_LAB_SIGMA_EVERY", "1"))
+sig_months <- months[seq(1, length(months), by = max(EVERY, 1L))]
+if (!months[length(months)] %in% sig_months) sig_months <- c(sig_months, months[length(months)])
+say("spread reference every %d month(s): %d runs for %d months of test data",
+    EVERY, length(sig_months), length(months))
+need_sig <- sig_months[!file.exists(file.path(CACHE, "sigma", paste0(format(sig_months), ".rds")))]
 if (need_adj || need_base || length(need_sig)) {
   store <- file.path(OUT, "athletics_corpus_store")
   cols <- intersect(c("athlete_id","event_id","date","perf","age","round","tier","meet_tier",
@@ -128,12 +138,15 @@ if (need_adj || need_base || length(need_sig)) {
     past <- h[date < cut]
     pf <- merge(past, reg[, .(event_id, family)], by = "event_id", all.x = TRUE)
     pf[is.na(family), family := ""]
+    # Every athlete tested in any month this reference covers, not just this
+    # month's -- otherwise a carried-forward reference has holes.
+    covered <- months[months >= cut & months < cut + 31L * max(EVERY, 1L)]
+    want <- unique(test[month %in% covered]$athlete_id)
     ab <- rbindlist(lapply(split(pf, pf$family), function(g) {
       fam <- g$family[1]
       hl <- if (fam %in% names(DEPLOYED$hl_family)) DEPLOYED$hl_family[[fam]] else DEPLOYED$half_life
       estimate_ability(g[, !"family"], as_of = cut, half_life = hl, calibration = cal,
-                       adjust_race = isTRUE(DEPLOYED$adjust_race),
-                       only = unique(test[month == cut]$athlete_id))
+                       adjust_race = isTRUE(DEPLOYED$adjust_race), only = want)
     }), fill = TRUE)
     saveRDS(ab[, .(athlete_id = as.character(athlete_id), event_id, sigma,
                    ref_ability = ability, ref_shrinkage = shrinkage, ref_w = w_total)],

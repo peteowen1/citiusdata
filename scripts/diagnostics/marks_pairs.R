@@ -39,8 +39,24 @@ cal  <- readRDS(file.path(OUT, DEPLOYED$calibration))
 test <- readRDS(file.path(CACHE, "test.rds"))
 adj  <- readRDS(file.path(CACHE, "adj.rds"))
 months <- sort(unique(test$month))
+# Carry a sampled spread reference forward to the months it covers. With
+# CITIUS_LAB_SIGMA_EVERY = 1 this is exactly one file per month and nothing is
+# carried; at 3 or 12 the gate below prices the approximation.
+have <- as.Date(sub("[.]rds$", "", list.files(file.path(CACHE, "sigma"))))
+stopifnot("no spread reference cached" = length(have) > 0)
+# SCORE ONLY MONTHS WITH THEIR OWN REFERENCE. Carrying the spread forward is
+# harmless -- it moves slowly -- but the reference ABILITY is the anchor the
+# population mean is recovered from, and recovering it from a different as-of
+# date than the one the pair table is built at makes prior_mu wrong. Measured
+# 2026-09-07: carrying up to 92 days broke the gate (mean +0.014%, sd 0.227%,
+# max 24.4%). Restricting to reference months costs half the months and makes
+# every scored row exact, which is the right side of that trade.
+months <- months[months %in% have]
+test <- test[month %in% months]
 sig <- rbindlist(lapply(months, function(m)
   readRDS(file.path(CACHE, "sigma", paste0(format(m), ".rds")))[, month := m][]), fill = TRUE)
+say("scoring the %d months with their own reference run (of %d in the window)",
+    length(months), length(unique(readRDS(file.path(CACHE, "test.rds"))$month)))
 # THE TACTICAL FLAG IS A CALIBRATION OUTPUT, NOT THE REGISTRY'S (found
 # 2026-09-07 while chasing a failed gate). estimate_ability() takes the
 # registry flag and then OVERRIDES it wherever the calibration has a fitted
@@ -120,6 +136,7 @@ say("population terms recovered for %s of %s predictions", format(nrow(ok), big.
 # irrelevant: ability is ability_raw. Keep them with prior_mu = ability_raw.
 k[!is.finite(prior_mu) | ref_shrinkage <= 1e-6, `:=`(prior_mu = ability_raw, kappa = 0)]
 k[!is.finite(sigma_between) | sigma_between <= 0, sigma_between := sigma]
+saveRDS(test, file.path(CACHE, "test_scored.rds"))
 saveRDS(pairs, file.path(CACHE, "pairs.rds"))
 saveRDS(k[, .(pid, athlete_id, event_id, month, sigma, sigma_between, prior_mu,
               ref_ability, ref_shrinkage, ref_w)], file.path(CACHE, "keys.rds"))

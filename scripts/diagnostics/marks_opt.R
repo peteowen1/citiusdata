@@ -21,10 +21,12 @@ WHAT  <- Sys.getenv("CITIUS_OPT_WHAT", "both")
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), sprintf(...), "\n", sep = "")
 pairs <- readRDS(file.path(CACHE, "pairs.rds"))
 k     <- readRDS(file.path(CACHE, "keys.rds"))
-test  <- readRDS(file.path(CACHE, "test.rds"))
+# the months actually scored (those with their own reference run)
+test  <- readRDS(file.path(CACHE, if (file.exists(file.path(CACHE, "test_scored.rds"))) "test_scored.rds" else "test.rds"))
 b5    <- readRDS(file.path(CACHE, "base.rds"))
 say("pairs %s rows | %s predictions", format(nrow(pairs), big.mark = ","), format(nrow(k), big.mark = ","))
 
+reg_fam <- as.data.table(citius_events())[, .(event_id, family)]
 hl_of <- function(fam, hl_global, hl_map) {
   v <- rep(hl_global, length(fam))
   if (length(hl_map)) { hv <- unlist(hl_map); i <- match(fam, names(hv)); v[!is.na(i)] <- hv[i[!is.na(i)]] }
@@ -35,16 +37,28 @@ trim_keep <- function(d, frac) if (frac <= 0) rep(TRUE, nrow(d)) else
 # adj_scale: how much of the context adjustment to apply (1 = deployed, 0 = use
 #   the raw marks). shrink: multiplier on the shrinkage pseudo-count (1 =
 #   deployed, 0 = no shrinkage toward the field at all).
+# adj_scale may be a single number or a named per-family vector.
+# blend: the MARK is predicted as (1 - b) * ability + b * (the athlete's recent
+#   form), leaving the ranking untouched -- the same split as sigma_marks. b may
+#   also be a named per-family vector. Recent form here is the same last-5 mean
+#   the baseline uses, computed from the athlete's own prior marks.
 sc <- function(hl_global = DEPLOYED$half_life, hl_map = DEPLOYED$hl_family,
-               trim = 0.25, debias = TRUE, adj_scale = 1, shrink = 1) {
+               trim = 0.25, debias = TRUE, adj_scale = 1, shrink = 1, blend = 0) {
+  as_vec <- function(x) if (length(x) == 1 && is.null(names(x))) rep(as.numeric(x), nrow(pairs)) else {
+    v <- rep(1, nrow(pairs)); i <- match(pairs$family, names(x)); v[!is.na(i)] <- x[i[!is.na(i)]]; v }
+  sc_row <- as_vec(adj_scale)
   pairs[, w := w_static * 0.5^(age_days / hl_of(family, hl_global, hl_map))]
-  pairs[, p_use := if (adj_scale == 1) perf else perf_raw + adj_scale * (perf - perf_raw)]
+  pairs[, p_use := perf_raw + sc_row * (perf - perf_raw)]
   r <- pairs[trim_keep(pairs, trim), .(ability_raw = sum(w * p_use) / sum(w), w_total = sum(w)), by = pid]
   m <- merge(k[, .(pid, athlete_id, event_id, month, sigma, sigma_between, prior_mu)], r, by = "pid")
   m[, kap := shrink * (sigma^2 / sigma_between^2)]
   m[, shrinkage := kap / (w_total + kap)]
   m[, ability := (1 - shrinkage) * ability_raw + shrinkage * prior_mu]
   if (debias) m <- deployed_debias(m)
+  # The blend is applied in ev_of(), where the RACE DATE is available. Joining
+  # the baseline here on `month` silently matched nothing (predictions are keyed
+  # by month start, the baseline by race date), so every blend was a no-op that
+  # looked like "the lever does not matter".
   m[, .(athlete_id, event_id, month, pred = ability)]
 }
 
@@ -57,9 +71,15 @@ say("gate: mean %+.4f%%, sd %.4f%%, max %.4f%% on %s predictions",
 if (abs(mean(e)) > 0.001 || max(abs(e)) > 0.01) stop("gate failed - the cache no longer matches the model")
 
 # --- scoring -----------------------------------------------------------------
-ev_of <- function(p, label) {
+ev_of <- function(p, label, blend = 0) {
   d <- merge(merge(test, p, by = c("athlete_id", "event_id", "month")),
              b5, by = c("athlete_id", "event_id", "date"))
+  if (!identical(blend, 0)) {
+    bl <- if (length(blend) == 1 && is.null(names(blend))) rep(as.numeric(blend), nrow(d)) else
+      { v <- rep(0, nrow(d)); i <- match(d$family, names(blend)); v[!is.na(i)] <- blend[i[!is.na(i)]]; v }
+    stopifnot("blend needs a finite baseline on every row" = all(is.finite(d$base)))
+    d[, pred := (1 - bl) * pred + bl * base]
+  }
   d[, `:=`(ae_m = 100 * abs(pred - act), ae_b = 100 * abs(base - act))]
   ev <- d[, .(races = uniqueN(race_key), n = .N, m = mean(ae_m), b = mean(ae_b),
               se = sd(ae_m - ae_b) / sqrt(.N)), by = .(event_id, family)][races >= 10]
@@ -95,6 +115,94 @@ if (WHAT %in% c("halflife", "both")) {
       }
     }
   }
+}
+if (WHAT %in% c("blendval")) {
+  # OUT OF SAMPLE. Pick the blend per family on the EARLY years, score it on the
+  # LATE ones. A single parameter per family over ~19k predictions is a mild fit,
+  # but "beat last-5" is partly self-referential once you blend toward last-5, so
+  # the weight must not be chosen on the data it is judged on.
+  CUT <- as.Date(Sys.getenv("CITIUS_OPT_SPLIT", "2024-01-01"))
+  p0 <- sc()
+  grid <- c(0, 0.15, 0.3, 0.4, 0.5, 0.6, 0.7, 0.85)
+  d0 <- merge(merge(test, p0, by = c("athlete_id", "event_id", "month")),
+              b5, by = c("athlete_id", "event_id", "date"))
+  d0[, ae_b := 100 * abs(base - act)]
+  fitset <- d0[date < CUT]; testset <- d0[date >= CUT]
+  say("fit %s rows (< %s) | test %s rows (>= %s)", format(nrow(fitset), big.mark = ","),
+      format(CUT), format(nrow(testset), big.mark = ","), format(CUT))
+  curve <- rbindlist(lapply(grid, function(x)
+    fitset[, .(blend = x, mae = mean(100 * abs((1 - x) * pred + x * base - act))), by = family]))
+  bestb <- curve[, .SD[which.min(mae)], by = family][, .(family, blend)]
+  cat("
+blend chosen on the fit years:
+"); print(bestb)
+  bv <- setNames(bestb$blend, bestb$family)
+  score_on <- function(d, bl) {
+    v <- if (length(bl) == 1) rep(bl, nrow(d)) else
+      { u <- rep(0, nrow(d)); i <- match(d$family, names(bl)); u[!is.na(i)] <- bl[i[!is.na(i)]]; u }
+    e <- d[, .(races = uniqueN(race_key), n = .N,
+               m = mean(100 * abs((1 - v) * pred + v * base - act)), b = mean(ae_b)), by = .(event_id, family)]
+    e[races >= 10][, `:=`(gap = 100 * (m - b) / b, beat = m < b)][]
+  }
+  cat("
+=== scored on the HELD-OUT years only ===
+")
+  for (nm in c("no blend", "fitted per family", "flat 0.5")) {
+    bl <- switch(nm, "no blend" = 0, "fitted per family" = bv, "flat 0.5" = 0.5)
+    e <- score_on(testset, bl)
+    cat(sprintf("%-20s beat %2d/%2d | pooled %.3f vs %.3f (%+.1f%%)
+", nm, sum(e$beat), nrow(e),
+                weighted.mean(e$m, e$n), weighted.mean(e$b, e$n),
+                100 * (weighted.mean(e$m, e$n) - weighted.mean(e$b, e$n)) / weighted.mean(e$b, e$n)))
+    if (nm == "fitted per family") {
+      cat("
+  by family on the held-out years:
+")
+      print(e[, .(events = .N, beat = sum(beat), model = round(weighted.mean(m, n), 3),
+                  last5 = round(weighted.mean(b, n), 3),
+                  gap = round(100 * (weighted.mean(m, n) - weighted.mean(b, n)) / weighted.mean(b, n), 1)),
+               by = family][order(gap)])
+      fwrite(e, file.path(OUT, "marks_blend_heldout.csv"))
+    }
+  }
+  say("wrote marks_blend_heldout.csv"); quit(status = 0L)
+}
+if (WHAT %in% c("blend")) {
+  cat("
+=== recency blend for the MARK only (0 = ability, 1 = the last-5 mean) ===
+")
+  tab <- rbindlist(lapply(c(0, 0.15, 0.3, 0.5, 0.7), function(x) {
+    r <- ev_of(sc(), sprintf("blend=%g", x), blend = x)
+    report(r, sprintf("blend %g", x))
+    r[, .(blend = x, events = .N, beat = sum(beat), model = weighted.mean(m, n),
+          last5 = weighted.mean(b, n)), by = family]
+  }), fill = TRUE)
+  cat("
+by family (model MAE at each blend, then events beaten):
+")
+  print(dcast(tab, family ~ blend, value.var = c("model", "beat"))[
+    , lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)])
+  fwrite(tab, file.path(OUT, "marks_blend_by_family.csv"))
+  say("wrote marks_blend_by_family.csv"); quit(status = 0L)
+}
+if (WHAT %in% c("adjfam")) {
+  # Per FAMILY, does removing the context adjustment help? Last-5 averages RAW
+  # marks; we average adjusted ones. If adjusted is worse exactly where we lose,
+  # the adjustment layer is the defect rather than the averaging.
+  cat("
+=== context adjustment scale, BY FAMILY (model MAE; last5 for reference) ===
+")
+  fams <- sort(unique(ev_of(sc(), "x")$family))
+  tab <- rbindlist(lapply(c(0, 0.5, 1, 1.5), function(x) {
+    r <- ev_of(sc(adj_scale = x), sprintf("adj=%g", x))
+    r[, .(scale = x, events = .N, beat = sum(beat),
+          model = weighted.mean(m, n), last5 = weighted.mean(b, n)), by = family]
+  }), fill = TRUE)
+  w <- dcast(tab, family ~ scale, value.var = c("model", "beat"))
+  w <- merge(w, tab[scale == 1, .(family, last5 = round(last5, 3))], by = "family")
+  print(w[, lapply(.SD, function(v) if (is.numeric(v)) round(v, 3) else v)])
+  fwrite(tab, file.path(OUT, "marks_adj_by_family.csv"))
+  say("wrote marks_adj_by_family.csv"); quit(status = 0L)
 }
 if (WHAT %in% c("shrink", "both")) {
   cat("
