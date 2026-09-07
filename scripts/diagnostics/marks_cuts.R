@@ -54,11 +54,22 @@ if (nzchar(Sys.getenv("CITIUS_CUTS_PARAMS", ""))) {
     par[[p2[1]]] <- as.numeric(p2[2])
   }
 }
-say("model = fitted config: blend %.2f, half-life %g, trim %.2f, shrink %.2f, adjustment %.2f",
-    par$blend, par$hl, par$trim, par$shrink, par$adj)
+if (is.null(par$rhl)) par$rhl <- Inf
+say("model: half-life %g | trim %.2f | shrink %.2f | adjustment %.2f | races %g | blend %.2f",
+    par$hl, par$trim, par$shrink, par$adj, par$rhl, par$blend)
 
 # --- reproduce the fitted model, exactly as marks_fit.R scores it -------------
-pairs[, w := w_static * 0.5^(age_days / par$hl)]
+# Per-family half-life overrides included, because the fit uses them: scoring a
+# cut with a plain scalar would silently be cutting a different model.
+hl_of <- function(fam, hl_global, hl_map) {
+  v <- rep(hl_global, length(fam))
+  if (length(hl_map)) { hv <- unlist(hl_map); i <- match(fam, names(hv)); v[!is.na(i)] <- hv[i[!is.na(i)]] }
+  v
+}
+setorder(pairs, pid, age_days)
+pairs[, .k := seq_len(.N) - 1L, by = pid]     # 0 = the athlete's most recent mark
+pairs[, w := w_static * 0.5^(age_days / hl_of(family, par$hl, DEPLOYED$hl_family))]
+if (is.finite(par$rhl) && par$rhl > 0) pairs[, w := w * 0.5^(.k / par$rhl)]
 pairs[, p_use := perf_raw + par$adj * (perf - perf_raw)]
 keep <- if (par$trim <= 0) rep(TRUE, nrow(pairs)) else
   !(pairs$tactical & !is.na(pairs$rk) & pairs$rk <= floor(pairs$grp_n * par$trim))
@@ -68,9 +79,13 @@ m <- merge(k[, .(pid, athlete_id, event_id, month, sigma, sigma_between, prior_m
 m[, kap := par$shrink * (sigma^2 / sigma_between^2)]
 m[, ability := (1 - kap / (w_total + kap)) * ability_raw + (kap / (w_total + kap)) * prior_mu]
 
+# THE FAIR BASELINE. base.rds cuts an athlete's history at the RACE DATE while
+# the model is cut at the MONTH START, a head start on 92% of rows. Cutting
+# against that measures the handicap as much as the model.
+bmf <- readRDS(file.path(CACHE, "base_m.rds"))[, .(athlete_id, event_id, month, base = base_m)]
 d <- merge(merge(test, m[, .(athlete_id, event_id, month, ability, w_total, n_hist, freshness, span)],
                  by = c("athlete_id", "event_id", "month")),
-           b5, by = c("athlete_id", "event_id", "date"))
+           bmf, by = c("athlete_id", "event_id", "month"))
 d[, pred := (1 - par$blend) * ability + par$blend * base]
 stopifnot("baseline missing on some rows" = all(is.finite(d$base)))
 if (nzchar(Sys.getenv("CITIUS_FIT_SPLIT", ""))) d <- d[date >= as.Date(Sys.getenv("CITIUS_FIT_SPLIT"))]
