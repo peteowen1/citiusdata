@@ -293,7 +293,37 @@ artefacts <- list(
 # compilation. The shape of the meet, not the provenance of its field, is what
 # decides which artefacts a card needs -- so both belong in this one loop, and
 # the difference in provenance is carried by field_type/field_source per row.
+# Mark calibration, read rather than asserted. form_display_marks.R measures how
+# often each displayed mark is actually beaten and writes it beside the parquet;
+# the caveat sentence is built from that number so the page cannot drift from
+# what was measured. A missing file is a hard stop, not a silent default: a page
+# that quietly loses its calibration caveat is worse than one that fails to build.
+#
+# Defined here rather than beside the manifest because the finals-only blocks
+# below quote CAVEAT_PEAK too, and they are built inside the loop.
+CALIB_F <- file.path(D, sprintf("form_display_%s_calib.json", TAG))
+if (!file.exists(CALIB_F))
+  stop("form_display_final_calib.json is missing -- run form_display_marks.R before exporting")
+CALIB <- fromJSON(CALIB_F)
+CAVEAT_PEAK <- sprintf(
+  paste("The \"good day\" mark is beaten in %s (%.1f%% of finals, measured out of sample).",
+        "It is built as a 90th percentile, but one spread is shared across athletes",
+        "whose race-to-race variation differs, so it is optimistic by a few points."),
+  CALIB$peak_label, CALIB$goodday_beaten_pct)
+cat(sprintf("mark calibration: typical beaten %.2f%%, good day %.2f%% (%s)\n",
+            CALIB$typical_beaten_pct, CALIB$goodday_beaten_pct, CALIB$peak_label))
+
 DL_MEETS <- c("brussels2026", "budapest2026")
+
+# Manifest blocks for the finals-only meets, filled in as each is built.
+#
+# These did not exist until 2026-09-07 and their absence was silent. The
+# athletics index decides whether a meet is forecast SOLELY from the manifest
+# (`_hasCard` in athletics/index.qmd) — the parquets it would then read are
+# never consulted for that question. So a Diamond League card could upload
+# perfectly, three artefacts and all, and the section would still print "not
+# forecast" beside it for ever. Publishing the data is not publishing the meet.
+dl_blocks <- list()
 
 for (mid in DL_MEETS) {
   if (!wanted(mid)) { cli::cli_alert_info("{mid}: not selected this run, skipping."); next }
@@ -352,6 +382,25 @@ for (mid in DL_MEETS) {
   artefacts[[sprintf("%s-predictions.parquet", mid)]] <- dcard
   artefacts[[sprintf("%s-rounds.parquet", mid)]]      <- dlab
   artefacts[[sprintf("%s-events.parquet", mid)]]      <- dev
+
+  # counts_source is "single_final", not "derived": "derived" is what triggers
+  # event.qmd's note explaining how heat counts were guessed, and a one-day
+  # final has no heats to explain. The caveats are this shape's, not
+  # Birmingham's — no draw, no advancement, no round-level byes exist here, so
+  # repeating those three would be describing a meet that is not happening.
+  dl_blocks[[mid]] <- list(
+    events_modelled = uniqueN(dcard$event_id),
+    athletes = uniqueN(dcard$athlete_id),
+    cutoff = as.character(unique(dcard$cutoff)[1]),
+    counts_source = "single_final",
+    field_type = as.character(unique(dcard$field_type)[1]),
+    field_source = as.character(unique(dcard$field_source)[1]),
+    caveats = c(
+      "One straight final per event: every entrant is in the final by definition, so a 100% final probability is the shape of the meet, not a model output.",
+      "The field is the declared start list as at the cutoff. Late withdrawals and additions are not modelled.",
+      "Predicted marks are a typical performance, not a peak.",
+      CAVEAT_PEAK))
+
   cli::cli_alert_success(
     "{mid}: {nrow(dcard)} athlete-event{?s} across {uniqueN(dcard$event_id)} event{?s}.")
 }
@@ -384,23 +433,6 @@ EVENT_NOTES <- list(
     "evidence the model reads her as unusually consistent, which flatters her",
     "chances. Treat this as our most disputable call of the meet."))
 
-# Mark calibration, read rather than asserted. form_display_marks.R measures how
-# often each displayed mark is actually beaten and writes it beside the parquet;
-# the caveat sentence is built from that number so the page cannot drift from
-# what was measured. A missing file is a hard stop, not a silent default: a page
-# that quietly loses its calibration caveat is worse than one that fails to build.
-CALIB_F <- file.path(D, sprintf("form_display_%s_calib.json", TAG))
-if (!file.exists(CALIB_F))
-  stop("form_display_final_calib.json is missing -- run form_display_marks.R before exporting")
-CALIB <- fromJSON(CALIB_F)
-CAVEAT_PEAK <- sprintf(
-  paste("The \"good day\" mark is beaten in %s (%.1f%% of finals, measured out of sample).",
-        "It is built as a 90th percentile, but one spread is shared across athletes",
-        "whose race-to-race variation differs, so it is optimistic by a few points."),
-  CALIB$peak_label, CALIB$goodday_beaten_pct)
-cat(sprintf("mark calibration: typical beaten %.2f%%, good day %.2f%% (%s)\n",
-            CALIB$typical_beaten_pct, CALIB$goodday_beaten_pct, CALIB$peak_label))
-
 # A meet's manifest block is what the site reads to know a card exists at all;
 # athletics/index.qmd shows "not forecast" without one. So a run that did not
 # rebuild a meet must CARRY ITS BLOCK FORWARD rather than omit it — omitting it
@@ -411,19 +443,47 @@ cat(sprintf("mark calibration: typical beaten %.2f%%, good day %.2f%% (%s)\n",
 # BLOG/ is empty, and the published copy is the thing whose claims we are
 # preserving. A fetch failure is fatal by design — carrying nothing forward
 # while believing we did is how a meet would disappear quietly.
+#
+# The rule is per meet, not per Birmingham: any meet this run did not rebuild
+# keeps whatever the published manifest says about it. Birmingham is the one
+# that must be there — it is live on the site today — so its absence from a
+# fetched manifest is fatal. A finals-only meet that has never published has
+# no block to lose, and demanding one would block the first Brussels or
+# Budapest publish for ever.
 PUBLISHED_MANIFEST <- paste0(
   "https://pub-ee4bf5b599a047f9ac2b9facc1587008.r2.dev/", PREFIX, "/athletics-manifest.json")
+
+skipped <- c(if (!BHAM_BUILD) "birmingham2026",
+             setdiff(DL_MEETS, names(dl_blocks)))
 prev <- NULL
-if (!BHAM_BUILD) {
+if (length(skipped)) {
   prev <- tryCatch(jsonlite::fromJSON(PUBLISHED_MANIFEST, simplifyVector = FALSE),
                    error = function(e) NULL)
-  if (is.null(prev) || is.null(prev$birmingham)) {
+  if (is.null(prev)) {
     cli::cli_abort(c(
-      "Skipped birmingham2026 but could not read its block from the published manifest.",
-      i = "Publishing without it would remove a meet that is currently live.",
+      "Did not rebuild {.val {skipped}} and could not read the published manifest.",
+      i = "Publishing now could drop a meet that is currently live.",
       i = "Source: {.url {PUBLISHED_MANIFEST}}"))
   }
-  cli::cli_alert_info("birmingham2026: manifest block carried forward from the published manifest.")
+  if (!BHAM_BUILD && is.null(prev$birmingham)) {
+    cli::cli_abort(c(
+      "Skipped birmingham2026 but the published manifest has no block for it.",
+      i = "Publishing without it would remove a meet that is currently live."))
+  }
+  for (m in skipped) {
+    have <- !is.null(prev[[m]]) || (identical(m, "birmingham2026") && !is.null(prev$birmingham))
+    if (have) cli::cli_alert_info("{m}: manifest block carried forward.")
+    else      cli::cli_alert_info("{m}: not rebuilt and never published — nothing to carry forward.")
+  }
+}
+
+# Whatever the published manifest said about a finals-only meet we did not
+# rebuild, said again verbatim. NULL entries drop out, so a meet that has
+# never published stays absent rather than appearing as an empty block, which
+# `_hasCard` would read as "forecast" and the meet page would then fail to
+# fill.
+for (m in setdiff(DL_MEETS, names(dl_blocks))) {
+  if (!is.null(prev) && !is.null(prev[[m]])) dl_blocks[[m]] <- prev[[m]]
 }
 
 manifest <- list(
@@ -452,6 +512,12 @@ manifest <- list(
       # looks more consistent than the evidence can support. Raising their
       # uncertainty in fact LOWERS their win probability. See NEXT-STEPS.
       "An athlete with few races in an event can look more consistent than the evidence supports, which can overstate their chances.")))
+
+# Keyed by full meet_id (brussels2026), which is what athletics/index.qmd looks
+# for first; Birmingham above keeps its year-stripped key because that is what
+# is already published and meet.qmd falls back to it.
+manifest <- c(manifest, dl_blocks[order(names(dl_blocks))])
+
 write_json(manifest, file.path(BLOG, "athletics-manifest.json"),
            auto_unbox = TRUE, pretty = TRUE, na = "null")
 
