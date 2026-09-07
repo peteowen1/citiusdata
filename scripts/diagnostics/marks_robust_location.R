@@ -140,5 +140,88 @@ cat(if (bs$won > ba$won || (bs$won == ba$won && bs$mae < ba$mae))
   "=> SYMMETRIC wins: the one-sided trim was buying optimism, not robustness.\n"
   else
   "=> asymmetric wins: trimming only the bad tail earns its place after all.\n")
+# --- k FITTED HIERARCHICALLY, family then event ------------------------------
+# A single global k assumes every family's bad tail looks the same. They do not:
+# a thrower's series contains fouls and short attempts, a marathoner blows up or
+# steps off, a sprinter gets disqualified or shuts down injured. Those are
+# different distributions of "much worse than usual", so the cutoff that should
+# stop trusting them may differ.
+#
+# Same construction as the four parameters already fitted this way: grid argmin
+# per unit on the FIT YEARS, event shrunk toward family, family toward global,
+# each by its own evidence.
+say("fitting k hierarchically")
+curve <- rbindlist(lapply(KS, function(x)
+  frame_at("asym", x)[date < SPLIT, .(v = x, sae = sum(abs(pred - act)), n = .N),
+                      by = .(event_id, family)]))
+ev <- curve[, .(sae = sum(sae), n = sum(n)), by = .(event_id, family, v)]
+ev <- ev[ev[, .I[which.min(sae / n)], by = event_id]$V1][, .(event_id, family, raw = v, n_e = n)]
+fm <- curve[, .(sae = sum(sae), n = sum(n)), by = .(family, v)]
+fm <- fm[fm[, .I[which.min(sae / n)], by = family]$V1][, .(family, fam_raw = v, n_f = n)]
+# margin over the runner-up, so a family with a flat curve is visible
+marg <- curve[, .(sae = sum(sae), n = sum(n)), by = .(family, v)][, {
+  o <- sort(sae / n); .(margin_pct = round(100 * (o[2] - o[1]) / o[1], 3))
+}, by = family]
+cat("
+=== k fitted per family, with how decisive each is ===
+")
+print(merge(fm, marg, by = "family")[order(-margin_pct)])
+
+GLOBK <- 2.5
+compose <- function(kf, ke) {
+  f <- copy(fm)[, fam := (kf * GLOBK + n_f * fam_raw) / (kf + n_f)]
+  e <- merge(ev, f[, .(family, fam)], by = "family", all.x = TRUE)
+  e[is.na(fam), fam := GLOBK]
+  e[, val := (ke * fam + n_e * raw) / (ke + n_e)]
+  stats::setNames(e$val, e$event_id)
+}
+# frame_at takes a scalar k; a per-event k needs the vector form
+frame_k <- function(kmap) {
+  pp <- data.table::copy(pairs)
+  data.table::setorder(pp, pid, age_days)
+  pp[, .k := seq_len(.N) - 1L, by = pid]
+  pp[, w := w_static^LAMBDA * 0.5^(age_days / HLV)]
+  pp[, w := w * fifelse(is.finite(RHV) & RHV > 0, 0.5^(.k / RHV), 1)]
+  pp[, p_use := perf_raw + CSV * (perf - perf_raw)]
+  pp <- pp[!(tactical & !is.na(rk) & TVV > 0 & rk <= floor(grp_n * TVV))]
+  j <- match(pp$event_id, names(kmap))
+  pp[, kv := fifelse(is.na(j), GLOBK, unname(kmap[j]))]
+  pp[, mu1 := sum(w * p_use) / sum(w), by = pid]
+  pp[, n_g := .N, by = pid]
+  pp[, dev := p_use - mu1][, kk_cut := kv * cv_prior]
+  pp[, w_rob := w]
+  pp[dev < -kk_cut & n_g >= 3L, w_rob := w * (kk_cut / abs(dev))]
+  r <- pp[, .(ability_raw = sum(w_rob * p_use) / sum(w_rob), w_total = sum(w)), by = pid]
+  m <- merge(k[, .(pid, athlete_id, event_id, month, sigma, sigma_between, prior_mu)], r, by = "pid")
+  m[, kap := fit$shrink * (sigma^2 / sigma_between^2)]
+  m[, pred := (1 - kap / (w_total + kap)) * ability_raw + (kap / (w_total + kap)) * prior_mu]
+  merge(merge(test, m[, .(athlete_id, event_id, month, pred)],
+              by = c("athlete_id", "event_id", "month")),
+        bm, by = c("athlete_id", "event_id", "month"))
+}
+cat("
+=== hierarchical k, held out ===
+")
+hres <- rbindlist(c(
+  list(res[config == "asymmetric k=2.5"][, .(config = "flat k=2.5 (current)", beat, of, won, lost, mae, vs_last5, excess)]),
+  lapply(c(200, 1000, 5000), function(kf)
+    rbindlist(lapply(c(100, 400, 1600), function(ke)
+      summarise(frame_k(compose(kf, ke))[date >= SPLIT], sprintf("hier %g/%g", kf, ke)))))))
+print(hres[order(-won, mae)])
+hb <- hres[config != "flat k=2.5 (current)"][order(-won, mae)][1]
+fb <- hres[config == "flat k=2.5 (current)"]
+cat(sprintf("
+flat k=2.5:   %d beaten, %d separated wins, MAE %.4f
+", fb$beat, fb$won, fb$mae))
+cat(sprintf("best hier:    %s -> %d beaten, %d separated wins, MAE %.4f
+",
+            hb$config, hb$beat, hb$won, hb$mae))
+cat(if (hb$won > fb$won || (hb$won == fb$won && hb$mae < fb$mae))
+  "=> a per-family k earns its place.
+"
+  else "=> a single global k is enough; the families do not want different cutoffs.
+")
+fwrite(hres, file.path(OUT, "marks_robust_hier.csv"))
+
 fwrite(res, file.path(OUT, "marks_robust_location.csv"))
 say("wrote marks_robust_location.csv")
