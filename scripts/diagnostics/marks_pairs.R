@@ -65,11 +65,24 @@ say("scoring the %d months with their own reference run (of %d in the window)",
 # trim miss events the model trims -- Hammer Throw W among them, where it drops
 # exactly 29 of one athlete's 116 marks. Replicate the override or the trim
 # fires on a different set of events than the model's.
-reg <- as.data.table(citius_events())[, .(event_id, tactical)]
+#
+# THE OVERRIDE ITSELF IS GATED BY FAMILY (ability.R ~1570), and this
+# replication was missing that gate -- found 2026-09-08 chasing a gate failure
+# of sd 9.6%, max 3312%, concentrated entirely in throw/hurdles/jump/sprint,
+# the families a slow mark means weather rather than tactics. Without the
+# gate this code trimmed those events' history too, in some cases down to a
+# handful of marks (w_total as low as 0.005), which makes prior_mu -- solved
+# by dividing by ref_shrinkage -- numerically unstable. combined/distance/
+# middle/road/walk, the gated families, reproduced the reference to floating-
+# point precision throughout, which is what pinned this down to the gate
+# rather than to the trim fraction or the recovery algebra.
+reg <- as.data.table(citius_events())[, .(event_id, tactical, family)]
 ti <- as.data.table(cal$events)[, .(event_id, tactical_index,
                                     calibrated = if ("calibrated" %in% names(cal$events)) calibrated else NA)]
 reg <- merge(reg, ti, by = "event_id", all.x = TRUE)
-reg[calibrated %in% TRUE & is.finite(tactical_index), tactical := tactical_index < -0.5]
+reg[calibrated %in% TRUE & is.finite(tactical_index) &
+      family %in% citius:::.CITIUS_TACTICAL_FAMILIES,
+    tactical := tactical_index < -0.5]
 reg <- reg[, .(event_id, tactical)]
 say("tactical after the calibration override: %d of %d events (registry said %d)",
     sum(reg$tactical, na.rm = TRUE), nrow(reg),
