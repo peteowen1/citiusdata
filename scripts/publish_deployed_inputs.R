@@ -106,7 +106,14 @@ fixed <- c(
   # final artefact, not a snapshot that can go stale underneath us.
   "birmingham2026_pretournament.rds",
   "birmingham2026_round_structure.csv",
-  "birmingham2026_nations.parquet"
+  "birmingham2026_nations.parquet",
+  # ...and its entry list, because the export re-runs Birmingham's sanity
+  # script, which reads all three of card, rounds and entries. This one is
+  # enumerated rather than guessed: every file the export path opens
+  # (export_athletics_blog.R plus both sanity scripts) was listed and compared
+  # against what is published, and this was the only gap. The three previous
+  # runs each found one missing file the slow way.
+  "birmingham2026_entries.json"
 )
 
 files <- unique(c(from_deployed, fixed))
