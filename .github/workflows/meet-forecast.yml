@@ -1,0 +1,158 @@
+name: Meet forecast
+
+# Runs the athletics forecast chain on a runner instead of on one laptop.
+#
+# WHY. Until now a meet only got a card if somebody remembered to run
+# `run_meet.ps1` by hand on the right day. Four of the seven meets on the 2026
+# calendar ran without one — Lausanne, Silesia, Zurich and Brussels — and the
+# site correctly said "not forecast" for all four. The chain itself works; what
+# was missing was anywhere else to run it.
+#
+# WHAT MADE THIS POSSIBLE. `data/` is 8.2 GB and only four small files of it are
+# tracked, so a runner had nothing to run against. The inputs the chain actually
+# reads now live on the `deployed-latest` release, published by
+# scripts/publish_deployed_inputs.R, which takes its file list from _deployed.R
+# so a promotion cannot leave this workflow pointing at last month's corpus.
+#
+# SCOPE, and it is the same scope run_meet.ps1 has. Only `birmingham2026` has a
+# step list: Diamond League meets have no rounds and no entry-list PDF, so they
+# need their own chain, which does not exist yet. This is dispatch-only for that
+# reason — a schedule would fire at meets it cannot forecast and turn a real gap
+# into a wall of red runs.
+#
+# PUBLISHING IS OFF until the Cloudflare secrets exist on this repo (it has
+# none today). Without them the chain runs end to end and writes its artefacts
+# as a build artifact, which is enough to prove the plumbing; with them, drop
+# the skip and it publishes. That is one line, deliberately.
+
+on:
+  workflow_dispatch:
+    inputs:
+      meet_id:
+        description: 'Meet id from data/athletics_calendar.csv'
+        type: string
+        required: true
+        default: 'birmingham2026'
+      skip_entries:
+        description: 'Skip the entry-list PDF re-parse (it rarely changes)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: citius-meet-forecast
+  cancel-in-progress: false
+
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      # The scripts resolve paths as VERSE/citius and VERSE/citiusdata via
+      # here::here(), so the runner has to reproduce the workspace layout rather
+      # than a bare repo checkout.
+      - name: Check out citiusdata
+        uses: actions/checkout@v4
+        with:
+          path: citiusdata
+
+      - name: Check out citius
+        uses: actions/checkout@v4
+        with:
+          repository: peteowen1/citius
+          path: citius
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # here::here() walks up for a project root marker. Without one it would
+      # settle on whichever directory happens to look like a project — usually
+      # citiusdata itself, which would send every VERSE/citiusdata path one
+      # level too deep. The sentinel makes the root explicit.
+      - name: Mark the workspace root for here()
+        run: touch .here
+
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.5.0'
+          use-public-rspm: true
+
+      - name: Setup R dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: citius
+          extra-packages: |
+            any::devtools
+            any::here
+            any::cli
+            any::data.table
+            any::arrow
+            any::prettyunits
+          needs: |
+            devtools
+
+      - name: Download the deployed inputs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd citiusdata
+          mkdir -p data
+          gh release download deployed-latest --repo peteowen1/citiusdata --dir data --clobber
+          echo ""
+          ls -lh data/*.rds data/*.parquet 2>/dev/null || true
+          # Fail here, named, rather than deep inside the chain: a missing
+          # corpus surfaces as an opaque error four scripts later otherwise.
+          for f in athletics_corpus.rds aging.rds championship_results.rds; do
+            if [ ! -f "data/$f" ]; then
+              echo "::error::Required input data/$f was not in the deployed-latest release."
+              exit 1
+            fi
+          done
+
+      - name: Run the forecast chain
+        env:
+          # No Cloudflare secrets on this repo yet, so the publish step inside
+          # export_athletics_blog.R is skipped and the artefacts are collected
+          # below instead. Remove this line once the secrets are set and the
+          # same run will publish.
+          CITIUS_SKIP_UPLOAD: "1"
+          MEET_ID: ${{ inputs.meet_id }}
+          SKIP_ENTRIES: ${{ inputs.skip_entries }}
+        run: |
+          set -o pipefail
+          case "$MEET_ID" in
+            birmingham2026)
+              STEPS="parse_birmingham_entries.R resolve_birmingham_athletes.R build_birmingham_rounds.R predict_birmingham2026.R sanity_birmingham_card.R export_athletics_blog.R"
+              ;;
+            *)
+              echo "::error::No step list for '$MEET_ID'. Diamond League meets need their own chain (no rounds, no entry PDF) — same limit run_meet.ps1 has."
+              exit 1
+              ;;
+          esac
+
+          for s in $STEPS; do
+            if [ "$s" = "parse_birmingham_entries.R" ] && [ "$SKIP_ENTRIES" = "true" ]; then
+              echo "--- skipping $s (skip_entries)"
+              continue
+            fi
+            echo ""
+            echo "=== $s"
+            # Aborts on the FIRST failing step and never reaches the publish.
+            # A partial run that uploads is worse than no run: the site would
+            # then serve a self-inconsistent set under a fresh "as at" stamp,
+            # which is the failure run_meet.ps1's header calls out.
+            if ! Rscript "citiusdata/scripts/$s" 2>&1 | tee "/tmp/${s%.R}.log"; then
+              echo "::error::$s failed — stopping before anything is published."
+              exit 1
+            fi
+          done
+
+      - name: Collect the forecast artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forecast-${{ inputs.meet_id }}
+          path: |
+            citiusdata/blog/**
+            /tmp/*.log
+          if-no-files-found: warn
+          retention-days: 14
