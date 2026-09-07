@@ -51,14 +51,26 @@ predict_at <- function(p) {
   m[, pred := (1 - kap / (w_total + kap)) * ability_raw + (kap / (w_total + kap)) * prior_mu]
   m[, .(athlete_id, event_id, month, pred)]
 }
+# PAIRED, because the model and the baseline predict the SAME rows. The per-row
+# difference in absolute error has far less variance than either error alone, so
+# an event scored on 17 races can still give a usable answer -- and more often
+# tells you the apparent loss is not distinguishable from zero. Without it a
+# +1.4% gap on 17 races and a +1.4% gap on 400 races read identically.
 score <- function(p) {
   d <- merge(merge(test, predict_at(p), by = c("athlete_id", "event_id", "month")),
              bm, by = c("athlete_id", "event_id", "month"))[date >= SPLIT]
   stopifnot("no held-out rows" = nrow(d) > 0)
-  d[, .(races = uniqueN(race_key), n = .N,
-        model = mean(100 * abs(pred - act)), last5 = mean(100 * abs(base_m - act))),
-    by = .(event_id, family)][, `:=`(gap = 100 * (model - last5) / last5,
-                                     beat = model < last5)][]
+  d[, {
+    dd <- 100 * (abs(pred - act) - abs(base_m - act))
+    ci <- if (.N >= 5L && stats::sd(dd) > 0) stats::t.test(dd)$conf.int else c(NA_real_, NA_real_)
+    .(races = uniqueN(race_key), n = .N,
+      model = mean(100 * abs(pred - act)), last5 = mean(100 * abs(base_m - act)),
+      lo = ci[1], hi = ci[2])
+  }, by = .(event_id, family)][
+    , `:=`(gap = 100 * (model - last5) / last5, beat = model < last5,
+           verdict = data.table::fifelse(!is.finite(lo), "too few",
+                     data.table::fifelse(hi < 0, "model better",
+                     data.table::fifelse(lo > 0, "LAST-5 BETTER", "not separated"))))][]
 }
 dep <- list(hl = DEPLOYED$half_life, trim = 0.25, shrink = 1, adj = 1, rhl = Inf)
 e_dep <- score(dep); e_fit <- score(fit)
@@ -85,6 +97,18 @@ tab <- e_fit[races >= 5][order(-gap), .(event_id, family, races,
 print(tab, nrows = 60)
 cat(sprintf("\nlosing: %d of %d. worst is %+.1f%%.\n", sum(!e_fit[races >= 5]$beat),
             nrow(e_fit[races >= 5]), max(e_fit[races >= 5]$gap)))
+cat("\n=== ARE THE LOSSES REAL? paired 95% intervals, losing events ===\n")
+print(e_fit[races >= 5 & beat == FALSE][order(-gap),
+      .(event_id, races, n, gap = round(gap, 1),
+        ci95 = sprintf("[%+.3f, %+.3f]", lo, hi), verdict)])
+cat("\n=== events we win that are ALSO not separated ===\n")
+print(e_fit[races >= 5 & beat == TRUE & verdict == "not separated"][order(gap),
+      .(event_id, races, gap = round(gap, 1), ci95 = sprintf("[%+.3f, %+.3f]", lo, hi))])
+cat(sprintf("\nof %d scored events: %d separated in our favour, %d against, %d not separated.\n",
+            nrow(e_fit[races >= 5]), sum(e_fit[races >= 5]$verdict == "model better"),
+            sum(e_fit[races >= 5]$verdict == "LAST-5 BETTER"),
+            sum(e_fit[races >= 5]$verdict == "not separated")))
+
 cat("\n=== by family ===\n")
 print(e_fit[races >= 5, .(events = .N, beat = sum(beat),
                           model = round(weighted.mean(model, n), 3),
