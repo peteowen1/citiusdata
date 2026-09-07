@@ -19,8 +19,9 @@
 # timestamp is exactly the class of failure this verse's siblings spent
 # September fixing.
 #
-#   Rscript scripts/publish_deployed_inputs.R --dry-run   # list, upload nothing
-#   Rscript scripts/publish_deployed_inputs.R             # upload
+#   Rscript scripts/publish_deployed_inputs.R --dry-run        # list, upload nothing
+#   Rscript scripts/publish_deployed_inputs.R --manifest-only  # re-state the list only
+#   Rscript scripts/publish_deployed_inputs.R                  # upload everything
 #
 # Needs `gh` authenticated. Uploads are --clobber: the tag holds one current
 # vintage, never a history.
@@ -31,6 +32,16 @@ suppressMessages({
 
 args    <- commandArgs(trailingOnly = TRUE)
 dry_run <- "--dry-run" %in% args
+# --manifest-only re-states the file list without re-uploading the files.
+#
+# The set is 464 MB and almost all of it is one corpus that changes on a
+# promotion, not when the LIST changes. Dropping three Birmingham artefacts
+# from the list is a 300-byte edit; pushing 464 MB to record it is the kind of
+# cost that stops the list being corrected at all, which is how a manifest
+# drifts from what is actually on the tag. The files themselves are untouched,
+# so this can only ever be run after the uploads it describes are already
+# there - hence the check below that every named file really is an asset.
+manifest_only <- "--manifest-only" %in% args
 
 REPO <- "peteowen1/citiusdata"
 TAG  <- "deployed-latest"
@@ -94,25 +105,22 @@ fixed <- c(
   # (athletics_calendar.csv), or produced by an earlier step of the chain
   # itself (_athlete_ids.csv, _pretournament.*, _unmodelled_entrants.csv).
   "athlete_country_codes.rds",
-  # export_athletics_blog.R reads the Birmingham card unconditionally at the
-  # top, before it reaches the finals-only loop, so a runner forecasting only
-  # Budapest died on a missing .rds after passing every sanity check. The
-  # alternative was restructuring a 380-line publishing script to make each
-  # meet independent, which is a much larger change to the last thing standing
-  # between the numbers and the public.
+  # Birmingham's parsed entry list. This is the ONE Birmingham artefact a
+  # runner cannot make for itself when the chain is dispatched with
+  # skip_entries, because that is precisely the flag that skips the step which
+  # produces it (parse_birmingham_entries.R, which re-downloads and re-parses
+  # the entry-list PDF). Every other Birmingham file is written by the chain:
+  # build_birmingham_rounds.R writes the round structure, and
+  # predict_birmingham2026.R writes both the card and the nations projection.
   #
-  # Publishing a concluded meet's card is safe in a way publishing a live one
-  # would not be: Birmingham finished on 16 August and is scored, so this is a
-  # final artefact, not a snapshot that can go stale underneath us.
-  "birmingham2026_pretournament.rds",
-  "birmingham2026_round_structure.csv",
-  "birmingham2026_nations.parquet",
-  # ...and its entry list, because the export re-runs Birmingham's sanity
-  # script, which reads all three of card, rounds and entries. This one is
-  # enumerated rather than guessed: every file the export path opens
-  # (export_athletics_blog.R plus both sanity scripts) was listed and compared
-  # against what is published, and this was the only gap. The three previous
-  # runs each found one missing file the slow way.
+  # Three of those derived files USED to ship here, as a workaround for the
+  # export reading Birmingham's card unconditionally. That was the wrong fix
+  # and the gate said so: a card built in August cannot pass sanity against a
+  # calibration promoted on 4 September, so publishing it as an input made
+  # every run fail. The export now builds only the meet it was asked for
+  # (baa6cfa), and a Birmingham run rebuilds all three from scratch and passes
+  # - verified on CI, run 34104417291: 1,394 predictions, 86 rounds,
+  # 42 events, 45 nations.
   "birmingham2026_entries.json"
 )
 
@@ -157,15 +165,33 @@ if (exists_rc != 0) {
 }
 
 ok <- TRUE
-for (i in seq_along(files)) {
-  cli_alert_info("Uploading {files[i]} ...")
-  rc <- system2("gh", c("release", "upload", TAG, shQuote(paths[i]),
-                        "--repo", REPO, "--clobber"))
-  if (rc == 0) {
-    cli_alert_success("uploaded {files[i]}")
-  } else {
-    cli_alert_danger("FAILED {files[i]}")
-    ok <- FALSE
+if (manifest_only) {
+  # Refuse to describe a tag that does not hold what the list claims. Writing
+  # the manifest is the act that tells CI what to fetch, so a manifest naming
+  # an absent asset turns a 300-byte shortcut into a failed run several
+  # minutes deep, with the download step reporting a file nobody published.
+  on_tag <- suppressWarnings(system2("gh", c("release", "view", TAG, "--repo", REPO,
+                                             "--json", "assets", "-q", ".assets[].name"),
+                                     stdout = TRUE))
+  absent <- setdiff(files, on_tag[nzchar(on_tag)])
+  if (length(absent)) {
+    cli_alert_danger("--manifest-only, but {length(absent)} file{?s} named here {?is/are} not on the tag:")
+    for (a in absent) cli_alert("  {a}")
+    cli_alert_info("Run without --manifest-only to upload them.")
+    quit(save = "no", status = 1)
+  }
+  cli_alert_info("--manifest-only: files untouched, all {length(files)} confirmed on the tag.")
+} else {
+  for (i in seq_along(files)) {
+    cli_alert_info("Uploading {files[i]} ...")
+    rc <- system2("gh", c("release", "upload", TAG, shQuote(paths[i]),
+                          "--repo", REPO, "--clobber"))
+    if (rc == 0) {
+      cli_alert_success("uploaded {files[i]}")
+    } else {
+      cli_alert_danger("FAILED {files[i]}")
+      ok <- FALSE
+    }
   }
 }
 
