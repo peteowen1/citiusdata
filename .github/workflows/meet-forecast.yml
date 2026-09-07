@@ -14,11 +14,16 @@ name: Meet forecast
 # scripts/publish_deployed_inputs.R, which takes its file list from _deployed.R
 # so a promotion cannot leave this workflow pointing at last month's corpus.
 #
-# SCOPE, and it is the same scope run_meet.ps1 has. Only `birmingham2026` has a
-# step list: Diamond League meets have no rounds and no entry-list PDF, so they
-# need their own chain, which does not exist yet. This is dispatch-only for that
-# reason — a schedule would fire at meets it cannot forecast and turn a real gap
-# into a wall of red runs.
+# SCOPE, mirroring run_meet.ps1's step lists. Two shapes are wired:
+# `birmingham2026` (rounds, entry-list PDF) and the finals-only meets
+# `budapest2026` and `brussels2026`. Dispatch-only: a schedule would fire at
+# meets that have no step list and turn a real gap into a wall of red runs, and
+# a meet's cutoff has to precede it anyway.
+#
+# Adding a meet is adding a case below and to run_meet.ps1. That is the whole
+# fix that was missing when four meets ran with no forecast: every script the
+# finals-only shape needs was written on 2026-08-31 and none of them was ever
+# named in a step list.
 #
 # PUBLISHING IS OFF until the Cloudflare secrets exist on this repo (it has
 # none today). Without them the chain runs end to end and writes its artefacts
@@ -165,10 +170,10 @@ jobs:
               # error for Diamond League ids. It needs CITIUS_WA_GRAPHQL_KEY;
               # without that secret, dispatch with skip_entries and the chain
               # runs on the published field instead.
-              STEPS="fetch_budapest_qualification_field.R:budapest2026 resolve_diamond_league_athletes.R:budapest2026 predict_diamond_league_final.R:budapest2026 sanity_diamond_league_card.R:budapest2026 export_athletics_blog.R"
+              STEPS="fetch_budapest_qualification_field.R:budapest2026 resolve_diamond_league_athletes.R:budapest2026 predict_diamond_league_final.R:budapest2026 add_nation_codes.R:budapest2026 sanity_diamond_league_card.R:budapest2026 export_athletics_blog.R"
               ;;
             brussels2026)
-              STEPS="resolve_diamond_league_athletes.R:brussels2026 predict_diamond_league_final.R:brussels2026 sanity_diamond_league_card.R:brussels2026 export_athletics_blog.R"
+              STEPS="resolve_diamond_league_athletes.R:brussels2026 predict_diamond_league_final.R:brussels2026 add_nation_codes.R:brussels2026 sanity_diamond_league_card.R:brussels2026 export_athletics_blog.R"
               ;;
             *)
               echo "::error::No step list for '$MEET_ID'. A meet with rounds needs a Birmingham-shaped chain; a finals-only meet can usually reuse the Diamond-League one."
