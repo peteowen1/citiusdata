@@ -82,7 +82,18 @@ fixed <- c(
   # cannot run here at all" and "the chain runs on a field that is as fresh as
   # the last publish". Once the key is set, drop this line and let the fetch
   # do it — a snapshot silently ageing is the failure this verse keeps having.
-  "budapest2026_entries.csv"
+  "budapest2026_entries.csv",
+  # Same story, same reason: add_nation_codes.R aborts without this cache, and
+  # it is built by fetch_athlete_country_codes.R, which also needs the WA key.
+  # 5 KB.
+  #
+  # These two are the whole "laptop-only artefact" set for the finals-only
+  # chain. I enumerated what all four of its scripts read rather than finding
+  # them one failed run at a time: everything else they touch is either
+  # already here (championship_results.rds), tracked in git
+  # (athletics_calendar.csv), or produced by an earlier step of the chain
+  # itself (_athlete_ids.csv, _pretournament.*, _unmodelled_entrants.csv).
+  "athlete_country_codes.rds"
 )
 
 files <- unique(c(from_deployed, fixed))
