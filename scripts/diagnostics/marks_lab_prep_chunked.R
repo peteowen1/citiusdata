@@ -167,4 +167,24 @@ for (fam in FAMS) {
       as.numeric(difftime(Sys.time(), t0, units = "secs")), rss())
   rm(h); invisible(gc())
 }
+# PRINT THE RUNNER'S SENTINEL, NOT JUST A HUMAN-READABLE ONE.
+#
+# _run_t2_lab_build.ps1 breaks its retry loop on `Select-String -Pattern
+# "PREP COMPLETE"`, which is what marks_lab_prep.R printed. This script was
+# written as a drop-in replacement for that one and preserved every DATA
+# interface -- same cache directory, same file names, same columns, same
+# resumability -- while silently dropping the one string the runner reads.
+#
+# The consequence was not a wrong number, it was a wasted build: all nine
+# families complete correctly, the runner then loops eleven no-op passes, exits
+# 1, and never runs marks_pairs.R or build_fair_baseline.R. A perfect cache
+# reporting failure, with nothing in the cache to suggest where to look.
+#
+# So the completion marker is emitted in BOTH forms. A sentinel read by a
+# machine costs nothing to duplicate, and duplicating it means the next
+# replacement of this script cannot break the runner by rewording a log line.
 say("ALL FAMILIES COMPLETE (RSS %s)", rss())
+say("PREP COMPLETE: %d families, %d sigma files (RSS %s)",
+    length(FAMS),
+    length(list.files(file.path(CACHE, "sigma"), pattern = "\\.rds$")),
+    rss())

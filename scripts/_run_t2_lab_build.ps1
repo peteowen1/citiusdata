@@ -80,10 +80,10 @@ for ($i = 1; $i -le 12; $i++) {
   Remove-Item "$LOG.pass$i", "$LOG.pass$i.err" -ErrorAction SilentlyContinue
   "    pass $i exit $($job.ExitCode), PEAK RSS ${peak} MB" | Out-File -Append -Encoding utf8 $LOG
   Write-Host "pass $i exit $($job.ExitCode), peak RSS ${peak} MB" 
-  if (Select-String -Path $LOG -Pattern "PREP COMPLETE" -Quiet) { break }
+  if (Select-String -Path $LOG -Pattern "PREP COMPLETE|ALL FAMILIES COMPLETE" -Quiet) { break }
   Start-Sleep -Seconds 60
 }
-if (-not (Select-String -Path $LOG -Pattern "PREP COMPLETE" -Quiet)) {
+if (-not (Select-String -Path $LOG -Pattern "PREP COMPLETE|ALL FAMILIES COMPLETE" -Quiet)) {
   "!!! prep did not complete after 12 passes" | Out-File -Append -Encoding utf8 $LOG
   exit 1
 }
