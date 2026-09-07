@@ -70,7 +70,19 @@ fixed <- c(
   # must be handed it. Without it the chain runs all five earlier steps and
   # then aborts at the last, which is the partial run this whole design exists
   # to avoid, reached through a gap in the input list instead of a failure.
-  "form_display_final_calib.json"
+  "form_display_final_calib.json",
+  # The Budapest field, as fetched from World Athletics' qualification
+  # standings. This is NOT a model input like the rest — it is the output of
+  # fetch_budapest_qualification_field.R, and a runner holding the
+  # CITIUS_WA_GRAPHQL_KEY secret would produce it itself.
+  #
+  # It ships because until that key exists, CI's only way to run the chain is
+  # to skip the fetch, and skipping it left the resolver aborting on a missing
+  # entries file. A published snapshot is the difference between "the chain
+  # cannot run here at all" and "the chain runs on a field that is as fresh as
+  # the last publish". Once the key is set, drop this line and let the fetch
+  # do it — a snapshot silently ageing is the failure this verse keeps having.
+  "budapest2026_entries.csv"
 )
 
 files <- unique(c(from_deployed, fixed))
