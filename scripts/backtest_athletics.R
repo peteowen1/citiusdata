@@ -36,8 +36,8 @@ MARKS_ONLY <- .env_int("CITIUS_BT_MARKS_ONLY", "0") == 1
 # The marks recency blend, read once here so it lands in the cache fingerprint
 # and in the run's settings. The MARKS_ONLY branch below has to apply it by hand
 # because it skips simulate_event(), which is where the blend normally happens.
-MARKS_BLEND <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_MARKS_BLEND", "0.6")))
-if (!is.finite(MARKS_BLEND) || MARKS_BLEND < 0 || MARKS_BLEND > 1) MARKS_BLEND <- 0.6
+MARKS_BLEND <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_MARKS_BLEND", "0.5")))
+if (!is.finite(MARKS_BLEND) || MARKS_BLEND < 0 || MARKS_BLEND > 1) MARKS_BLEND <- 0.5
 MAX_PER_RUN <- .env_int("CITIUS_BT_MEETS", "25")
 # History depth per refit. TWELVE YEARS, and do not shorten it on the argument
 # that old marks carry negligible weight.

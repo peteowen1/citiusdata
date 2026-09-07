@@ -94,12 +94,27 @@ print(cmp[beat_bl == FALSE][order(-(mae_bl - last5) / last5),
       .(event_id, family, races, model = round(mae_bl, 3), last5 = round(last5, 3),
         gap = round(100 * (mae_bl - last5) / last5, 1))])
 cat("\n=== blend sweep, held out (marks-only lever) ===\n")
-for (bl in c(0, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)) {
+#
+# TWO numbers, because the goal names two things and they do not peak together:
+#   pooled_mae     the out-of-sample mark MAE the goal says to minimise,
+#                  weighted by rows, so high-volume events dominate it
+#   per_event_gap  the mean of each event's own relative gap, weighting a 100m
+#                  and a marathon equally -- the reading of "lower marks MAE FOR
+#                  EACH EVENT", and what "beat last-5 in every event" tracks
+# Printing only one of them hides the trade rather than resolving it.
+sw <- rbindlist(lapply(seq(0, 0.8, by = 0.05), function(bl) {
   e <- ev(modifyList(DEP, list(blend = bl)))
-  cat(sprintf("blend %.1f -> beat %2d/%2d | MAE %.3f (%+.1f%%) | excess bias %+.3f\n", bl,
-      sum(e$beat), nrow(e), weighted.mean(e$m, e$n),
-      100 * (weighted.mean(e$m, e$n) - weighted.mean(e$b, e$n)) / weighted.mean(e$b, e$n),
-      weighted.mean(e$bias, e$n) - weighted.mean(e$bias_b, e$n)))
-}
+  data.table(blend = bl, beat = sum(e$beat), of = nrow(e),
+             pooled_mae = round(weighted.mean(e$m, e$n), 4),
+             pooled_vs_last5 = round(100 * (weighted.mean(e$m, e$n) - weighted.mean(e$b, e$n)) /
+                                       weighted.mean(e$b, e$n), 2),
+             per_event_gap = round(mean(100 * (e$m - e$b) / e$b), 2),
+             excess_bias = round(weighted.mean(e$bias, e$n) - weighted.mean(e$bias_b, e$n), 3))
+}))
+print(sw)
+cat(sprintf("\nlowest pooled MAE at blend %.2f | most events beaten at %.2f | best per-event gap at %.2f\n",
+            sw$blend[which.min(sw$pooled_mae)], sw$blend[which.max(sw$beat)],
+            sw$blend[which.min(sw$per_event_gap)]))
+fwrite(sw, file.path(OUT, "marks_blend_sweep.csv"))
 fwrite(res, file.path(OUT, "marks_decompose.csv"))
 cat("\nwrote marks_decompose.csv\n")

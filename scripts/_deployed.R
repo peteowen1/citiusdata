@@ -26,7 +26,7 @@ DEPLOYED <- list(
   # stamp is the only thing a reader of a published card can use to tell which
   # model produced it. Dropping the `_0904` made the stamp name a different arm
   # from the file it actually loads.
-  stamp = "2026-09-07 wac_coast_0904_full2 ctxsd strip4fam blend0.6 (debias OFF)",
+  stamp = "2026-09-07 wac_coast_0904_full2 ctxsd strip4fam blend0.5 (debias OFF)",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -262,13 +262,19 @@ DEPLOYED <- list(
   # The blend is applied at simulation time rather than stored, so it tracks
   # whatever the backtest's aging and momentum steps do to `ability` first.
   #
-  # Held out on 2024+, 35 events: events beating a last-5 baseline 10 -> 30,
-  # pooled mark error +1.7% -> -3.1% against that baseline. Both 100m flip.
+  # 0.5 is the joint optimum on both quantities the launch goal names, swept at
+  # 0.05 on the 2024+ held-out set, 44 events: lowest pooled out-of-sample mark
+  # MAE (2.0793, tied with 0.45) AND best mean per-event gap (-3.64%). Against
+  # the deployed 0: events beating a last-5 baseline 18 -> 36, pooled error
+  # -0.86% -> -4.08%. Both 100m flip.
+  #
+  # Events beaten keeps climbing to 41 at 0.65, but both error metrics turn over
+  # before that, so higher buys thin events at the cost of error everywhere.
   # docs/reviews/marks-blend-2026-09-07.md.
   #
   # Set through the package's own env var so a backtest arm can vary it without
   # a second source of truth for the number.
-  marks_blend = 0.6
+  marks_blend = 0.5
 )
 Sys.setenv(CITIUS_MARKS_BLEND = as.character(DEPLOYED$marks_blend))
 
