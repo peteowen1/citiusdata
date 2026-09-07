@@ -33,6 +33,11 @@ N_SIMS <- .env_int("CITIUS_BT_NSIMS", "10000")
 # approximation). Only valid for a marks-MAE comparison -- p_gold/p_medal/
 # median_rank come back NA, so never set this for a Brier/logloss run.
 MARKS_ONLY <- .env_int("CITIUS_BT_MARKS_ONLY", "0") == 1
+# The marks recency blend, read once here so it lands in the cache fingerprint
+# and in the run's settings. The MARKS_ONLY branch below has to apply it by hand
+# because it skips simulate_event(), which is where the blend normally happens.
+MARKS_BLEND <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_MARKS_BLEND", "0.6")))
+if (!is.finite(MARKS_BLEND) || MARKS_BLEND < 0 || MARKS_BLEND > 1) MARKS_BLEND <- 0.6
 MAX_PER_RUN <- .env_int("CITIUS_BT_MEETS", "25")
 # History depth per refit. TWELVE YEARS, and do not shorten it on the argument
 # that old marks carry negligible weight.
@@ -695,6 +700,7 @@ arm_fingerprint <- list(
   # by one config could be silently read back as another's -- caught in
   # review before this shipped.
   marks_only = MARKS_ONLY,
+  marks_blend = MARKS_BLEND,
   sel_shrink = if (is.na(SEL_SHRINK)) "" else format(SEL_SHRINK),
   sel_sigma = SEL_SIGMA)
 
@@ -1290,14 +1296,28 @@ run_meet <- function(i) {
       # closed-form shortcut for those, which is why this path leaves them NA
       # rather than guessing, and why it must never be used for a Brier/
       # logloss/placement comparison.
+      #
+      # THE BLEND MUST BE APPLIED HERE TOO. simulate_event() centres the mark
+      # distribution on (1 - b) * ability + b * recent_mean, and this branch
+      # does not call simulate_event(). Reading `ability` alone would make a
+      # marks-only arm measure the UNBLENDED model while claiming to test the
+      # blended one, and the arm would come back showing the blend does
+      # nothing -- a false negative that looks exactly like a null result.
+      # Caught before the confirming arm ran, 2026-09-07.
       reg_idx <- match(ev, .citius_event_registry$event_id)
       .orient <- .citius_event_registry$orientation[reg_idx]
       if (is.na(.orient)) .orient <- -1L
+      .mu <- entrants$ability
+      if (MARKS_BLEND > 0 && "recent_mean" %in% names(entrants)) {
+        .has <- is.finite(entrants$recent_mean)
+        .mu[.has] <- (1 - MARKS_BLEND) * entrants$ability[.has] +
+          MARKS_BLEND * entrants$recent_mean[.has]
+      }
       mp <- data.table::data.table(
         athlete_id = entrants$athlete_id,
         p_gold = NA_real_, p_medal = NA_real_, p_top8 = NA_real_,
         median_rank = NA_real_,
-        median_mark = perf_to_mark(entrants$ability, .orient)
+        median_mark = perf_to_mark(.mu, .orient)
       )
     } else {
       .ctx <- NULL
@@ -1413,7 +1433,9 @@ if (N_WORKERS > 1L) {
                     # every earlier parallel arm happened to run with it TRUE.
                     # Same trap again: run_meet()'s `if (MARKS_ONLY)` check
                     # also runs on every worker unconditionally.
-                    "FAMILY_DEBIAS", "MARKS_ONLY", "COND_CONTEXT",
+                    # MARKS_BLEND for the same reason: the MARKS_ONLY branch
+                    # reads it on every worker whatever its value.
+                    "FAMILY_DEBIAS", "MARKS_ONLY", "MARKS_BLEND", "COND_CONTEXT",
                     # run_meet()'s `if (length(TRAIN_TIERS))` check runs on
                     # every worker regardless of the value, so the binding must
                     # exist even when empty -- the same reason FAMILY_DEBIAS is
