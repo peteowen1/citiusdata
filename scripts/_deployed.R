@@ -270,7 +270,28 @@ DEPLOYED <- list(
   #
   # `estimate_ability()` still emits `recent_mean` -- it is the ingredient, and
   # the diagnostics need it. Nothing consumes it while this is 0.
-  marks_blend = 0
+  marks_blend = 0,
+
+  # RACES-SINCE DECAY: not promoted. Inf is off, which is what runs today.
+  #
+  # A result carries half weight once the athlete has run this many more races
+  # in the event, on top of the calendar `half_life`. Measured on 2024+ held out
+  # against a like-for-like last-5 baseline, 44 events:
+  #
+  #   half_life 365, races Inf   28 of 44   MAE 2.1487   <- deployed
+  #   half_life 730, races Inf   17 of 44   MAE 2.2420
+  #   half_life 365, races 5     36 of 44   MAE 2.0939
+  #   half_life 730, races 5     37 of 44   MAE 2.0791
+  #
+  # PROMOTE THE PAIR OR NEITHER. 730 alone is much worse than the deployed 365,
+  # because a 365-day half-life had been doing two jobs -- discounting stale
+  # form, and crudely capping how many results accumulate. Only once races-since
+  # handles the second can the calendar decay relax to its real value.
+  #
+  # Blocked on the medal arm: this changes `ability`, so it moves finishing
+  # orders, and nothing about marks licenses that.
+  # docs/reviews/marks-blend-2026-09-07.md
+  races_half_life = Inf
 )
 Sys.setenv(CITIUS_MARKS_BLEND = as.character(DEPLOYED$marks_blend))
 
@@ -415,6 +436,7 @@ deployed_ability <- function(past, as_of, calibration,
   hl_map <- DEPLOYED$hl_family
   if (!length(hl_map)) {
     return(estimate_ability(past, as_of = as_of, half_life = DEPLOYED$half_life,
+                            races_half_life = DEPLOYED$races_half_life,
                             calibration = calibration))
   }
   reg_f <- data.table::as.data.table(citius_events()[, c("event_id", "family")])
@@ -438,6 +460,7 @@ deployed_ability <- function(past, as_of, calibration,
     fam <- g$family[1]
     hl <- if (!is.na(fam) && fam %in% names(hl_map)) hl_map[[fam]] else DEPLOYED$half_life
     estimate_ability(g[, !"family"], as_of = as_of, half_life = hl,
+                     races_half_life = DEPLOYED$races_half_life,
                      calibration = calibration,
                      adjust_race = isTRUE(DEPLOYED$adjust_race))
   }), fill = TRUE)

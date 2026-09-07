@@ -38,6 +38,13 @@ MARKS_ONLY <- .env_int("CITIUS_BT_MARKS_ONLY", "0") == 1
 # because it skips simulate_event(), which is where the blend normally happens.
 MARKS_BLEND <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_MARKS_BLEND", "0")))
 if (!is.finite(MARKS_BLEND) || MARKS_BLEND < 0 || MARKS_BLEND > 1) MARKS_BLEND <- 0
+# RACES-SINCE DECAY. Inf is off and is the default, so an arm that does not set
+# it is bit-identical to before. It is NOT independent of the calendar
+# half-life: 365 days had been standing in for a cap on how many results
+# accumulate, so with this on the calendar half-life wants roughly 730. Set both
+# or neither -- 730 alone is much worse than the deployed 365.
+RACES_HALF_LIFE <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_RACES_HALF_LIFE", "Inf")))
+if (is.na(RACES_HALF_LIFE) || RACES_HALF_LIFE <= 0) RACES_HALF_LIFE <- Inf
 MAX_PER_RUN <- .env_int("CITIUS_BT_MEETS", "25")
 # History depth per refit. TWELVE YEARS, and do not shorten it on the argument
 # that old marks carry negligible weight.
@@ -701,6 +708,7 @@ arm_fingerprint <- list(
   # review before this shipped.
   marks_only = MARKS_ONLY,
   marks_blend = MARKS_BLEND,
+  races_half_life = RACES_HALF_LIFE,
   sel_shrink = if (is.na(SEL_SHRINK)) "" else format(SEL_SHRINK),
   sel_sigma = SEL_SIGMA)
 
@@ -981,6 +989,7 @@ run_meet <- function(i) {
   ability <- if (is.null(hl_map)) {
     tick("ability", estimate_ability(past, as_of = cut_date,
                                      half_life = half_life,
+                                     races_half_life = RACES_HALF_LIFE,
                                      calibration = calibration,
                                      adjust_context = ADJUST_CONTEXT,
                                      adjust_race = ADJUST_RACE,
@@ -1053,6 +1062,7 @@ run_meet <- function(i) {
       hl <- if (!is.na(g$family[1]) && g$family[1] %in% names(hl_map))
         hl_map[[g$family[1]]] else half_life
       estimate_ability(g[, !"family"], as_of = cut_date, half_life = hl,
+                       races_half_life = RACES_HALF_LIFE,
                        calibration = calibration, adjust_context = ADJUST_CONTEXT,
                        adjust_race = ADJUST_RACE, sigma_mode = SIGMA_MODE, sigma_parts = SIGMA_PARTS,
                        only = only_ids,
@@ -1435,7 +1445,8 @@ if (N_WORKERS > 1L) {
                     # also runs on every worker unconditionally.
                     # MARKS_BLEND for the same reason: the MARKS_ONLY branch
                     # reads it on every worker whatever its value.
-                    "FAMILY_DEBIAS", "MARKS_ONLY", "MARKS_BLEND", "COND_CONTEXT",
+                    "FAMILY_DEBIAS", "MARKS_ONLY", "MARKS_BLEND", "RACES_HALF_LIFE",
+                    "COND_CONTEXT",
                     # run_meet()'s `if (length(TRAIN_TIERS))` check runs on
                     # every worker regardless of the value, so the binding must
                     # exist even when empty -- the same reason FAMILY_DEBIAS is
