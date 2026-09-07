@@ -63,9 +63,40 @@ cli::cli_alert_success("Calendar: {nrow(cal)} meet{?s}, {cal[state=='upcoming', 
 # deployed calibration was promoted on 4 September and a card built against a
 # superseded config should not be republished. A freshly built one passes.
 #
-# So build Birmingham when its card is here, skip it when it is not, and carry
-# its manifest block forward either way (see the manifest section) — a partial
-# publish must never unpublish a meet from the site.
+# So build Birmingham when this run asks for it and its card is here, skip it
+# otherwise, and carry its manifest block forward either way (see the manifest
+# section) — a partial publish must never unpublish a meet from the site.
+
+# --- which meets this run publishes -------------------------------------------
+# Optional meet ids on the command line. With none, every meet whose card is on
+# disk is rebuilt, which is what the laptop has always done. With one or more,
+# only those are built and every other meet is left exactly as published.
+#
+# WHY PRESENCE ALONE IS NOT ENOUGH. A card that cannot pass its own sanity
+# script aborts this whole run, so one un-republishable meet blocks every other
+# meet's publish. birmingham2026 is in that state today: it was built in August
+# and the calibration was promoted on 4 September, so its gate correctly refuses
+# to republish it. Without a selector that single fact stops Brussels and
+# Budapest from reaching the site — on a runner AND on the laptop, where the
+# stale card also sits in data/.
+#
+# File presence answers "could this be built", never "was this asked for". The
+# two only ever agreed by accident, on a machine that happened to hold every
+# card and no bad ones.
+SEL <- commandArgs(trailingOnly = TRUE)
+SEL <- SEL[nzchar(SEL)]
+if (length(SEL)) {
+  unknown <- setdiff(SEL, cal$meet_id)
+  # A typo would otherwise select nothing, build nothing, and still write and
+  # upload a manifest: a no-op publish reported as a success.
+  if (length(unknown)) {
+    cli::cli_abort(c("Unknown meet id(s): {.val {unknown}}",
+                     i = "Known: {.val {cal$meet_id}}"))
+  }
+  cli::cli_alert_info("Publishing only: {.val {SEL}}")
+}
+wanted <- function(mid) length(SEL) == 0L || mid %in% SEL
+
 # Shared by every meet's card, so defined BEFORE the Birmingham block rather
 # than inside it. Both used to live in there, which meant skipping Birmingham
 # took the finals-only loop down with it ("object 'KEEP' not found") — the same
@@ -89,10 +120,10 @@ KEEP <- c("event_id", "discipline", "sex", "athlete_id", "athlete", "nation",
 orient <- as.data.table(citius_events())[, .(event_id, orientation, family)]
 
 BHAM_CARD  <- file.path(D, "birmingham2026_pretournament.rds")
-BHAM_BUILD <- file.exists(BHAM_CARD)
+BHAM_BUILD <- wanted("birmingham2026") && file.exists(BHAM_CARD)
 if (!BHAM_BUILD) {
   cli::cli_alert_info(
-    "birmingham2026: no card in data/ — skipping its artefacts; its manifest block is carried forward.")
+    "birmingham2026: not built this run — skipping its artefacts; its manifest block is carried forward.")
 }
 
 if (BHAM_BUILD) {
@@ -265,6 +296,7 @@ artefacts <- list(
 DL_MEETS <- c("brussels2026", "budapest2026")
 
 for (mid in DL_MEETS) {
+  if (!wanted(mid)) { cli::cli_alert_info("{mid}: not selected this run, skipping."); next }
   cf <- file.path(D, sprintf("%s_pretournament.rds", mid))
   if (!file.exists(cf)) { cli::cli_alert_info("{mid}: no card built yet, skipping."); next }
 

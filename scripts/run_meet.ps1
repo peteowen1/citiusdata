@@ -64,7 +64,7 @@ $STEPS = switch ($MeetId) {
       @{ n = "build rounds";      f = "build_birmingham_rounds.R" },
       @{ n = "predict";           f = "predict_birmingham2026.R" },
       @{ n = "sanity";            f = "sanity_birmingham_card.R" },
-      @{ n = "export + publish";  f = "export_athletics_blog.R" }
+      @{ n = "export + publish";  f = "export_athletics_blog.R";    a = @($MeetId) }
     )
   }
   # The finals-only shape. Every script it needs was written on 2026-08-31 and
@@ -86,7 +86,7 @@ $STEPS = switch ($MeetId) {
       @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("budapest2026") },
       @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("budapest2026") },
       @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("budapest2026") },
-      @{ n = "export + publish"; f = "export_athletics_blog.R" }
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
     )
   }
   "brussels2026" {
@@ -95,7 +95,7 @@ $STEPS = switch ($MeetId) {
       @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("brussels2026") },
       @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("brussels2026") },
       @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("brussels2026") },
-      @{ n = "export + publish"; f = "export_athletics_blog.R" }
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
     )
   }
   default {

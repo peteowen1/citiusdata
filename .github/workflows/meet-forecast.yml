@@ -162,7 +162,7 @@ jobs:
           # wrong meet.
           case "$MEET_ID" in
             birmingham2026)
-              STEPS="parse_birmingham_entries.R resolve_birmingham_athletes.R build_birmingham_rounds.R predict_birmingham2026.R sanity_birmingham_card.R export_athletics_blog.R"
+              STEPS="parse_birmingham_entries.R resolve_birmingham_athletes.R build_birmingham_rounds.R predict_birmingham2026.R sanity_birmingham_card.R export_athletics_blog.R:birmingham2026"
               ;;
             budapest2026)
               # Only Budapest has a fetch step: World Athletics answers its
@@ -170,10 +170,10 @@ jobs:
               # error for Diamond League ids. It needs CITIUS_WA_GRAPHQL_KEY;
               # without that secret, dispatch with skip_entries and the chain
               # runs on the published field instead.
-              STEPS="fetch_budapest_qualification_field.R:budapest2026 resolve_diamond_league_athletes.R:budapest2026 predict_diamond_league_final.R:budapest2026 add_nation_codes.R:budapest2026 sanity_diamond_league_card.R:budapest2026 export_athletics_blog.R"
+              STEPS="fetch_budapest_qualification_field.R:budapest2026 resolve_diamond_league_athletes.R:budapest2026 predict_diamond_league_final.R:budapest2026 add_nation_codes.R:budapest2026 sanity_diamond_league_card.R:budapest2026 export_athletics_blog.R:budapest2026"
               ;;
             brussels2026)
-              STEPS="resolve_diamond_league_athletes.R:brussels2026 predict_diamond_league_final.R:brussels2026 add_nation_codes.R:brussels2026 sanity_diamond_league_card.R:brussels2026 export_athletics_blog.R"
+              STEPS="resolve_diamond_league_athletes.R:brussels2026 predict_diamond_league_final.R:brussels2026 add_nation_codes.R:brussels2026 sanity_diamond_league_card.R:brussels2026 export_athletics_blog.R:brussels2026"
               ;;
             *)
               echo "::error::No step list for '$MEET_ID'. A meet with rounds needs a Birmingham-shaped chain; a finals-only meet can usually reuse the Diamond-League one."
