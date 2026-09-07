@@ -43,6 +43,17 @@ k     <- readRDS(file.path(CACHE, "keys.rds"))
 test  <- readRDS(file.path(CACHE, "test_scored.rds"))
 b5    <- readRDS(file.path(CACHE, "base.rds"))
 par   <- readRDS(file.path(OUT, "marks_fit_params.rds"))
+# CITIUS_CUTS_PARAMS overrides any of them, e.g. "blend=0.6,hl=365,shrink=1".
+# Use it to cut the SHIPPED configuration rather than the last fitted one --
+# they differ, and a cut of the wrong model answers the wrong question.
+if (nzchar(Sys.getenv("CITIUS_CUTS_PARAMS", ""))) {
+  for (kv in strsplit(Sys.getenv("CITIUS_CUTS_PARAMS"), ",")[[1]]) {
+    p2 <- strsplit(trimws(kv), "=")[[1]]
+    stopifnot("CITIUS_CUTS_PARAMS wants name=value pairs" = length(p2) == 2L)
+    stopifnot("unknown parameter name" = p2[1] %in% names(par))
+    par[[p2[1]]] <- as.numeric(p2[2])
+  }
+}
 say("model = fitted config: blend %.2f, half-life %g, trim %.2f, shrink %.2f, adjustment %.2f",
     par$blend, par$hl, par$trim, par$shrink, par$adj)
 
