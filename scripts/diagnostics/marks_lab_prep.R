@@ -59,12 +59,30 @@ if (!file.exists(file.path(CACHE, "test.rds"))) {
                         dplyr::select(competition_id, meet_tier) |> dplyr::collect())
   ct[, competition_id := as.character(competition_id)]
   test <- merge(test, unique(ct[!is.na(meet_tier)], by = "competition_id"), by = "competition_id")
-  test <- test[meet_tier == "T1_elite" & date >= FROM & date < TO &
+  # WHICH MEET TIERS TO SCORE. T1_elite alone is the launch target -- it is what
+  # a championship forecast predicts -- but it is also tiny: 1,641 held-out
+  # finals since 2024, a median of 13 races per event, which is why 21 of 44
+  # events come back "not separated" and no amount of parameter tuning can
+  # settle them.
+  #
+  # T2_strong adds 44,944 held-out finals, 27x more, taking the median event to
+  # 233 races and the 100m M from 60 to 1,770. Its fields are smaller and weaker
+  # (7.5 athletes per race against 18.6), so it is a DIFFERENT population and
+  # must not silently become the headline metric.
+  #
+  # The design that makes it useful: fit parameters on T2, where the sample is
+  # large, and score on T1, which is the population we actually forecast. Those
+  # are disjoint, so the usual overfitting objection does not apply. The tier
+  # column survives into the cache so a scorer can split them.
+  TIERS <- trimws(strsplit(Sys.getenv("CITIUS_LAB_TIERS", "T1_elite"), ",")[[1]])
+  say("scoring meet tiers: %s", paste(TIERS, collapse = ", "))
+  test <- test[meet_tier %in% TIERS & date >= FROM & date < TO &
                  grepl("final", tolower(round)) & !grepl("semi|quarter", tolower(round))]
   reg <- as.data.table(citius_events())[, .(event_id, orientation, family)]
   test <- merge(test, reg, by = "event_id")[, act := orientation * log(mark)][is.finite(act)]
   test[, month := as.Date(format(date, "%Y-%m-01"))]
-  saveRDS(test[, .(race_key, athlete_id, event_id, family, date, month, act)], file.path(CACHE, "test.rds"))
+  saveRDS(test[, .(race_key, athlete_id, event_id, family, date, month, act, meet_tier)],
+          file.path(CACHE, "test.rds"))
   say("test set cached: %s rows, %s races, %d events, %d months",
       format(nrow(test), big.mark = ","), format(uniqueN(test$race_key), big.mark = ","),
       uniqueN(test$event_id), uniqueN(test$month))

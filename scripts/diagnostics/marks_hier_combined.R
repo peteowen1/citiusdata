@@ -41,8 +41,13 @@ test  <- readRDS(file.path(CACHE, "test_scored.rds"))
 bm    <- readRDS(file.path(CACHE, "base_m.rds"))[, .(athlete_id, event_id, month, base_m)]
 fit   <- as.list(readRDS(file.path(OUT, "marks_fit_params.rds")))
 TARGETS <- c("AT-100Metres-M", "AT-PoleVault-M", "AT-DiscusThrow-M")
-GRIDS <- list(adj = seq(0, 1.5, by = 0.25), trim = c(0, 0.1, 0.15, 0.25, 0.4))
-KAPPA <- list(adj = c(5000, 1600), trim = c(5000, 100))   # family, event; from the single-param sweeps
+GRIDS <- list(adj  = seq(0, 1.5, by = 0.25),
+              trim = c(0, 0.1, 0.15, 0.25, 0.4),
+              hl   = c(60, 90, 180, 270, 365, 540, 730, 1095))
+# family, event -- each pair is the best setting from that parameter's own sweep
+# that lost no events. rhl and shrink are NOT here: swept alone, rhl gained
+# 0.06pp and shrink was refuted outright, every family wanting the global 0.
+KAPPA <- list(adj = c(5000, 1600), trim = c(5000, 100), hl = c(5000, 400))
 
 hl_of <- function(fam) {
   v <- rep(fit$hl, length(fam)); hv <- unlist(DEPLOYED$hl_family)
@@ -61,7 +66,8 @@ predict_at <- function(maps = list()) {
     }
     v
   }
-  w <- pp$w_static * 0.5^(pp$age_days / hl_of(pp$family))
+  hlv <- if (!is.null(maps$hl)) val("hl") else hl_of(pp$family)
+  w <- pp$w_static * 0.5^(pp$age_days / hlv)
   if (is.finite(fit$rhl) && fit$rhl > 0) w <- w * 0.5^(pp$.k / fit$rhl)
   p_use <- pp$perf_raw + val("adj") * (pp$perf - pp$perf_raw)
   tv <- val("trim")
@@ -96,6 +102,7 @@ build <- function(nm) {
 }
 say("fitting the adjustment hierarchy"); A <- build("adj")
 say("fitting the trim hierarchy");       T <- build("trim")
+say("fitting the half-life hierarchy");  H <- build("hl")
 cat("\n=== what each family wants, fitted on the fit years ===\n")
 print(merge(A$family[, .(family, adj_raw = fam_v, adj_used = round(fam_shrunk, 3))],
             T$family[, .(family, trim_raw = fam_v, trim_used = round(fam_shrunk, 3))],
@@ -111,7 +118,8 @@ summarise <- function(d, label) {
 }
 cat("\n=== held out, 44 events ===\n")
 cfg <- list(flat = list(), adj_only = list(adj = A$map), trim_only = list(trim = T$map),
-            both = list(adj = A$map, trim = T$map))
+            hl_only = list(hl = H$map), both = list(adj = A$map, trim = T$map),
+            all_three = list(adj = A$map, trim = T$map, hl = H$map))
 print(rbindlist(lapply(names(cfg), function(nm) summarise(frame(cfg[[nm]])[date >= SPLIT], nm))))
 
 cat("\n=== the three target events, held out ===\n")
@@ -127,11 +135,11 @@ tgt <- rbindlist(lapply(names(cfg), function(nm) {
   }, by = event_id]
 }))
 print(dcast(tgt, event_id + races ~ config, value.var = "gap"))
-print(tgt[config == "both", .(event_id, races, gap, ci95, sep)])
+print(tgt[config == "all_three", .(event_id, races, gap, ci95, sep)])
 # --- THE RANKED SCORECARD ---------------------------------------------------
 # Every scored event under the combined hierarchy, with a PAIRED interval, so a
 # gap on 17 races cannot be read the same way as one on 400. Sorted best first.
-rank <- frame(cfg$both)[date >= SPLIT, {
+rank <- frame(cfg$all_three)[date >= SPLIT, {
   dd <- 100 * (abs(pred - act) - abs(base_m - act))
   ci <- if (.N >= 5L && stats::sd(dd) > 0) stats::t.test(dd)$conf.int else c(NA_real_, NA_real_)
   .(races = uniqueN(race_key), n = .N,
@@ -159,6 +167,7 @@ of %d scored events: %d separated in our favour, %d against, %d not separated.
             sum(rank$verdict == "LAST-5 BETTER"), sum(rank$verdict == "not separated")))
 fwrite(rank, file.path(OUT, "marks_hier_scorecard.csv"))
 
-fwrite(data.table(event_id = names(A$map), adj = unname(A$map), trim = unname(T$map)),
+fwrite(data.table(event_id = names(A$map), adj = unname(A$map), trim = unname(T$map),
+                  hl = unname(H$map[names(A$map)])),
        file.path(OUT, "marks_hier_event_params.csv"))
 say("wrote marks_hier_event_params.csv")
