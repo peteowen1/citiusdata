@@ -36,6 +36,15 @@ SPLIT <- as.Date(Sys.getenv("CITIUS_FIT_SPLIT", "2024-01-01"))
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), sprintf(...), "\n", sep = "")
 
 pairs <- readRDS(file.path(CACHE, "pairs.rds"))
+# THE CACHE'S `tactical` FLAG IS THE UNGATED ONE. It was built before
+# estimate_ability() started gating the calibration's override by family, so it
+# still marks every throw and every sprint. Fitting `trim_tactical` against it
+# would produce values tuned to a flag the package no longer sets -- the trim
+# calibrated to compensate for trimming that will not happen.
+#
+# Masked here rather than re-prepping the cache: the gate is a pure function of
+# family, so applying it to the column is exactly equivalent and costs nothing.
+pairs[, tactical := tactical & family %in% citius:::.CITIUS_TACTICAL_FAMILIES]
 k     <- readRDS(file.path(CACHE, "keys.rds"))
 test  <- readRDS(file.path(CACHE, "test_scored.rds"))
 bm    <- readRDS(file.path(CACHE, "base_m.rds"))[, .(athlete_id, event_id, month, base_m)]
@@ -110,6 +119,18 @@ if (nrow(miss)) {
   say("%d registry events had no fit data; filling with the global values", nrow(miss))
   for (nm in names(SPEC)) set(tab, which(is.na(tab[[nm]])), nm, SPEC[[nm]]$glob)
 }
+# TRIM IS UNIDENTIFIABLE WHERE THE FLAG NEVER FIRES. It is only ever read when
+# `tactical` is TRUE, and the family gate means that is never true for sprints,
+# hurdles, jumps or throws. The fit therefore sees a flat error curve for those
+# events and returns whichever grid point came first -- a number with no meaning
+# that a reader would take for a finding, and one that would go live the moment
+# the gate changed. Set them to the global value and say so.
+never_tac <- setdiff(unique(tab$family), citius:::.CITIUS_TACTICAL_FAMILIES)
+n_reset <- tab[family %in% never_tac, .N]
+tab[family %in% never_tac, trim_tactical := SPEC$trim_tactical$glob]
+say("trim_tactical reset to the global %.2f for %d events in %d families the gate never flags: %s",
+    SPEC$trim_tactical$glob, n_reset, length(never_tac), paste(never_tac, collapse = ", "))
+
 stopifnot("a parameter column is unpopulated" =
             all(vapply(names(SPEC), function(nm) all(is.finite(tab[[nm]]) | is.infinite(tab[[nm]])),
                        logical(1))))

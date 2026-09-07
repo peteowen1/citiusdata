@@ -231,6 +231,9 @@ DEPLOYED <- list(
   #   marks_blend       OFF  withdrawn 2026-09-07: blending with the baseline
   #                          is not a way to beat the baseline. See below.
   #   race_context      ON   changes spread, not centre
+  #   event_params      OFF  fitted per-event half_life, races_half_life,
+  #                          trim_tactical and context_scale. Not promoted;
+  #                          would REPLACE hl_family rather than compose with it.
   # ---------------------------------------------------------------------------
 
   # RACE SHOCK, excess strip with fitted persistence (built 2026-09-06, NOT YET
@@ -291,7 +294,26 @@ DEPLOYED <- list(
   # Blocked on the medal arm: this changes `ability`, so it moves finishing
   # orders, and nothing about marks licenses that.
   # docs/reviews/marks-blend-2026-09-07.md
-  races_half_life = Inf
+  races_half_life = Inf,
+
+  # PER-EVENT PARAMETER TABLES: fitted, NOT promoted. `NULL` is what runs.
+  #
+  # `scripts/fit_event_params.R` writes `data/event_params.rds`: one row per
+  # event carrying `half_life`, `races_half_life`, `trim_tactical` and
+  # `context_scale`, each fitted on the fit years then shrunk twice -- the event
+  # toward its family, the family toward the global value, each in proportion to
+  # its own evidence. Held out on 44 events against a like-for-like last-5
+  # baseline, the four together take pooled mark error from -6.28% to -7.57%.
+  #
+  # SETTING THIS DISABLES `hl_family` ABOVE. The table carries a half-life per
+  # event, and leaving the family override on would stack two corrections that
+  # were each fitted with the other absent -- the same shape as the debias and
+  # the strip double-counting on 2026-09-07. backtest_athletics.R enforces it;
+  # any other consumer must too.
+  #
+  # Blocked on `_run_event_params_arm.ps1`. All four move `ability`, so they
+  # move finishing orders, and marks evidence cannot license that.
+  event_params = NULL
 )
 Sys.setenv(CITIUS_MARKS_BLEND = as.character(DEPLOYED$marks_blend))
 
