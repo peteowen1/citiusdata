@@ -120,13 +120,51 @@ d[, `:=`(
   cut_disagree  = qb(abs(ability - base), 4, c("agree most", "2nd", "3rd", "disagree most"))
 )]
 
+# EVERY CUT IS REPORTED AGAINST LAST-5, AND THE COLUMN THAT MATTERS IS THE
+# DIFFERENCE. Pete, 2026-09-07: "these comparisons should always be done
+# compared to last 5 as a baseline and explain the difference to that".
+#
+# `gap` is the relative MAE difference and `excess` is the bias difference. Both
+# are model MINUS baseline, so a negative number always means the model is
+# better, in every cut, with no reading of raw columns required.
+#
+# The raw `bias_m` / `bias_b` are kept beside them only so the two lines can be
+# seen to move TOGETHER. Wind is the worked example: both predictors are blind
+# to the target race's wind -- it is not known until the race is run, so it can
+# never be an input -- and both therefore slope with it at roughly the physical
+# effect. Reading `bias_m` alone made that look like a model defect. It is not,
+# and there was never a fix available. Only `excess` says anything about the
+# model.
 summ <- function(by) {
   s <- d[, .(n = .N, athletes = uniqueN(athlete_id), model = mean(ae_m), last5 = mean(ae_b),
              bias_m = mean(se_m), bias_b = mean(se_b)), by = by]
-  s[, gap := round(100 * (model - last5) / last5, 1)]
+  s[, gap := round(100 * (model - last5) / last5, 1)]      # MAE, model vs last-5
+  s[, excess := round(bias_m - bias_b, 3)]                 # bias, model vs last-5
+  # PAIRED, because model and last-5 predict the SAME rows. The per-row
+  # difference in absolute error has far less variance than either error does,
+  # so a bin that looks decisive on the means can still be noise and a small
+  # difference can be real. Some of these bins are 60-125 rows; without this the
+  # honest answer to "is the model worse in a headwind" is unavailable.
+  ci <- d[, {
+    dd <- ae_m - ae_b
+    if (length(dd) < 5L || !is.finite(stats::sd(dd)) || stats::sd(dd) == 0) {
+      .(lo = NA_real_, hi = NA_real_)
+    } else {
+      tt <- stats::t.test(dd)
+      .(lo = tt$conf.int[1], hi = tt$conf.int[2])
+    }
+  }, by = by]
+  s <- merge(s, ci, by = by, sort = FALSE)
+  # A bin is only called if the whole interval sits one side of zero.
+  s[, verdict := data.table::fifelse(!is.finite(lo), "-",
+                 data.table::fifelse(hi < 0, "model better",
+                 data.table::fifelse(lo > 0, "last5 better", "not separated")))]
+  s[, ci95 := sprintf("[%+.3f, %+.3f]", lo, hi)]
   for (cn in c("model", "last5", "bias_m", "bias_b")) set(s, j = cn, value = round(s[[cn]], 3))
   setnames(s, by, "bin")
-  s[n >= MINN][order(-gap)]
+  setcolorder(s, c("bin", "n", "model", "last5", "gap", "ci95", "verdict",
+                   "excess", "bias_m", "bias_b"))
+  s[n >= MINN][order(-gap)][, !c("lo", "hi", "athletes")]
 }
 cuts <- grep("^cut_", names(d), value = TRUE)
 for (cn in cuts) {
