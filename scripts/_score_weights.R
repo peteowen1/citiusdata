@@ -39,15 +39,100 @@
 .WAC_SCORE_DEFAULT <- c(OW = 10, GL = 10, GW = 10, DF = 10,
                         A = 3, B = 3, C = 1, D = 1, E = 1, F = 1)
 
+# --- WEIGHTS DERIVED FROM MEASURED FIELD STRENGTH ---------------------------
+#
+# The hand-set table above is a statement of priorities. It broadly tracks field
+# strength (Spearman 0.856) but inverts two pairs: GL is weighted 10 and is
+# weaker than A at 3, and C is weighted 1 and stronger than B at 3. This derives
+# the weights from the measurement instead.
+#
+# THE METHOD IS EXPONENTIAL TILTING, which is the standard importance weight for
+# scoring one population when you sampled another:
+#
+#   w(z) = exp(beta * z)
+#
+# where z is the class's mean field strength in within-event standard deviations
+# (diagnostics/wac_class_profile.R). Exponential rather than proportional
+# because strength goes NEGATIVE -- E is -0.004 and F is -0.205 -- so w ~ z
+# would hand out negative weights, and because the weights are used
+# multiplicatively.
+#
+# BETA IS NOT A FREE PARAMETER. It is solved so the WEIGHTED MEAN STRENGTH of
+# the corpus equals the strength of the races being forecast:
+#
+#   sum(n_c * w(z_c) * z_c) / sum(n_c * w(z_c))  =  z_target
+#
+# That converts "how much is an Olympic final worth?" -- unanswerable -- into
+# "what strength of race are we predicting?", which has an answer: OW, the World
+# Championships and Olympic Games, at z = 1.256. Every weight follows.
+#
+# The n_c matter: F is 488,072 races at z = -0.205, so tilting the corpus mean
+# up to championship level takes a sharp beta, and the weights come out steeper
+# than a naive read of the strength gaps would suggest.
+.wac_strength <- c(DF = 2.036, OW = 1.256, GW = 1.042, A = 1.037, GL = 0.860,
+                   C = 0.665, B = 0.235, D = 0.205, E = -0.004, F = -0.205)
+.wac_races    <- c(DF = 248, OW = 6359, GW = 4251, A = 7523, GL = 6766,
+                   C = 20011, B = 53271, D = 50415, E = 39026, F = 488072)
+
+# THE TILT IS SET BY A CAPPED RATIO, NOT BY A TARGET MEAN.
+#
+# Solving beta so the weighted corpus mean reaches championship strength is the
+# textbook importance weight and it is unusable here: F is 488,072 races at
+# z = -0.205, so dragging the mean to OW's 1.256 needs beta = 4.27 and makes DF
+# worth 4,291x F. The objective becomes 248 races wearing a mask -- the
+# effective sample collapses and the metric measures noise.
+#
+# So beta is set by how far apart the extremes should be:
+#
+#   beta = log(ratio) / (max(z) - min(z))
+#
+# ratio = 10 keeps the span Pete asked for -- an Olympic-class race worth ten
+# club races -- while the ORDER and the SPACING come from the measurement rather
+# than from judgement. That fixes both inversions in the hand-set table: GL was
+# weighted 10 while being weaker than A at 3, and C was weighted 1 while being
+# stronger than B at 3.
+#
+# WHAT THIS CANNOT FIX, and it bounds how seriously to take the spacing: the
+# classes are not homogeneous. GL's 0.860 averages strong Diamond League meets
+# with much weaker continental championships, and the same meeting's main
+# programme has been coded GL, GW and DF in different years -- Weltklasse Zurich
+# ran as GL through 2015, GW in 2016, DF 2017-2022, GW 2023-24, DF 2025. A
+# single strength per class inherits that blur, so the ordering is trustworthy
+# and the exact gaps are not.
+wac_weights_from_strength <- function(ratio = 10, digits = 2) {
+  z <- .wac_strength
+  stopifnot("ratio must exceed 1" = is.finite(ratio) && ratio > 1)
+  beta <- log(ratio) / (max(z) - min(z))
+  w <- exp(beta * z)
+  w <- w / min(w)
+  structure(round(w, digits), beta = beta, ratio = ratio)
+}
+
+# Kept for the record: the target-mean version, which is correct in theory and
+# degenerate in practice on this corpus. Never the default.
+wac_weights_from_target <- function(z_target = 1.256) {
+  z <- .wac_strength; n <- .wac_races
+  wm <- function(b) { w <- exp(b * z); sum(n * w * z) / sum(n * w) }
+  if (z_target >= max(z)) stop("z_target must be below the strongest class.")
+  b <- stats::uniroot(function(b) wm(b) - z_target, interval = c(0, 50), tol = 1e-9)$root
+  w <- exp(b * z); w <- w / min(w)
+  structure(round(w, 2), beta = b, z_target = z_target, achieved = wm(b))
+}
+
+# CITIUS_SCORE_TARGET_Z switches to the derived weights: the strength of the
+# races being forecast, e.g. 1.256 for World Championship / Olympic level.
 wac_score_weights <- function() {
   spec <- Sys.getenv("CITIUS_SCORE_WEIGHTS", "")
-  if (!nzchar(spec)) return(.WAC_SCORE_DEFAULT)
-  kv <- strsplit(trimws(strsplit(spec, ",")[[1]]), "=")
-  bad <- vapply(kv, length, integer(1)) != 2L
-  if (any(bad)) stop("CITIUS_SCORE_WEIGHTS wants name=value pairs, comma separated.")
-  v <- stats::setNames(as.numeric(vapply(kv, `[`, "", 2)), vapply(kv, `[`, "", 1))
-  if (any(!is.finite(v) | v < 0)) stop("CITIUS_SCORE_WEIGHTS values must be finite and >= 0.")
-  v
+  if (nzchar(spec)) {
+    kv <- strsplit(trimws(strsplit(spec, ",")[[1]]), "=")
+    bad <- vapply(kv, length, integer(1)) != 2L
+    if (any(bad)) stop("CITIUS_SCORE_WEIGHTS wants name=value pairs, comma separated.")
+    v <- stats::setNames(as.numeric(vapply(kv, `[`, "", 2)), vapply(kv, `[`, "", 1))
+    if (any(!is.finite(v) | v < 0)) stop("CITIUS_SCORE_WEIGHTS values must be finite and >= 0.")
+    return(v)
+  }
+  # DEFAULT: derived from measured field strength at a 10:1 span.
+  wac_weights_from_strength(as.numeric(Sys.getenv("CITIUS_SCORE_RATIO", "10")))
 }
 
 # Cached race_key -> WAC tier. championship_results.rds is 4.5M rows and every
