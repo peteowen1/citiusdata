@@ -30,6 +30,21 @@ test  <- readRDS(file.path(CACHE, "test_scored.rds"))
 bm    <- readRDS(file.path(CACHE, "base_m.rds"))[, .(athlete_id, event_id, month, base_m)]
 fit   <- readRDS(file.path(OUT, "marks_fit_params.rds"))
 
+# THE SCORECARD IS T1 ONLY, ALWAYS. Parameters may be FITTED on T1+T2 for
+# statistical power -- T2 adds 27x the held-out races -- but the headline must
+# stay on the population a championship forecast actually predicts. T2 fields
+# average 7.5 athletes against T1's 18.6, so they are shallower and weaker, and
+# a number mixing the two is not comparable with anything measured before today.
+# Scoring one population while fitting another is the point, not a compromise:
+# the sets are disjoint, so the usual overfitting objection does not apply.
+if ("meet_tier" %in% names(test)) {
+  n_all <- nrow(test)
+  test <- test[meet_tier == "T1_elite"]
+  if (nrow(test) < n_all)
+    say("scoring T1_elite only: %s of %s rows kept",
+        format(nrow(test), big.mark = ","), format(n_all, big.mark = ","))
+}
+
 hl_of <- function(fam, hl_global, hl_map) {
   v <- rep(hl_global, length(fam))
   if (length(hl_map)) { hv <- unlist(hl_map); i <- match(fam, names(hv)); v[!is.na(i)] <- hv[i[!is.na(i)]] }

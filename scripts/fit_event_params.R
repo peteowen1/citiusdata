@@ -50,6 +50,38 @@ test  <- readRDS(file.path(CACHE, "test_scored.rds"))
 bm    <- readRDS(file.path(CACHE, "base_m.rds"))[, .(athlete_id, event_id, month, base_m)]
 fit   <- as.list(readRDS(file.path(OUT, "marks_fit_params.rds")))
 
+# --- HOW MUCH SHOULD A T2 ROW COUNT WHEN FITTING? ---------------------------
+# The T1+T2 cache has 44,944 held-out T2 finals against T1's 1,641, a 27:1
+# ratio. Fit unweighted and every parameter is a T2 parameter wearing a T1
+# label: T2 fields average 7.5 athletes against T1's 18.6, so they are shallower
+# and weaker, and the forecast targets T1.
+#
+# The knob is the weight a T2 row carries relative to a T1 row:
+#
+#   0      T1 only. What the T1-only cache has always done.
+#   0.037  equal TOTAL mass -- 1641/44944, so each tier contributes the same
+#          amount of evidence overall. The T2 rows buy stability without
+#          steering the answer.
+#   1      every row equal, which is T2 deciding everything.
+#
+# SCORING IS UNAFFECTED and stays T1-only. Fitting on one population and scoring
+# on another is the point: disjoint sets mean the usual overfitting objection
+# does not apply, and T1 stays the headline because it is what a championship
+# forecast predicts. A weight only changes which rows INFORM the parameters.
+#
+# Inert on a T1-only cache, where every row is T1 and the weight is 1 throughout.
+TIER_W <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_LAB_TIER_WEIGHT", "0.037")))
+if (!is.finite(TIER_W) || TIER_W < 0) TIER_W <- 0.037
+if (!"meet_tier" %in% names(test)) {
+  test[, meet_tier := "T1_elite"]
+  say("cache predates the meet_tier column; treating every row as T1")
+}
+test[, row_w := fifelse(meet_tier == "T1_elite", 1, TIER_W)]
+say("fit weights: %s T1 rows at 1.0, %s non-T1 rows at %.3f (effective n %.0f)",
+    format(sum(test$meet_tier == "T1_elite"), big.mark = ","),
+    format(sum(test$meet_tier != "T1_elite"), big.mark = ","),
+    TIER_W, sum(test$row_w))
+
 # grid, and the (kappa_family, kappa_event) each parameter earned on its sweep
 SPEC <- list(
   context_scale   = list(grid = seq(0, 1.5, by = 0.25),               kap = c(5000, 1600), glob = fit$adj),
@@ -87,9 +119,13 @@ predict_at <- function(nm, vals) {
 
 fit_one <- function(nm) {
   sp <- SPEC[[nm]]
+  # WEIGHTED sum of absolute error, and a weighted count, so the argmin below is
+  # the one the target population would choose rather than the one 27x more
+  # numerous T2 rows would.
   curve <- rbindlist(lapply(sp$grid, function(v) {
     predict_at(nm, rep(v, nrow(pairs)))[date < SPLIT,
-      .(v = v, sae = sum(abs(pred - act)), n = .N), by = .(event_id, family)]
+      .(v = v, sae = sum(row_w * abs(pred - act)), n = sum(row_w)),
+      by = .(event_id, family)]
   }))
   ev <- curve[, .(sae = sum(sae), n = sum(n)), by = .(event_id, family, v)]
   ev <- ev[ev[, .I[which.min(sae / n)], by = event_id]$V1][, .(event_id, family, raw = v, n_e = n)]

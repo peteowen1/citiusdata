@@ -34,6 +34,12 @@ if ($availMB -lt 12000) {
   exit 1
 }
 
+# AFTER THIS BUILD, the fit must be weighted or T2 decides everything: 44,944
+# held-out T2 finals against T1's 1,641 is 27 to 1. fit_event_params.R takes
+# CITIUS_LAB_TIER_WEIGHT, defaulting to 0.037 = 1641/44944, which gives the two
+# tiers equal TOTAL evidence -- T2 buys stability without steering the answer.
+# marks_scorecard.R scores T1 only regardless, so the headline stays comparable
+# with everything measured before today.
 $env:CITIUS_LAB_TIERS = "T1_elite,T2_strong"
 $env:CITIUS_LAB_CACHE = "marks_lab_cache_t1t2"
 $env:CITIUS_LAB_SIGMA_EVERY = "1"
