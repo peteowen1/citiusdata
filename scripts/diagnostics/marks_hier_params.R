@@ -190,5 +190,55 @@ if (nrow(dom)) {
 } else {
   cat(sprintf("no hierarchical setting matches flat's %d events while beating its MAE.\n", flat$beat))
 }
+# --- THE THREE TARGET EVENTS -------------------------------------------------
+# Pete asked twice to improve 100m M, Pole Vault M and Discus M. Their held-out
+# samples are 29, 24 and 17 races and none of their losses is separated from
+# zero, so held-out numbers alone cannot steer this. The FIT years carry
+# hundreds of races for each, so that is where the diagnosis happens; held out
+# is used only to check a fix does not break.
+TARGETS <- c("AT-100Metres-M", "AT-PoleVault-M", "AT-DiscusThrow-M")
+ev_gap <- function(pmap, win) {
+  d <- frame(pmap)
+  d <- if (win == "fit") d[date < SPLIT] else d[date >= SPLIT]
+  d[event_id %in% TARGETS, {
+    dd <- 100 * (abs(pred - act) - abs(base_m - act))
+    ci <- if (.N >= 5L && stats::sd(dd) > 0) stats::t.test(dd)$conf.int else c(NA_real_, NA_real_)
+    .(window = win, races = uniqueN(race_key), n = .N,
+      gap = round(100 * (mean(abs(pred - act)) - mean(abs(base_m - act))) /
+                    mean(abs(base_m - act)), 2),
+      ci95 = sprintf("[%+.3f, %+.3f]", ci[1], ci[2]),
+      sep = data.table::fifelse(!is.finite(ci[1]), "-",
+            data.table::fifelse(ci[2] < 0, "model", data.table::fifelse(ci[1] > 0, "LAST5", "no"))))
+  }, by = event_id]
+}
+cat(sprintf("
+=== the three target events: what does %s do for them? ===
+", PARAM))
+flat_map <- stats::setNames(rep(fit[[PARAM]], uniqueN(pairs$event_id)), unique(pairs$event_id))
+cat("
+-- flat (what we run) --
+")
+print(rbind(ev_gap(flat_map, "fit"), ev_gap(flat_map, "held")))
+if (exists("dom") && nrow(dom)) {
+  bm2 <- compose(dom[1]$kappa_family, dom[1]$kappa_event)
+  cat(sprintf("
+-- hierarchical (kappa_family %s, kappa_event %s) --
+",
+              format(dom[1]$kappa_family), format(dom[1]$kappa_event)))
+  print(rbind(ev_gap(bm2, "fit"), ev_gap(bm2, "held")))
+  cat("
+value used for each target:
+")
+  print(data.table(event_id = TARGETS, flat = fit[[PARAM]],
+                   hierarchical = round(unname(bm2[TARGETS]), 3),
+                   raw_fit = ev_raw$ev_v[match(TARGETS, ev_raw$event_id)],
+                   fit_rows = ev_raw$n_e[match(TARGETS, ev_raw$event_id)]))
+}
+cat("
+-- what each target wants on its OWN, swept on the fit years --
+")
+own <- curve[event_id %in% TARGETS, .(mae = sum(sae) / sum(n)), by = .(event_id, v)]
+print(dcast(own, event_id ~ v, value.var = "mae"))
+
 fwrite(res, file.path(OUT, sprintf("marks_hier_%s.csv", PARAM)))
 say("wrote marks_hier_%s.csv", PARAM)
