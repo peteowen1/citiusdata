@@ -148,13 +148,31 @@ wac_score_weights <- function() {
   wac_weights_from_target(if (nzchar(zt)) as.numeric(zt) else 1.0)
 }
 
-# Cached race_key -> WAC tier. championship_results.rds is 4.5M rows and every
-# scorer needs the same two columns from it, so it is read once and kept.
+# Cached race_key -> WAC class, returned as `race_tier`.
+#
+# THE COLUMN IS RENAMED ON READ, ON PURPOSE. The corpus stores it as `tier`, and
+# a bare `tier` is ambiguous in this codebase because two unrelated
+# classifications share the word:
+#
+#   meet_tier   the CATALOGUE's rating of a MEETING: T1_elite, T2_strong,
+#               T3_development. What the lab's test set is filtered on.
+#   race_tier   the World Athletics category of a RACE: OW, GL, GW, DF, A-F.
+#               What the scoring weights use.
+#
+# They cross: a T1_elite meeting contains races of several WAC classes. Weltklasse
+# Zurich's Diamond League disciplines are race_tier GW while its supporting
+# programme is race_tier F, and both sit inside meet_tier T1_elite. Ninety of the
+# 849 held-out races in the "elite" test set are race_tier F for exactly that
+# reason.
+#
+# The stored column keeps its name -- renaming it would invalidate a 7.5M-row
+# parquet store and every cached artefact -- so the disambiguation happens here,
+# at the one place every scorer reads it.
 .race_tier_lookup <- function(out_dir) {
   f <- file.path(out_dir, "race_tier.rds")
   if (file.exists(f)) return(readRDS(f))
   ch <- data.table::setDT(readRDS(file.path(out_dir, "championship_results.rds")))
-  lk <- unique(ch[, .(race_key, tier)], by = "race_key")
+  lk <- unique(ch[, .(race_key, race_tier = tier)], by = "race_key")
   rm(ch); invisible(gc())
   saveRDS(lk, f)
   lk
@@ -166,11 +184,15 @@ wac_score_weights <- function() {
 # unweighted one with nothing to say which had happened.
 attach_score_weight <- function(d, out_dir, quiet = FALSE) {
   w <- wac_score_weights()
-  if (!"tier" %in% names(d)) {
+  # Accept a legacy `tier` column but work in `race_tier` from here on, so no
+  # caller downstream has to guess which classification it is holding.
+  if ("tier" %in% names(d) && !"race_tier" %in% names(d))
+    data.table::setnames(d, "tier", "race_tier")
+  if (!"race_tier" %in% names(d)) {
     d <- merge(d, .race_tier_lookup(out_dir), by = "race_key", all.x = TRUE)
   }
-  d[is.na(tier), tier := "unknown"]
-  j <- match(d$tier, names(w))
+  d[is.na(race_tier), race_tier := "unknown"]
+  j <- match(d$race_tier, names(w))
   d[, sw := data.table::fifelse(is.na(j), 1, unname(w[j]))]
   # NORMALISED TO MEAN 1, which matters more than it looks.
   #
@@ -188,7 +210,8 @@ attach_score_weight <- function(d, out_dir, quiet = FALSE) {
   mw <- mean(d$sw)
   if (is.finite(mw) && mw > 0) d[, sw := sw / mw]
   if (!quiet) {
-    s <- d[, .(races = data.table::uniqueN(race_key), weight = data.table::first(sw)), by = tier]
+    s <- d[, .(races = data.table::uniqueN(race_key), weight = data.table::first(sw)),
+           by = race_tier]
     data.table::setorder(s, -weight, -races)
     cat("scoring weights in force:\n")
     print(s)
