@@ -45,6 +45,27 @@ if (!is.finite(MARKS_BLEND) || MARKS_BLEND < 0 || MARKS_BLEND > 1) MARKS_BLEND <
 # or neither -- 730 alone is much worse than the deployed 365.
 RACES_HALF_LIFE <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_RACES_HALF_LIFE", "Inf")))
 if (is.na(RACES_HALF_LIFE) || RACES_HALF_LIFE <= 0) RACES_HALF_LIFE <- Inf
+
+# PER-EVENT PARAMETER TABLES, from scripts/fit_event_params.R. One artefact
+# carrying half_life, races_half_life, trim_tactical and context_scale per
+# event, each fitted then shrunk twice -- event toward family, family toward
+# global -- so a thin event inherits rather than invents.
+#
+# When set, it REPLACES the per-family half-life map. The table already carries
+# a half-life per event, and running both would apply the family override on top
+# of values fitted with that override absent. Stated here because the two
+# compose silently rather than conflicting.
+EVENT_PARAMS <- NULL
+.ep_file <- Sys.getenv("CITIUS_EVENT_PARAMS", "")
+if (nzchar(.ep_file)) {
+  .ep_path <- if (file.exists(.ep_file)) .ep_file else file.path(OUT, .ep_file)
+  if (!file.exists(.ep_path)) cli::cli_abort("CITIUS_EVENT_PARAMS: no file at {.path {.ep_path}}.")
+  EVENT_PARAMS <- as.data.table(readRDS(.ep_path))
+  .need <- c("event_id", "half_life", "races_half_life", "trim_tactical", "context_scale")
+  .miss <- setdiff(.need, names(EVENT_PARAMS))
+  if (length(.miss)) cli::cli_abort("CITIUS_EVENT_PARAMS is missing column{?s}: {.field {.miss}}.")
+  cli::cli_inform("Per-event parameters from {.path {basename(.ep_path)}} ({nrow(EVENT_PARAMS)} events); per-family half-life map DISABLED.")
+}
 MAX_PER_RUN <- .env_int("CITIUS_BT_MEETS", "25")
 # History depth per refit. TWELVE YEARS, and do not shorten it on the argument
 # that old marks carry negligible weight.
@@ -709,6 +730,7 @@ arm_fingerprint <- list(
   marks_only = MARKS_ONLY,
   marks_blend = MARKS_BLEND,
   races_half_life = RACES_HALF_LIFE,
+  event_params = if (nzchar(Sys.getenv("CITIUS_EVENT_PARAMS", ""))) Sys.getenv("CITIUS_EVENT_PARAMS") else NA_character_,
   sel_shrink = if (is.na(SEL_SHRINK)) "" else format(SEL_SHRINK),
   sel_sigma = SEL_SIGMA)
 
@@ -986,10 +1008,19 @@ run_meet <- function(i) {
                 age_warn = local_age_warn, nofam = local_nofam,
                 shock_applied = local_shock_applied))
   }
+  # The event-params table drives the single-call path: it carries a half-life
+  # per event, so the per-family split has nothing to add.
+  if (!is.null(EVENT_PARAMS)) hl_map <- NULL
   ability <- if (is.null(hl_map)) {
     tick("ability", estimate_ability(past, as_of = cut_date,
-                                     half_life = half_life,
-                                     races_half_life = RACES_HALF_LIFE,
+                                     half_life = if (is.null(EVENT_PARAMS)) half_life else
+                                       EVENT_PARAMS[, .(event_id, family, half_life)],
+                                     races_half_life = if (is.null(EVENT_PARAMS)) RACES_HALF_LIFE else
+                                       EVENT_PARAMS[, .(event_id, family, races_half_life)],
+                                     context_scale = if (is.null(EVENT_PARAMS)) 1 else
+                                       EVENT_PARAMS[, .(event_id, family, context_scale)],
+                                     trim_tactical = if (is.null(EVENT_PARAMS)) 0.25 else
+                                       EVENT_PARAMS[, .(event_id, family, trim_tactical)],
                                      calibration = calibration,
                                      adjust_context = ADJUST_CONTEXT,
                                      adjust_race = ADJUST_RACE,
@@ -1446,6 +1477,7 @@ if (N_WORKERS > 1L) {
                     # MARKS_BLEND for the same reason: the MARKS_ONLY branch
                     # reads it on every worker whatever its value.
                     "FAMILY_DEBIAS", "MARKS_ONLY", "MARKS_BLEND", "RACES_HALF_LIFE",
+                    "EVENT_PARAMS",
                     "COND_CONTEXT",
                     # run_meet()'s `if (length(TRAIN_TIERS))` check runs on
                     # every worker regardless of the value, so the binding must
