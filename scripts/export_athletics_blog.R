@@ -388,16 +388,26 @@ for (mid in DL_MEETS) {
   # final has no heats to explain. The caveats are this shape's, not
   # Birmingham's — no draw, no advancement, no round-level byes exist here, so
   # repeating those three would be describing a meet that is not happening.
+  fld_type <- as.character(unique(dcard$field_type)[1])
   dl_blocks[[mid]] <- list(
     events_modelled = uniqueN(dcard$event_id),
     athletes = uniqueN(dcard$athlete_id),
     cutoff = as.character(unique(dcard$cutoff)[1]),
     counts_source = "single_final",
-    field_type = as.character(unique(dcard$field_type)[1]),
+    field_type = fld_type,
     field_source = as.character(unique(dcard$field_source)[1]),
     caveats = c(
       "One straight final per event: every entrant is in the final by definition, so a 100% final probability is the shape of the meet, not a model output.",
       "The field is the declared start list as at the cutoff. Late withdrawals and additions are not modelled.",
+      # A PROVISIONAL field has to say so ON THE PAGE. The fact was already
+      # carried, precisely, in `field_source` - and `field_source` is a data
+      # column the meet page never renders, so a reader saw a card with no hint
+      # that its start list was known to be superseded. Something true in a
+      # column nobody displays is not something the reader has been told.
+      if (grepl("provisional", fld_type, ignore.case = TRUE))
+        paste("The field is PROVISIONAL: it is the qualification standings as at the cutoff,",
+              "and later results can still displace entrants. Treat the names as likely, not settled.")
+      else NULL,
       "Predicted marks are a typical performance, not a peak.",
       CAVEAT_PEAK))
 

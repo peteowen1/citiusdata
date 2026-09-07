@@ -25,10 +25,14 @@ name: Meet forecast
 # finals-only shape needs was written on 2026-08-31 and none of them was ever
 # named in a step list.
 #
-# PUBLISHING IS OFF until the Cloudflare secrets exist on this repo (it has
-# none today). Without them the chain runs end to end and writes its artefacts
-# as a build artifact, which is enough to prove the plumbing; with them, drop
-# the skip and it publishes. That is one line, deliberately.
+# PUBLISHING IS LIVE as of 2026-09-07. A successful run uploads the meet's
+# artefacts and the manifest to R2, and the site reads them within the
+# five-minute cache. The artefacts are still collected as a build artifact, so
+# a run can be inspected after the fact.
+#
+# The upload is the LAST thing the chain does and it only happens if every step
+# before it passed, so a failed run publishes nothing at all rather than half a
+# card. That is the property to preserve if this workflow is ever edited.
 
 on:
   workflow_dispatch:
@@ -146,11 +150,17 @@ jobs:
 
       - name: Run the forecast chain
         env:
-          # No Cloudflare secrets on this repo yet, so the publish step inside
-          # export_athletics_blog.R is skipped and the artefacts are collected
-          # below instead. Remove this line once the secrets are set and the
-          # same run will publish.
-          CITIUS_SKIP_UPLOAD: "1"
+          # Publishing is LIVE as of 2026-09-07: CLOUDFLARE_API_TOKEN and
+          # CLOUDFLARE_ACCOUNT_ID are set on this repo, so export_athletics_blog.R
+          # uploads to R2 rather than writing to blog/ and stopping. wrangler
+          # reads both from the environment.
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # The World Athletics key the Budapest fetch needs. Absent today, and
+          # the fetch step is skipped by dispatching with skip_entries, which
+          # runs the chain on the published field snapshot instead. Set the
+          # secret and dispatch WITHOUT skip_entries to forecast a current field.
+          CITIUS_WA_GRAPHQL_KEY: ${{ secrets.CITIUS_WA_GRAPHQL_KEY }}
           MEET_ID: ${{ inputs.meet_id }}
           SKIP_ENTRIES: ${{ inputs.skip_entries }}
         run: |
