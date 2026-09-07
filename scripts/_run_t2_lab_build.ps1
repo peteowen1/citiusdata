@@ -25,12 +25,27 @@ Set-Location "C:\dev\citiusverse"
 $LOG = "C:\dev\citiusverse\citiusdata\t2_lab_build_log.txt"
 "=== START $(Get-Date) ===" | Out-File -Append -Encoding utf8 $LOG
 
-# Same 12 GB gate as the medal arm, measured from three OOM kills on 2026-09-07.
+# THE GATE IS 3 GB HERE, NOT THE ARM'S 12, AND THAT IS A CORRECTION.
+#
+# The 12 GB figure was measured from the medal ARM, which OOM-died twice, and
+# then applied to this script because both are "the heavy job". They are not the
+# same shape. The arm holds a full simulation per meet across 394 meets; this
+# reads the parquet store once and then loops months, caching each one, and an
+# equivalent T1 build has already completed on this machine. There was never
+# evidence this needed 12 GB -- the number was inherited, and inheriting a
+# threshold is how a job sits blocked for hours on a constraint it does not have.
+#
+# So: a floor low enough to start, plus RSS logging per pass, so the real
+# requirement is MEASURED rather than assumed. Resumable by month means a kill
+# costs one month, which is what makes trying it cheap.
 $availMB = (Get-Counter '\Memory\Available MBytes').CounterSamples.CookedValue
 "available memory at start: $availMB MB" | Out-File -Append -Encoding utf8 $LOG
-if ($availMB -lt 12000) {
-  "!!! only $availMB MB available, need 12000. NOT STARTING." | Out-File -Append -Encoding utf8 $LOG
-  Write-Host "Refusing to start: $availMB MB available, need 12000."
+# 1.2 GB. The prep is now chunked by family, so peak is the largest single
+# family rather than the whole corpus, and the run reports its own peak RSS so
+# this floor stops being a guess after the first pass.
+if ($availMB -lt 1200) {
+  "!!! only $availMB MB available, need 1200. NOT STARTING." | Out-File -Append -Encoding utf8 $LOG
+  Write-Host "Refusing to start: $availMB MB available, need 1200."
   exit 1
 }
 
@@ -48,8 +63,23 @@ $env:CITIUS_LAB_SIGMA_EVERY = "1"
 # last left off; the loop exists because a kill mid-month is the expected
 # failure, not an unexpected one.
 for ($i = 1; $i -le 12; $i++) {
-  "--- prep pass $i, $(Get-Date) ---" | Out-File -Append -Encoding utf8 $LOG
-  & Rscript "citiusdata\scripts\diagnostics\marks_lab_prep.R" 2>&1 | Out-File -Append -Encoding utf8 $LOG
+  $free0 = [math]::Round((Get-Counter '\Memory\Available MBytes').CounterSamples.CookedValue)
+  "--- prep pass $i, $(Get-Date), available ${free0} MB ---" | Out-File -Append -Encoding utf8 $LOG
+  $job = Start-Process -FilePath "Rscript" -ArgumentList "citiusdata\scripts\diagnostics\marks_lab_prep_chunked.R" `
+                       -PassThru -NoNewWindow -RedirectStandardOutput "$LOG.pass$i" -RedirectStandardError "$LOG.pass$i.err"
+  # Watch peak working set, so the next run knows what this actually costs
+  # rather than inheriting a number from a different job.
+  $peak = 0
+  while (-not $job.HasExited) {
+    Start-Sleep -Seconds 10
+    try { $job.Refresh(); $m = [math]::Round($job.WorkingSet64/1MB) } catch { $m = 0 }
+    if ($m -gt $peak) { $peak = $m }
+  }
+  Get-Content "$LOG.pass$i" -ErrorAction SilentlyContinue | Out-File -Append -Encoding utf8 $LOG
+  Get-Content "$LOG.pass$i.err" -ErrorAction SilentlyContinue | Out-File -Append -Encoding utf8 $LOG
+  Remove-Item "$LOG.pass$i", "$LOG.pass$i.err" -ErrorAction SilentlyContinue
+  "    pass $i exit $($job.ExitCode), PEAK RSS ${peak} MB" | Out-File -Append -Encoding utf8 $LOG
+  Write-Host "pass $i exit $($job.ExitCode), peak RSS ${peak} MB" 
   if (Select-String -Path $LOG -Pattern "PREP COMPLETE" -Quiet) { break }
   Start-Sleep -Seconds 60
 }
