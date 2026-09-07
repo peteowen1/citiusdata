@@ -49,12 +49,15 @@ if ($availMB -lt 1200) {
   exit 1
 }
 
-# AFTER THIS BUILD, the fit must be weighted or T2 decides everything: 44,944
-# held-out T2 finals against T1's 1,641 is 27 to 1. fit_event_params.R takes
-# CITIUS_LAB_TIER_WEIGHT, defaulting to 0.037 = 1641/44944, which gives the two
-# tiers equal TOTAL evidence -- T2 buys stability without steering the answer.
-# marks_scorecard.R scores T1 only regardless, so the headline stays comparable
-# with everything measured before today.
+# THE FIT IS ALREADY WEIGHTED BY WAC CLASS, and that alone is most of what T2
+# needs offsetting against: measured 2026-09-08, T1_elite's WAC-weighted mass
+# (186,421) already exceeds T2_strong's (120,482) despite 19x fewer races, so
+# fit_event_params.R's CITIUS_LAB_TIER_WEIGHT now defaults to 1 -- every row's
+# WAC weight taken at face value. The earlier default of 0.037 (equal RACE
+# COUNT) stacked a second correction on top of one the WAC weight had already
+# made, and left T2 with 2.34% of fit weight from 95% of the races -- close to
+# nullifying the reason it was added. marks_scorecard.R's weighting is
+# unaffected either way; see fit_event_params.R's own comment for the numbers.
 $env:CITIUS_LAB_TIERS = "T1_elite,T2_strong"
 $env:CITIUS_LAB_CACHE = "marks_lab_cache_t1t2"
 $env:CITIUS_LAB_SIGMA_EVERY = "1"

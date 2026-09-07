@@ -35,21 +35,35 @@ test  <- readRDS(file.path(CACHE, "test_scored.rds"))
 bm    <- readRDS(file.path(CACHE, "base_m.rds"))[, .(athlete_id, event_id, month, base_m)]
 fit   <- readRDS(file.path(OUT, "marks_fit_params.rds"))
 
-# THE SCORECARD IS T1 ONLY, ALWAYS -- BY DEFAULT. Parameters may be FITTED on
-# T1+T2 for statistical power -- T2 adds 27x the held-out races -- but the
-# headline must stay on the population a championship forecast actually
-# predicts. T2 fields average 7.5 athletes against T1's 18.6, so they are
-# shallower and weaker, and a number mixing the two is not comparable with
-# anything measured before today. Scoring one population while fitting another
-# is the point, not a compromise: the sets are disjoint, so the usual
-# overfitting objection does not apply.
+# DEFAULT IS T1+T2 TOGETHER, WAC-WEIGHTED, AS OF 2026-09-08 -- reversed from
+# the original T1-only default. The reasoning that made T1-only the headline
+# was that T2 fields are shallower and weaker (7.5 athletes vs T1's 18.6), so
+# scoring them together would mix two different populations. That reasoning
+# is right about the population difference and wrong about the fix: WAC class
+# weighting already discounts a weak field's races almost to nothing (a
+# T1_elite/OW row outweighs a T2_strong/F row 5,454:1 -- see
+# fit_event_params.R's TIER_W comment for the fit-side version of this same
+# measurement), so a WAC-weighted score across T1+T2 is not "mixing two
+# populations equally", it is scoring the SAME championship-weighted question
+# fitting already asks, just with the T1-only population's crippling sample
+# size problem removed: the men's 100m holdout goes from 55-60 T1-only races
+# to 1,644 WAC-weighted T1+T2 races. The narrow population restriction bought
+# nothing WAC weighting was not already buying, at a real cost in power.
 #
-# CITIUS_SCORE_ALL_TIERS=1 scores whatever meet_tier rows the cache holds
-# instead -- e.g. T1+T2 together, when the question is explicitly about a
-# different population than the championship headline. Never the default.
-score_all_tiers <- isTRUE(as.logical(Sys.getenv("CITIUS_SCORE_ALL_TIERS", "FALSE")))
+# CITIUS_SCORE_ALL_TIERS=FALSE (or 0) restricts back to the old T1-only
+# behaviour, for when the question is specifically and only about the
+# T1_elite population.
+#
+# ACCEPTS "0"/"1" AS WELL AS "TRUE"/"FALSE", DELIBERATELY. R's as.logical()
+# maps "1" and "0" to NA, not TRUE/FALSE -- which silently took the T1-only
+# branch earlier today when this same script was called with
+# CITIUS_SCORE_ALL_TIERS="1", because isTRUE(NA) is FALSE. Checking the
+# literal string first avoids relying on every future caller to remember
+# that "1" doesn't mean what it looks like it means.
+.sat_raw <- Sys.getenv("CITIUS_SCORE_ALL_TIERS", "TRUE")
+score_all_tiers <- toupper(.sat_raw) %in% c("1", "TRUE", "T", "YES")
 if (score_all_tiers) {
-  say("CITIUS_SCORE_ALL_TIERS=1: scoring every meet_tier in the cache, not T1 only")
+  say("scoring every meet_tier in the cache, not T1 only (CITIUS_SCORE_ALL_TIERS default)")
 } else if ("meet_tier" %in% names(test)) {
   n_all <- nrow(test)
   test <- test[meet_tier == "T1_elite"]

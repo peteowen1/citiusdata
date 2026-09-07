@@ -54,27 +54,36 @@ bm    <- readRDS(file.path(CACHE, "base_m.rds"))[, .(athlete_id, event_id, month
 fit   <- as.list(readRDS(file.path(OUT, "marks_fit_params.rds")))
 
 # --- HOW MUCH SHOULD A T2 ROW COUNT WHEN FITTING? ---------------------------
-# The T1+T2 cache has 44,944 held-out T2 finals against T1's 1,641, a 27:1
-# ratio. Fit unweighted and every parameter is a T2 parameter wearing a T1
-# label: T2 fields average 7.5 athletes against T1's 18.6, so they are shallower
-# and weaker, and the forecast targets T1.
+# 0.037 was chosen to equalise RACE COUNT alone (1641/44944, T1's share of the
+# combined total), reasoning that T2's 27x race-count advantage needed
+# offsetting so it could not steer the answer. That reasoning double-counted a
+# correction the WAC class weight was already making.
 #
-# The knob is the weight a T2 row carries relative to a T1 row:
+# Measured 2026-09-08 on the fit-years population: T1_elite's WAC-weighted mass
+# is 186,421 against T2_strong's 120,482 -- T1 already outweighs T2 BEFORE any
+# tier adjustment, despite having 19x fewer races, because T1 races are so much
+# more densely championship-class (T1_elite is 5% of fit-year races and 97.66%
+# of fit-year weight at the old 0.037; T2 contributed just 2.34%, close to
+# nothing). A single T1_elite/OW row outweighed a T2_strong/F row 5,454:1.
+# Stacking TIER_W on top of the WAC weight corrected an imbalance the WAC
+# weight had already fixed on its own, and came close to nullifying the entire
+# reason T2 was added -- 27x more races bought almost no stability.
+#
+# The knob is the weight a T2 row carries relative to a T1 row, on top of its
+# WAC class weight:
 #
 #   0      T1 only. What the T1-only cache has always done.
-#   0.037  equal TOTAL mass -- 1641/44944, so each tier contributes the same
-#          amount of evidence overall. The T2 rows buy stability without
-#          steering the answer.
-#   1      every row equal, which is T2 deciding everything.
+#   1      every row's WAC weight taken at face value, T2's included. Measured
+#          split: T1 60.7% / T2 39.3% of fit weight -- T1 still leads, as the
+#          forecast target, but T2 has a real voice instead of a token one.
 #
-# SCORING IS UNAFFECTED and stays T1-only. Fitting on one population and scoring
-# on another is the point: disjoint sets mean the usual overfitting objection
-# does not apply, and T1 stays the headline because it is what a championship
-# forecast predicts. A weight only changes which rows INFORM the parameters.
+# SCORING IS UNAFFECTED by this knob and applies WAC class weight alone, never
+# TIER_W, in either scoring mode (T1-only or CITIUS_SCORE_ALL_TIERS=1). A
+# weight here only changes which rows INFORM the parameters.
 #
 # Inert on a T1-only cache, where every row is T1 and the weight is 1 throughout.
-TIER_W <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_LAB_TIER_WEIGHT", "0.037")))
-if (!is.finite(TIER_W) || TIER_W < 0) TIER_W <- 0.037
+TIER_W <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_LAB_TIER_WEIGHT", "1")))
+if (!is.finite(TIER_W) || TIER_W < 0) TIER_W <- 1
 if (!"meet_tier" %in% names(test)) {
   test[, meet_tier := "T1_elite"]
   say("cache predates the meet_tier column; treating every row as T1")
