@@ -131,8 +131,21 @@ wac_score_weights <- function() {
     if (any(!is.finite(v) | v < 0)) stop("CITIUS_SCORE_WEIGHTS values must be finite and >= 0.")
     return(v)
   }
-  # DEFAULT: derived from measured field strength at a 10:1 span.
-  wac_weights_from_strength(as.numeric(Sys.getenv("CITIUS_SCORE_RATIO", "10")))
+  # DEFAULT: the target-mean tilt at z = 1.0, Pete's call on 2026-09-07.
+  #
+  # That is "score the corpus as though the average race were a strong
+  # international meet" -- between continental championships (0.860) and the
+  # World Indoors (1.042). It is a far sharper tilt than the 10:1 cap it
+  # replaces, and deliberately so: a 10:1 span barely moved the objective off
+  # unweighted, which for a project forecasting LA 2028 understates how much the
+  # championship races matter.
+  #
+  # CITIUS_SCORE_TARGET_Z moves the target; CITIUS_SCORE_RATIO switches back to
+  # the capped form; CITIUS_SCORE_WEIGHTS overrides both with a literal table.
+  zt <- Sys.getenv("CITIUS_SCORE_TARGET_Z", "")
+  rt <- Sys.getenv("CITIUS_SCORE_RATIO", "")
+  if (nzchar(rt)) return(wac_weights_from_strength(as.numeric(rt)))
+  wac_weights_from_target(if (nzchar(zt)) as.numeric(zt) else 1.0)
 }
 
 # Cached race_key -> WAC tier. championship_results.rds is 4.5M rows and every
