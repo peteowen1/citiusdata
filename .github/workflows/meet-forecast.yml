@@ -87,8 +87,16 @@ jobs:
             any::data.table
             any::arrow
             any::prettyunits
+            any::jsonlite
+            any::pdftools
           needs: |
             devtools
+        # pdftools is the one that is easy to miss and fatal: the chain's FIRST
+        # step reads the entry-list PDF with it, and it is in neither citius's
+        # DESCRIPTION nor citiusdata (which has none at all), so
+        # setup-r-dependencies would never find it. Without this line an
+        # ordinary run dies on script one with "there is no package called
+        # 'pdftools'", before anything else is exercised.
 
       - name: Download the deployed inputs
         env:
@@ -96,17 +104,40 @@ jobs:
         run: |
           cd citiusdata
           mkdir -p data
-          gh release download deployed-latest --repo peteowen1/citiusdata --dir data --clobber
+          # The manifest says what the set is. Listing the files here instead
+          # would drift: the calibration artefact is renamed on almost every
+          # promotion, so a hand-typed name would soon be checking for a file
+          # nobody publishes any more — a guard that passes because it is
+          # looking at the wrong thing.
+          gh release download deployed-latest --repo peteowen1/citiusdata \
+            --pattern deployed_inputs.json --dir /tmp --clobber
+          echo "Manifest:"; cat /tmp/deployed_inputs.json
+
+          FILES=$(jq -r '.files[]' /tmp/deployed_inputs.json)
+          if [ -z "$FILES" ]; then
+            echo "::error::deployed_inputs.json names no files — publish_deployed_inputs.R has not run, or ran wrong."
+            exit 1
+          fi
+
+          for f in $FILES; do
+            gh release download deployed-latest --repo peteowen1/citiusdata \
+              --pattern "$f" --dir data --clobber
+          done
+
           echo ""
-          ls -lh data/*.rds data/*.parquet 2>/dev/null || true
           # Fail here, named, rather than deep inside the chain: a missing
-          # corpus surfaces as an opaque error four scripts later otherwise.
-          for f in athletics_corpus.rds aging.rds championship_results.rds; do
-            if [ ! -f "data/$f" ]; then
+          # corpus or calibration surfaces as an opaque error several scripts
+          # later otherwise, after minutes of compute.
+          MISSING=0
+          for f in $FILES; do
+            if [ -f "data/$f" ]; then
+              echo "  ok  $f  ($(du -h "data/$f" | cut -f1))"
+            else
               echo "::error::Required input data/$f was not in the deployed-latest release."
-              exit 1
+              MISSING=1
             fi
           done
+          [ "$MISSING" -eq 0 ] || exit 1
 
       - name: Run the forecast chain
         env:

@@ -58,7 +58,20 @@ source(deployed_r)
 #     no database is reachable (a runner never has one), and the catalogue the
 #     history rescue-rebuild needs.
 from_deployed <- c(DEPLOYED$history_rds, DEPLOYED$calibration, DEPLOYED$aging)
-fixed <- c("championship_results.rds", "competition_catalogue.parquet")
+fixed <- c(
+  "championship_results.rds",
+  "competition_catalogue.parquet",
+  # deployed_history() has no athletics_corpus_store on a runner, so it always
+  # takes the rescue-rebuild path, which needs the catalogue above.
+  #
+  # And the export step hard-stops without this one. It is written by
+  # form_display_marks.R, which is NOT part of the meet chain — a separate,
+  # occasionally-run calibration step — so a runner can never produce it and
+  # must be handed it. Without it the chain runs all five earlier steps and
+  # then aborts at the last, which is the partial run this whole design exists
+  # to avoid, reached through a gap in the input list instead of a failure.
+  "form_display_final_calib.json"
+)
 
 files <- unique(c(from_deployed, fixed))
 paths <- file.path(data_dir, files)
@@ -110,6 +123,44 @@ for (i in seq_along(files)) {
   } else {
     cli_alert_danger("FAILED {files[i]}")
     ok <- FALSE
+  }
+}
+
+# A manifest, so the consumer does not keep its own copy of this list.
+#
+# The calibration artefact is renamed on almost every promotion
+# (calibration_corpus_wac_coast_0904 -> ..._full2 -> next), so a filename typed
+# into the workflow would drift the first time one is promoted, and the check
+# that is supposed to catch a missing input would be checking for a file nobody
+# publishes any more. The workflow reads this instead and fetches exactly what
+# is named here.
+manifest_path <- file.path(tempdir(), "deployed_inputs.json")
+writeLines(jsonlite::toJSON(list(
+  published_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
+  files = files
+), auto_unbox = TRUE, pretty = TRUE), manifest_path)
+if (system2("gh", c("release", "upload", TAG, shQuote(manifest_path),
+                    "--repo", REPO, "--clobber")) != 0) {
+  cli_alert_danger("FAILED deployed_inputs.json — the consumer cannot tell what to fetch")
+  ok <- FALSE
+} else {
+  cli_alert_success("uploaded deployed_inputs.json")
+}
+
+# Drop assets that are no longer part of the set. --clobber only replaces a
+# file of the SAME name, so every superseded calibration vintage would sit on
+# the tag for ever and the consumer's `gh release download` would pull all of
+# them, every run.
+current <- c(files, "deployed_inputs.json")
+listed <- suppressWarnings(system2("gh", c("release", "view", TAG, "--repo", REPO,
+                                           "--json", "assets", "-q", ".assets[].name"),
+                                   stdout = TRUE))
+stale <- setdiff(listed[nzchar(listed)], current)
+for (s in stale) {
+  cli_alert_info("Removing superseded asset {s}")
+  if (system2("gh", c("release", "delete-asset", TAG, shQuote(s),
+                      "--repo", REPO, "--yes")) != 0) {
+    cli_alert_warning("could not remove {s} — harmless, but it will keep being downloaded")
   }
 }
 
