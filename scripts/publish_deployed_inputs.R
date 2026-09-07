@@ -93,7 +93,20 @@ fixed <- c(
   # already here (championship_results.rds), tracked in git
   # (athletics_calendar.csv), or produced by an earlier step of the chain
   # itself (_athlete_ids.csv, _pretournament.*, _unmodelled_entrants.csv).
-  "athlete_country_codes.rds"
+  "athlete_country_codes.rds",
+  # export_athletics_blog.R reads the Birmingham card unconditionally at the
+  # top, before it reaches the finals-only loop, so a runner forecasting only
+  # Budapest died on a missing .rds after passing every sanity check. The
+  # alternative was restructuring a 380-line publishing script to make each
+  # meet independent, which is a much larger change to the last thing standing
+  # between the numbers and the public.
+  #
+  # Publishing a concluded meet's card is safe in a way publishing a live one
+  # would not be: Birmingham finished on 16 August and is scored, so this is a
+  # final artefact, not a snapshot that can go stale underneath us.
+  "birmingham2026_pretournament.rds",
+  "birmingham2026_round_structure.csv",
+  "birmingham2026_nations.parquet"
 )
 
 files <- unique(c(from_deployed, fixed))
