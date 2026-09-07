@@ -26,7 +26,7 @@ DEPLOYED <- list(
   # stamp is the only thing a reader of a published card can use to tell which
   # model produced it. Dropping the `_0904` made the stamp name a different arm
   # from the file it actually loads.
-  stamp = "2026-09-07 wac_coast_0904_full2 ctxsd strip4fam blend0.5 (debias OFF)",
+  stamp = "2026-09-07 wac_coast_0904_full2 ctxsd strip4fam (debias OFF, blend OFF)",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -228,11 +228,8 @@ DEPLOYED <- list(
   #   adjust_race       ON   strips non-persistent race shock from history;
   #                          lowers ability in sprint/hurdles/jump/throw
   #   family_debias     OFF  refuted on top of the strip, see below
-  #   marks_blend       ON   MARKS ONLY -- pulls the predicted mark toward
-  #                          recent raw form. Cannot touch a ranking or a medal
-  #                          probability, asserted in test-marks-blend.R, so it
-  #                          does not interact with the two above for placings.
-  #                          It DOES compose with them on marks.
+  #   marks_blend       OFF  withdrawn 2026-09-07: blending with the baseline
+  #                          is not a way to beat the baseline. See below.
   #   race_context      ON   changes spread, not centre
   # ---------------------------------------------------------------------------
 
@@ -254,27 +251,26 @@ DEPLOYED <- list(
   # corpus-wide ones. Judged by pit_coverage_check.R on 2024 and 2025 finals.
   race_context = list(enabled = TRUE, meet_tier = "T1_elite"),
 
-  # MARKS RECENCY BLEND (promoted 2026-09-07). estimate_ability() emits
-  # `recent_mean`, the mean of the athlete's last five RAW marks;
-  # simulate_event() centres the MARK distribution on
-  # (1 - b) * ability + b * recent_mean. The ranking keeps plain `ability`.
+  # MARKS RECENCY BLEND: OFF, and it is a diagnostic lever rather than a model
+  # component. Deployed at 0.5 on 2026-09-07 and withdrawn the same day.
   #
-  # The blend is applied at simulation time rather than stored, so it tracks
-  # whatever the backtest's aging and momentum steps do to `ability` first.
+  # Pete's objection, which is right: "You can't blend with a baseline to beat a
+  # baseline cause then you're stealing the baseline's info." A model containing
+  # last-5 cannot be honestly scored against last-5; the term does nothing for
+  # an athlete with no recent history, which is where prediction is hardest; and
+  # it could only ever touch MARKS, never the ranking. That last point was sold
+  # as a safety property and is really the tell -- a term that has to be kept
+  # away from the quantity deciding medals is a patch on a metric.
   #
-  # 0.5 is the joint optimum on both quantities the launch goal names, swept at
-  # 0.05 on the 2024+ held-out set, 44 events: lowest pooled out-of-sample mark
-  # MAE (2.0793, tied with 0.45) AND best mean per-event gap (-3.64%). Against
-  # the deployed 0: events beating a last-5 baseline 18 -> 36, pooled error
-  # -0.86% -> -4.08%. Both 100m flip.
+  # What it measured is still valuable and is now an open defect: mixing in a
+  # plain unweighted mean of five raw marks improves held-out mark error by ~4%
+  # and takes events beating that baseline from 18 of 44 to 36. So `ability` is
+  # systematically wrong as a point forecast in a way a dumb average is not.
+  # Finding and fixing THAT is the work. docs/reviews/marks-blend-2026-09-07.md.
   #
-  # Events beaten keeps climbing to 41 at 0.65, but both error metrics turn over
-  # before that, so higher buys thin events at the cost of error everywhere.
-  # docs/reviews/marks-blend-2026-09-07.md.
-  #
-  # Set through the package's own env var so a backtest arm can vary it without
-  # a second source of truth for the number.
-  marks_blend = 0.5
+  # `estimate_ability()` still emits `recent_mean` -- it is the ingredient, and
+  # the diagnostics need it. Nothing consumes it while this is 0.
+  marks_blend = 0
 )
 Sys.setenv(CITIUS_MARKS_BLEND = as.character(DEPLOYED$marks_blend))
 
