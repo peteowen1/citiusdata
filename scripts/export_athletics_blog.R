@@ -51,7 +51,52 @@ stopifnot(
 cli::cli_alert_success("Calendar: {nrow(cal)} meet{?s}, {cal[state=='upcoming', .N]} upcoming.")
 
 # --- Birmingham card ----------------------------------------------------------
-pred <- setDT(readRDS(file.path(D, "birmingham2026_pretournament.rds")))
+# PRESENT-OR-SKIPPED, not assumed. This block used to read the card
+# unconditionally, which made every meet's publish depend on Birmingham's
+# artefacts sitting on the same machine. That is invisible on the laptop, where
+# they always do, and fatal anywhere else: forecasting Budapest on a runner
+# died here with "cannot open the connection" after passing every check of its
+# own (2026-09-07).
+#
+# Shipping the August card as a CI input was the wrong fix, and its own gate
+# said so: sanity_birmingham_card.R rejected it, correctly, because the
+# deployed calibration was promoted on 4 September and a card built against a
+# superseded config should not be republished. A freshly built one passes.
+#
+# So build Birmingham when its card is here, skip it when it is not, and carry
+# its manifest block forward either way (see the manifest section) — a partial
+# publish must never unpublish a meet from the site.
+# Shared by every meet's card, so defined BEFORE the Birmingham block rather
+# than inside it. Both used to live in there, which meant skipping Birmingham
+# took the finals-only loop down with it ("object 'KEEP' not found") — the same
+# hidden coupling this change exists to remove, one level further in.
+KEEP <- c("event_id", "discipline", "sex", "athlete_id", "athlete", "nation",
+          "nation_code",
+          "p_gold", "p_medal", "p_final", "p_reach_r2", "p_reach_r3",
+          "ability", "sigma", "ability_se", "n_rounds", "field_modelled",
+          # cutoff_requested and history_max_date added 2026-09-07: `cutoff` is
+          # now clamped to the last date actually in the history, so on its own
+          # it no longer tells you whether it was clamped. These two carry the
+          # date that was asked for and the data boundary, which is what lets a
+          # page say "locked from data before X" honestly. Without them in KEEP
+          # the columns are written to data/ and then dropped here, which is
+          # what happened when the clamp first shipped.
+          "generated_at", "cutoff", "cutoff_requested", "history_max_date",
+          "config", "counts_source",
+          "combined_rows_excluded",
+          "field_type", "field_source", "field_entrants", "field_unmodelled")
+
+orient <- as.data.table(citius_events())[, .(event_id, orientation, family)]
+
+BHAM_CARD  <- file.path(D, "birmingham2026_pretournament.rds")
+BHAM_BUILD <- file.exists(BHAM_CARD)
+if (!BHAM_BUILD) {
+  cli::cli_alert_info(
+    "birmingham2026: no card in data/ — skipping its artefacts; its manifest block is carried forward.")
+}
+
+if (BHAM_BUILD) {
+pred <- setDT(readRDS(BHAM_CARD))
 st   <- fread(file.path(D, "birmingham2026_round_structure.csv"))
 
 # The card is only publishable if its own sanity script passes. Run it here
@@ -101,21 +146,6 @@ lab <- st[, .(event_id, round_index, round, races, advance, fastest_losers,
 #
 # intersect() below means a column absent for a given meet just doesn't appear:
 # Birmingham gains field_type = "official_entry_list" and skips the rest.
-KEEP <- c("event_id", "discipline", "sex", "athlete_id", "athlete", "nation",
-          "nation_code",
-          "p_gold", "p_medal", "p_final", "p_reach_r2", "p_reach_r3",
-          "ability", "sigma", "ability_se", "n_rounds", "field_modelled",
-          # cutoff_requested and history_max_date added 2026-09-07: `cutoff` is
-          # now clamped to the last date actually in the history, so on its own
-          # it no longer tells you whether it was clamped. These two carry the
-          # date that was asked for and the data boundary, which is what lets a
-          # page say "locked from data before X" honestly. Without them in KEEP
-          # the columns are written to data/ and then dropped here, which is
-          # what happened when the clamp first shipped.
-          "generated_at", "cutoff", "cutoff_requested", "history_max_date",
-          "config", "counts_source",
-          "combined_rows_excluded",
-          "field_type", "field_source", "field_entrants", "field_unmodelled")
 card <- pred[, intersect(KEEP, names(pred)), with = FALSE]
 card[, meet_id := "birmingham2026"]
 
@@ -134,7 +164,6 @@ card[, meet_id := "birmingham2026"]
 # This is a TYPICAL mark, not a peak. The model forecasts a recency-weighted
 # average and a championship final is closer to an athlete's best day, so these
 # read slightly slow by design. The page says so.
-orient <- as.data.table(citius_events())[, .(event_id, orientation, family)]
 card <- merge(card, orient, by = "event_id", all.x = TRUE)
 card[, c("pred_mark", "mark_unit") := predicted_mark(ability, orientation)]
 card[, c("orientation", "family") := NULL]
@@ -198,6 +227,12 @@ artefacts <- list(
   "birmingham2026-rounds.parquet"       = lab,
   "birmingham2026-events.parquet"       = ev,
   "birmingham2026-nations.parquet"      = nations)
+
+} else {
+  # The calendar is not Birmingham's, and every run publishes it: it is what
+  # the section's index reads to list meets at all.
+  artefacts <- list("calendar.parquet" = cal)
+}
 
 # --- Diamond League / finals-only cards ---------------------------------------
 # Birmingham's block above assumes a multi-round feed entry list: a round
@@ -334,13 +369,38 @@ CAVEAT_PEAK <- sprintf(
 cat(sprintf("mark calibration: typical beaten %.2f%%, good day %.2f%% (%s)\n",
             CALIB$typical_beaten_pct, CALIB$goodday_beaten_pct, CALIB$peak_label))
 
+# A meet's manifest block is what the site reads to know a card exists at all;
+# athletics/index.qmd shows "not forecast" without one. So a run that did not
+# rebuild a meet must CARRY ITS BLOCK FORWARD rather than omit it — omitting it
+# would silently unpublish a meet that is still live on the site, which is a
+# worse outcome than the coupling this change removes.
+#
+# The previous manifest comes from the public bucket, not from BLOG/: a runner's
+# BLOG/ is empty, and the published copy is the thing whose claims we are
+# preserving. A fetch failure is fatal by design — carrying nothing forward
+# while believing we did is how a meet would disappear quietly.
+PUBLISHED_MANIFEST <- paste0(
+  "https://pub-ee4bf5b599a047f9ac2b9facc1587008.r2.dev/", PREFIX, "/athletics-manifest.json")
+prev <- NULL
+if (!BHAM_BUILD) {
+  prev <- tryCatch(jsonlite::fromJSON(PUBLISHED_MANIFEST, simplifyVector = FALSE),
+                   error = function(e) NULL)
+  if (is.null(prev) || is.null(prev$birmingham)) {
+    cli::cli_abort(c(
+      "Skipped birmingham2026 but could not read its block from the published manifest.",
+      i = "Publishing without it would remove a meet that is currently live.",
+      i = "Source: {.url {PUBLISHED_MANIFEST}}"))
+  }
+  cli::cli_alert_info("birmingham2026: manifest block carried forward from the published manifest.")
+}
+
 manifest <- list(
   generated_at = format(NOW, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
   config = DEPLOYED$stamp,
   meets = nrow(cal),
   event_notes = EVENT_NOTES,
   mark_calibration = CALIB,
-  birmingham = list(
+  birmingham = if (!BHAM_BUILD) prev$birmingham else list(
     events_modelled = uniqueN(card$event_id),
     events_in_programme = 44L,
     unmodelled = "Marathon Race Walk (men's and women's) - no registry event_id",
