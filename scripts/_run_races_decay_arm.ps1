@@ -9,21 +9,28 @@
 # about marks licenses deploying it. This arm asks the only question that
 # matters for medals: does the ordering get better or worse?
 #
-# THE PAIR MOVES TOGETHER, ON PURPOSE. The treatment sets races_half_life 5 AND
-# a calendar half-life of 730. That is two changes in one arm, which is normally
-# exactly the mistake this repo keeps making -- and here it is the finding
-# rather than sloppiness. Measured:
+# ONE LEVER. The treatment changes races_half_life and NOTHING else -- the
+# calendar half-life stays at the deployed 365, per-family overrides included.
 #
-#   half_life 365, races Inf   28 of 44   <- control, what runs today
-#   half_life 730, races Inf   17 of 44   <- worse than control ALONE
-#   half_life 365, races 5     36 of 44
-#   half_life 730, races 5     37 of 44   <- treatment
+# An earlier draft of this arm moved the calendar half-life to 730 at the same
+# time, because the first sweep said the two had to move together. Re-measured
+# against a like-for-like baseline (diagnostics/marks_config_panel.R), they do
+# not: at races 5 the calendar half-life barely matters, and the deployed value
+# is as good as any.
 #
-# 365 days had been doing two jobs, discounting stale form and crudely capping
-# how many results accumulate. Splitting the arm would test a config nobody
-# proposes and that is known to be worse. If this arm wins, the follow-up is to
-# re-fit the per-family half-lives with races decay on, since road=1095,
-# walk=730 and hurdles=180 were all fitted without it.
+#   half_life 365, races off   19 of 35 held out   -0.34%   <- control
+#   half_life 365, races 5     28 of 35            -3.61%   <- treatment
+#   half_life 540, races 5     28 of 35            -3.80%
+#   half_life 730, races 5     28 of 35            -3.79%
+#   half_life 730, races off   11 of 35            +4.34%
+#
+# So the one-lever arm is available and there is no reason to spend a confound
+# on it. 730 only looked necessary while the comparison was unfair.
+#
+# IF THIS WINS, the follow-up is a second arm for the full fitted marks config
+# -- half-life 180, trim 0.15, shrink 0, adjustment 0.5, races 5, which reaches
+# 32 of 35 held out -- and a re-fit of the per-family half-lives, all three of
+# which were fitted with races decay off.
 #
 # FULL SIMULATION, not marks-only: the whole point is p_gold and p_medal.
 # Roughly 2.5h per arm, serial.
@@ -69,7 +76,7 @@ foreach ($v in "CITIUS_BT_FAMILY_DEBIAS", "CITIUS_BT_SHOCK_ADDBACK", "CITIUS_BT_
 # way the global 365 was.
 $arms = @(
   @{ name = "ctrl";  races = "Inf"; hl = "365" },
-  @{ name = "races"; races = "5";   hl = "730" }
+  @{ name = "races"; races = "5";   hl = "365" }
 )
 $env:CITIUS_HALF_LIFE_FAMILY = "road=1095,walk=730,hurdles=180"
 foreach ($arm in $arms) {

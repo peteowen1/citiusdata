@@ -36,6 +36,16 @@ pairs <- readRDS(file.path(CACHE, "pairs.rds"))
 k     <- readRDS(file.path(CACHE, "keys.rds"))
 test  <- readRDS(file.path(CACHE, "test_scored.rds"))
 b5    <- readRDS(file.path(CACHE, "base.rds"))
+# THE FAIR BASELINE. base.rds cuts an athlete's history at the RACE DATE; the
+# pair table cuts at the MONTH START, because ability is estimated once per
+# athlete-event-month. So base.rds had up to ~30 extra days of racing the model
+# never saw, on 92% of rows.
+#
+# This does not touch a parameter chosen by minimising the model's own MAE --
+# the baseline cancels out of that. It absolutely touches this script, whose
+# objective is built from events-beaten and excess-bias-over-the-baseline. Every
+# parameter selected here before 2026-09-07 was selected against a head start.
+bm <- readRDS(file.path(CACHE, "base_m.rds"))[, .(athlete_id, event_id, month, base_m)]
 reg_fam <- as.data.table(citius_events())[, .(event_id, family)]
 
 hl_of <- function(fam, hl_global, hl_map) {
@@ -45,6 +55,13 @@ hl_of <- function(fam, hl_global, hl_map) {
 }
 predict_at <- function(p) {
   pairs[, w := w_static * 0.5^(age_days / hl_of(family, p$hl, DEPLOYED$hl_family))]
+  # RACES-SINCE decay, the same lever as estimate_ability(races_half_life=).
+  # Inf is off. `.k` is 0 for an athlete's most recent mark in that month.
+  if (is.finite(p$rhl) && p$rhl > 0) {
+    data.table::setorder(pairs, pid, age_days)
+    pairs[, .k := seq_len(.N) - 1L, by = pid]
+    pairs[, w := w * 0.5^(.k / p$rhl)]
+  }
   pairs[, p_use := perf_raw + p$adj * (perf - perf_raw)]
   keep <- if (p$trim <= 0) rep(TRUE, nrow(pairs)) else
     !(pairs$tactical & !is.na(pairs$rk) & pairs$rk <= floor(pairs$grp_n * p$trim))
@@ -58,16 +75,18 @@ predict_at <- function(p) {
 frame <- function(p) {
   d <- merge(merge(test, predict_at(p), by = c("athlete_id", "event_id", "month")),
              b5, by = c("athlete_id", "event_id", "date"))
-  stopifnot("baseline missing on some rows" = all(is.finite(d$base)))
+  d <- merge(d, bm, by = c("athlete_id", "event_id", "month"))
+  stopifnot("a baseline is missing on some rows" = all(is.finite(d$base) & is.finite(d$base_m)))
   d
 }
 mae_of <- function(d, blend) mean(100 * abs((1 - blend) * d$pred + blend * d$base - d$act))
 ev_of  <- function(d, blend) {
   e <- d[, .(races = uniqueN(race_key), n = .N,
-             m = mean(100 * abs((1 - blend) * pred + blend * base - act)),
-             b = mean(100 * abs(base - act)),
-             bias = mean(100 * ((1 - blend) * pred + blend * base - act)),
-             bias_b = mean(100 * (base - act))), by = .(event_id, family)][races >= 10]
+             m = mean(100 * abs((1 - blend) * pred + blend * base_m - act)),
+             b = mean(100 * abs(base_m - act)),
+             b_unfair = mean(100 * abs(base - act)),
+             bias = mean(100 * ((1 - blend) * pred + blend * base_m - act)),
+             bias_b = mean(100 * (base_m - act))), by = .(event_id, family)][races >= 10]
   e[, `:=`(gap = 100 * (m - b) / b, beat = m < b)][]
 }
 # EXCESS OPTIMISM: how much more the model over-predicts than last-5 does on
@@ -77,11 +96,19 @@ ev_of  <- function(d, blend) {
 # much, so it was correcting the period, not the model).
 excess_bias <- function(e) weighted.mean(e$bias, e$n) - weighted.mean(e$bias_b, e$n)
 
-GRID <- list(blend = c(0, 0.2, 0.35, 0.5, 0.6, 0.7, 0.8, 0.9, 1),
+# BLEND IS PINNED AT 0 and is not fitted. It was withdrawn 2026-09-07: blending
+# a prediction toward the baseline it is scored against is not a way to beat
+# that baseline, and leaving it in the grid would let the descent quietly buy
+# back the same trick. CITIUS_FIT_BLEND re-opens it for a measurement only.
+GRID <- list(blend = as.numeric(strsplit(Sys.getenv("CITIUS_FIT_BLEND", "0"), ",")[[1]]),
              hl = c(30, 45, 60, 90, 180, 270, 365, 540, 730),
              trim = c(0, 0.15, 0.25, 0.4, 0.5, 0.6),
              shrink = c(0, 0.25, 0.5, 1, 2),
-             adj = as.numeric(strsplit(Sys.getenv("CITIUS_FIT_ADJ", "0.5,0.75,1"), ",")[[1]]))
+             adj = as.numeric(strsplit(Sys.getenv("CITIUS_FIT_ADJ", "0,0.25,0.5,0.75,1"), ",")[[1]]),
+             # Races-since decay. Inf is off; the marks lab measured 5 best,
+             # and it is not independent of `hl`, which is why both are in the
+             # same descent rather than fitted one after the other.
+             rhl = c(3, 5, 8, 12, 20, 40, Inf))
 # WHY THE adj GRID STOPS AT 1.0 (2026-09-07). It used to run to 1.5, and 1.5
 # won -- the highest value offered, which is the classic sign the range was
 # wrong. It is worse than useless: measured on the held-out years by
@@ -89,7 +116,7 @@ GRID <- list(blend = c(0, 0.2, 0.35, 0.5, 0.6, 0.7, 0.8, 0.9, 1),
 # 32, including both 100m. The 0.4% of pooled MAE that 1.5 buys is paid for
 # with +0.13pp of optimism, and optimism costs whole events. The per-event
 # penalty below did not catch it because it is computed on the FIT years only.
-cur <- list(blend = 0.5, hl = DEPLOYED$half_life, trim = 0.25, shrink = 1, adj = 1)
+cur <- list(blend = 0, hl = DEPLOYED$half_life, trim = 0.25, shrink = 1, adj = 1, rhl = Inf)
 cache <- new.env(parent = emptyenv())
 # THE OBJECTIVE IS PER EVENT, not pooled. Pooled MAE is dominated by the
 # high-error events (road, throw), so minimising it trades away events we win:
@@ -111,8 +138,29 @@ OBJ <- Sys.getenv("CITIUS_FIT_OBJ", "per_event")
 # the early warning is available on the fit years and this puts it in the
 # objective.
 #
-# IT IS A CONSTRAINT, NOT A PENALTY. A linear bias penalty was tried first and
-# overcorrected: at weight 40 the descent went to blend 0.90, half-life 730,
+# DEFAULT OFF (99) SINCE 2026-09-07. This constraint was a WORKAROUND for a
+# broken comparison, and once the comparison was fixed it became actively
+# harmful.
+#
+# It was added because fit-year events-beaten correlated only 0.614 with
+# held-out events beaten, so the fit window looked like a poor guide and needed
+# a bias term to keep it honest. But that correlation was measured against
+# `base.rds`, which cut an athlete's history at the RACE DATE while the model
+# was cut at the MONTH START -- a head start on 92% of rows. Against the fair
+# baseline the fit window ranks configs at Spearman **0.867**
+# (diagnostics/marks_config_panel.R), so the workaround is not needed.
+#
+# Left on, it now picks disasters. Re-run against the fair baseline with the
+# 0.25 tolerance the descent chose half-life 730 with races decay OFF, scoring
+# 11 of 35 held out where the deployed config scores 19 -- because a short
+# half-life raises optimism, the hinge punished it, and the descent fled to a
+# config its own gap-and-events terms both rejected. With the hinge off the same
+# descent finds 32 of 35.
+#
+# Set it back below 99 only with evidence that the fit window has stopped
+# tracking held out, and check the baseline before believing that evidence.
+#
+# WHAT IT REPLACED. A linear bias penalty was tried first and overcorrected: at weight 40 the descent went to blend 0.90, half-life 730,
 # which wins 30 of 35 held-out events by simply BEING the baseline -- pooled
 # MAE -0.9% against last-5 instead of -3.7%. Zero excess bias is trivially
 # achievable by not predicting anything, so bias belongs in the feasible region
@@ -123,10 +171,10 @@ OBJ <- Sys.getenv("CITIUS_FIT_OBJ", "per_event")
 # inside it. Tolerance 0.25pp of a mark -- smaller than the smallest per-event
 # MAE difference this lab can resolve, so a config inside it is one whose level
 # we cannot distinguish from the baseline's. Sensitivity is printed below.
-BIASTOL <- as.numeric(Sys.getenv("CITIUS_FIT_BIASTOL", "0.25"))
+BIASTOL <- as.numeric(Sys.getenv("CITIUS_FIT_BIASTOL", "99"))
 BIASW   <- as.numeric(Sys.getenv("CITIUS_FIT_BIASW", "200"))
 fit_mae <- function(p) {
-  key <- paste(p$hl, p$trim, p$shrink, p$adj, sep = "|")
+  key <- paste(p$hl, p$trim, p$shrink, p$adj, p$rhl, sep = "|")
   d <- get0(key, envir = cache)
   if (is.null(d)) { d <- frame(p)[date < SPLIT]; assign(key, d, envir = cache) }
   if (OBJ == "pooled") return(mae_of(d, p$blend))
@@ -144,11 +192,11 @@ for (pass in seq_len(PASSES)) {
     cur[[lv]] <- best
   }
 }
-say("chosen: blend %.2f | half-life %g | trim %.2f | shrink %.2f | adjustment %.2f",
-    cur$blend, cur$hl, cur$trim, cur$shrink, cur$adj)
+say("chosen: blend %.2f | half-life %g | trim %.2f | shrink %.2f | adjustment %.2f | races %g",
+    cur$blend, cur$hl, cur$trim, cur$shrink, cur$adj, cur$rhl)
 say("objective: %s", OBJ)
 
-dep <- list(blend = 0, hl = DEPLOYED$half_life, trim = 0.25, shrink = 1, adj = 1)
+dep <- list(blend = 0, hl = DEPLOYED$half_life, trim = 0.25, shrink = 1, adj = 1, rhl = Inf)
 d_dep <- frame(dep); d_cur <- frame(cur)
 report <- function(d, p, label, where) {
   e <- ev_of(d, p$blend)
@@ -173,12 +221,12 @@ cat("\n=== held-out events still losing ===\n")
 print(e_fit[beat == FALSE][order(-gap), .(event_id, family, races, model = round(m, 3),
                                           last5 = round(b, 3), gap = round(gap, 1))])
 cat("
-=== bias-tolerance sensitivity (tolerance was pre-registered at 0.25) ===
+=== bias-tolerance sensitivity (off by default; 0.25 picks a disaster) ===
 ")
-for (wv in c(99, 0.5, 0.35, 0.25, 0.15)) {
+for (wv in c(99, 0.5, 0.35, 0.25)) {
   BIASTOL <<- wv
   cache <- new.env(parent = emptyenv())
-  q <- list(blend = 0.5, hl = DEPLOYED$half_life, trim = 0.25, shrink = 1, adj = 1)
+  q <- list(blend = 0, hl = DEPLOYED$half_life, trim = 0.25, shrink = 1, adj = 1, rhl = Inf)
   for (pass in seq_len(PASSES)) for (lv in names(GRID)) {
     vals <- GRID[[lv]]
     q[[lv]] <- vals[which.min(vapply(vals, function(x) { z <- q; z[[lv]] <- x; fit_mae(z) }, numeric(1)))]
@@ -189,7 +237,7 @@ for (wv in c(99, 0.5, 0.35, 0.25, 0.15)) {
       wv, q$blend, q$hl, q$trim, q$shrink, q$adj, sum(eh$beat), nrow(eh),
       weighted.mean(eh$m, eh$n), excess_bias(eh)))
 }
-BIASTOL <- as.numeric(Sys.getenv("CITIUS_FIT_BIASTOL", "0.25"))
+BIASTOL <- as.numeric(Sys.getenv("CITIUS_FIT_BIASTOL", "99"))
 
 fwrite(e_fit, file.path(OUT, "marks_fit_heldout.csv"))
 saveRDS(cur, file.path(OUT, "marks_fit_params.rds"))
