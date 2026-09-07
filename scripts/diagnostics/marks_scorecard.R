@@ -35,14 +35,22 @@ test  <- readRDS(file.path(CACHE, "test_scored.rds"))
 bm    <- readRDS(file.path(CACHE, "base_m.rds"))[, .(athlete_id, event_id, month, base_m)]
 fit   <- readRDS(file.path(OUT, "marks_fit_params.rds"))
 
-# THE SCORECARD IS T1 ONLY, ALWAYS. Parameters may be FITTED on T1+T2 for
-# statistical power -- T2 adds 27x the held-out races -- but the headline must
-# stay on the population a championship forecast actually predicts. T2 fields
-# average 7.5 athletes against T1's 18.6, so they are shallower and weaker, and
-# a number mixing the two is not comparable with anything measured before today.
-# Scoring one population while fitting another is the point, not a compromise:
-# the sets are disjoint, so the usual overfitting objection does not apply.
-if ("meet_tier" %in% names(test)) {
+# THE SCORECARD IS T1 ONLY, ALWAYS -- BY DEFAULT. Parameters may be FITTED on
+# T1+T2 for statistical power -- T2 adds 27x the held-out races -- but the
+# headline must stay on the population a championship forecast actually
+# predicts. T2 fields average 7.5 athletes against T1's 18.6, so they are
+# shallower and weaker, and a number mixing the two is not comparable with
+# anything measured before today. Scoring one population while fitting another
+# is the point, not a compromise: the sets are disjoint, so the usual
+# overfitting objection does not apply.
+#
+# CITIUS_SCORE_ALL_TIERS=1 scores whatever meet_tier rows the cache holds
+# instead -- e.g. T1+T2 together, when the question is explicitly about a
+# different population than the championship headline. Never the default.
+score_all_tiers <- isTRUE(as.logical(Sys.getenv("CITIUS_SCORE_ALL_TIERS", "FALSE")))
+if (score_all_tiers) {
+  say("CITIUS_SCORE_ALL_TIERS=1: scoring every meet_tier in the cache, not T1 only")
+} else if ("meet_tier" %in% names(test)) {
   n_all <- nrow(test)
   test <- test[meet_tier == "T1_elite"]
   if (nrow(test) < n_all)
@@ -71,13 +79,42 @@ predict_at <- function(p) {
   m[, pred := (1 - kap / (w_total + kap)) * ability_raw + (kap / (w_total + kap)) * prior_mu]
   m[, .(athlete_id, event_id, month, pred)]
 }
+# PREDICT AT THE PER-EVENT FITTED VALUES (event_params.rds), NOT A SINGLE
+# GLOBAL SCALAR. `predict_at(p)` above applies one context_scale/trim/
+# half_life/races_half_life to every event -- fine for "deployed" (which IS
+# one global config) but wrong for "fitted", where fit_event_params.R chose a
+# DIFFERENT value per event. Scoring the per-event fit with predict_at(fit)
+# silently scores the OLD single-global config again: `fit` here is
+# marks_fit_params.rds, a different, coarser artefact that predates the
+# per-event hierarchy. Found 2026-09-08 when Pole Vault W's own sweep (12.86%
+# held-out gap at its actual fitted values) did not match this script's
+# "fitted" column (4.9%) for the same event -- they were two different models.
+predict_at_event <- function(ep) {
+  pp <- merge(data.table::copy(pairs), ep, by = c("event_id", "family"), all.x = TRUE)
+  stopifnot("some events in pairs are missing from event_params.rds" =
+              all(is.finite(pp$context_scale)))
+  data.table::setorder(pp, pid, age_days)
+  pp[, .k := seq_len(.N) - 1L, by = pid]
+  w <- pp$w_static * 0.5^(pp$age_days / pp$half_life)
+  w <- w * data.table::fifelse(is.finite(pp$races_half_life) & pp$races_half_life > 0,
+                                0.5^(pp$.k / pp$races_half_life), 1)
+  p_use <- pp$perf_raw + pp$context_scale * (pp$perf - pp$perf_raw)
+  keep <- !(pp$tactical & !is.na(pp$rk) & pp$trim_tactical > 0 &
+              pp$rk <= floor(pp$grp_n * pp$trim_tactical))
+  r <- data.table(pid = pp$pid, w = w, p_use = p_use)[keep,
+        .(ability_raw = sum(w * p_use) / sum(w), w_total = sum(w)), by = pid]
+  m <- merge(k[, .(pid, athlete_id, event_id, month, sigma, sigma_between, prior_mu)], r, by = "pid")
+  m[, kap := fit$shrink * (sigma^2 / sigma_between^2)]
+  m[, pred := (1 - kap / (w_total + kap)) * ability_raw + (kap / (w_total + kap)) * prior_mu]
+  m[, .(athlete_id, event_id, month, pred)]
+}
 # PAIRED, because the model and the baseline predict the SAME rows. The per-row
 # difference in absolute error has far less variance than either error alone, so
 # an event scored on 17 races can still give a usable answer -- and more often
 # tells you the apparent loss is not distinguishable from zero. Without it a
 # +1.4% gap on 17 races and a +1.4% gap on 400 races read identically.
-score <- function(p) {
-  d <- merge(merge(test, predict_at(p), by = c("athlete_id", "event_id", "month")),
+score_preds <- function(preds) {
+  d <- merge(merge(test, preds, by = c("athlete_id", "event_id", "month")),
              bm, by = c("athlete_id", "event_id", "month"))[date >= SPLIT]
   stopifnot("no held-out rows" = nrow(d) > 0)
   d <- attach_score_weight(d, OUT, quiet = TRUE)
@@ -103,15 +140,20 @@ score <- function(p) {
                      data.table::fifelse(hi < 0, "model better",
                      data.table::fifelse(lo > 0, "LAST-5 BETTER", "not separated"))))][]
 }
+score      <- function(p)  score_preds(predict_at(p))
+score_event <- function(ep) score_preds(predict_at_event(ep))
 cat("
 "); invisible(attach_score_weight(
   merge(test[date >= SPLIT], bm, by = c("athlete_id", "event_id", "month")), OUT))
 
 dep <- list(hl = DEPLOYED$half_life, trim = 0.25, shrink = 1, adj = 1, rhl = Inf)
-e_dep <- score(dep); e_fit <- score(fit)
+ep  <- readRDS(file.path(OUT, "event_params.rds"))
+e_dep <- score(dep); e_fit <- score_event(ep)
 
-say("fitted config: half-life %g | trim %.2f | shrink %.2f | adjustment %.2f | races %g",
-    fit$hl, fit$trim, fit$shrink, fit$adj, fit$rhl)
+say("fitted config: PER-EVENT (event_params.rds) | half-life %g-%g | trim %.2f-%.2f | adjustment %.2f-%.2f | races %g-%g | shrink (global) %.2f",
+    min(ep$half_life), max(ep$half_life), min(ep$trim_tactical), max(ep$trim_tactical),
+    min(ep$context_scale), max(ep$context_scale), min(ep$races_half_life), max(ep$races_half_life),
+    fit$shrink)
 cat(sprintf("\nheld out from %s: %s predictions, %s races\n\n", format(SPLIT),
             format(sum(e_fit$n), big.mark = ","), format(sum(e_fit$races), big.mark = ",")))
 
