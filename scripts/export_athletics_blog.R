@@ -516,7 +516,12 @@ manifest <- list(
 # Keyed by full meet_id (brussels2026), which is what athletics/index.qmd looks
 # for first; Birmingham above keeps its year-stripped key because that is what
 # is already published and meet.qmd falls back to it.
-manifest <- c(manifest, dl_blocks[order(names(dl_blocks))])
+# The length guard is not defensive padding: `names(list())` is NULL and
+# `order(NULL)` is an error, not an empty result, so a Birmingham-only run —
+# the one case where no finals-only meet is built OR carried forward — died
+# here after every artefact had been written. Caught by running the Birmingham
+# branch on CI, which the Budapest runs never exercised.
+if (length(dl_blocks)) manifest <- c(manifest, dl_blocks[order(names(dl_blocks))])
 
 write_json(manifest, file.path(BLOG, "athletics-manifest.json"),
            auto_unbox = TRUE, pretty = TRUE, na = "null")
