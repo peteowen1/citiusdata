@@ -28,6 +28,12 @@ source(here::here("citiusdata", "scripts", "_deployed.R"))
 OUT   <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, Sys.getenv("CITIUS_LAB_CACHE", "marks_lab_cache_2020"))
 SPLIT <- as.Date(Sys.getenv("CITIUS_FIT_SPLIT", "2024-01-01"))
+# How many held-out races an event needs before it is scored. 10 is the strict
+# setting and gives 35 events; 5 gives more events at more noise per event. Both
+# are worth printing -- "beat last-5 in every event" is a claim about the whole
+# programme, and reporting only the events with the most data quietly excludes
+# the thin ones, which are exactly where a baseline is hardest to beat.
+MINR <- as.integer(Sys.getenv("CITIUS_MIN_RACES", "10"))
 
 pairs <- readRDS(file.path(CACHE, "pairs.rds"))
 k     <- readRDS(file.path(CACHE, "keys.rds"))
@@ -55,7 +61,7 @@ ev <- function(p) {
   d <- frame(p)[date >= SPLIT]
   e <- d[, .(races = uniqueN(race_key), n = .N, m = mean(100 * abs(pred - act)),
              b = mean(100 * abs(base - act)), bias = mean(100 * (pred - act)),
-             bias_b = mean(100 * (base - act))), by = .(event_id, family)][races >= 10]
+             bias_b = mean(100 * (base - act))), by = .(event_id, family)][races >= MINR]
   e[, beat := m < b][]
 }
 row <- function(label, p, touches) {

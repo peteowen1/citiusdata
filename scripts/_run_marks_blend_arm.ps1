@@ -53,10 +53,25 @@ foreach ($v in "CITIUS_BT_FAMILY_DEBIAS", "CITIUS_BT_SHOCK_ADDBACK", "CITIUS_BT_
 
 # Do not even start if the machine cannot hold the run. An arm that dies at
 # meet 240 costs an hour and leaves a half-built cache; a refusal costs nothing.
+#
+# 12 GB, MEASURED, not guessed. Two runs were OOM-killed on 2026-09-07:
+#   2 workers, 3.1 GB available at fork  -> died after ~55 min, 1/394 cached
+#   1 worker,  5.3 GB available at start -> died, nothing cached
+# The parent alone reached 5.85 GB during "Reading history from the parquet
+# store" (705 Mb narrowed, several times that once materialised in R), and that
+# read happens before any meet is processed, so it is a floor rather than a
+# peak. An earlier 5000 threshold passed at 5309 MB and the run still died --
+# which is why this number comes from the failures, not from the read size.
+#
+# Chunking does NOT help: CITIUS_BT_MEETS caps meets per run and the cache
+# resumes, but the store read is a fixed per-run cost and it is the thing that
+# blows up. Nor do CITIUS_HISTORY_DAYS or CITIUS_BT_ELITE_HISTORY -- both cut
+# memory by changing which history the model sees, which confounds the arm.
 $availMB = (Get-Counter '\Memory\Available MBytes').CounterSamples.CookedValue
 "available memory at start: $availMB MB" | Out-File -Append -Encoding utf8 $LOG
-if ($availMB -lt 5000) {
-  "!!! only $availMB MB available, need ~5000. NOT STARTING." | Out-File -Append -Encoding utf8 $LOG
+if ($availMB -lt 12000) {
+  "!!! only $availMB MB available, need 12000. NOT STARTING." | Out-File -Append -Encoding utf8 $LOG
+  Write-Host "Refusing to start: $availMB MB available, need 12000."
   exit 1
 }
 
