@@ -103,12 +103,17 @@ if (need_adj || need_base || length(need_sig)) {
   }
   if (need_adj) {
     t0 <- Sys.time()
+    # Keep the RAW mark beside the adjusted one, so the size of the context
+    # adjustment itself becomes a swept parameter: perf(lambda) = raw + lambda *
+    # (adjusted - raw). At lambda = 1 this is the deployed model exactly.
+    raw_perf <- h$perf
     adj <- citius:::.adjust_history_to_target(copy(h), cal, isTRUE(DEPLOYED$adjust_race))
+    adj[, perf_raw := raw_perf]
     adj[, w_static := result_weight(date, tier = tier, round = round, as_of = TO,
                                     half_life = Inf, calibration = cal,
                                     tier_class = citius:::.tier_class_of(adj))]
-    adj <- adj[is.finite(perf) & is.finite(w_static) & w_static > 0,
-               .(athlete_id, event_id, date, perf, w_static)]
+    adj <- adj[is.finite(perf) & is.finite(perf_raw) & is.finite(w_static) & w_static > 0,
+               .(athlete_id, event_id, date, perf, perf_raw, w_static)]
     adj <- merge(adj, reg[, .(event_id, family)], by = "event_id")
     saveRDS(adj, file.path(CACHE, "adj.rds"))
     rm(adj); invisible(gc())

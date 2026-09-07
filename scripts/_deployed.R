@@ -26,7 +26,7 @@ DEPLOYED <- list(
   # stamp is the only thing a reader of a published card can use to tell which
   # model produced it. Dropping the `_0904` made the stamp name a different arm
   # from the file it actually loads.
-  stamp = "2026-09-07 wac_coast_0904_full2 debias4fam ctxsd strip4fam",
+  stamp = "2026-09-07 wac_coast_0904_full2 ctxsd strip4fam (debias OFF)",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -194,10 +194,25 @@ DEPLOYED <- list(
   # offset is -0.98 (fs_map road|M) while the family runs 1.79% pessimistic, so
   # the sign should HELP. Something about how the offsets are fitted for road
   # is wrong and has not been chased; the gate makes it moot for shipping.
-  family_debias = list(
-    file     = "family_pool_offsets.rds",
-    families = c("sprint", "hurdles", "jump", "throw")
-  ),
+  # DISABLED 2026-09-07 13:30, hours after the race-shock strip was promoted.
+  # The two corrections address the SAME optimism in the SAME four families and
+  # now stack. Measured on the gate-verified marks lab (T1 finals 2025-2026, 39
+  # scoreable events, a config reproducing estimate_ability() to 0.0000%):
+  # turning the debias off improves marks MAE in ALL 27 gated events -- sprint
+  # -27.8%, hurdles -26.8%, throw -16.0%, jump -15.7% -- and takes events
+  # beating last-5 from 10 to 18 of 39, pooled from +11.5% worse than the
+  # baseline to -0.5% better. Ungated families are bit-identical either way.
+  #
+  # Both promotions were individually correct on their own evidence: the debias
+  # won on a PRE-STRIP model (2026-09-05, 18 -> 25 events on the 2020+ set), and
+  # the strip won with the debias OFF (2026-09-07 full-sim arm, medal logloss
+  # -0.41%, marks -0.27%). Neither arm tested them together. This is the
+  # double-count.
+  #
+  # The offsets are stale as well as redundant: fitted with a 2020-01-01 holdout
+  # on a model two calibrations old. Re-enable only after a refit against the
+  # CURRENT model, judged on the standard apparatus with the strip on.
+  family_debias = NULL,
 
   # RACE SHOCK, excess strip with fitted persistence (built 2026-09-06, NOT YET
   # PROMOTED -- flip to TRUE together with a calibration that carries

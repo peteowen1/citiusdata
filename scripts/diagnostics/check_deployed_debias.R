@@ -29,6 +29,21 @@ check <- function(ok, msg) {
   invisible(ok)
 }
 
+# The debias can legitimately be OFF (it was disabled 2026-09-07 as a
+# double-count with the race-shock strip). Then the only thing to assert is
+# that nothing is being shifted -- silently applying offsets while DEPLOYED
+# says none is exactly the failure this guard exists to catch.
+if (is.null(DEPLOYED$family_debias)) {
+  ab <- data.table::data.table(athlete_id = c("a", "b"), event_id = "AT-100Metres-M",
+                               ability = c(-2.3, -2.31), sigma = 0.008)
+  out <- deployed_debias(data.table::copy(ab))
+  check(all(out$debias_offset == 0), "debias is OFF: every offset is 0")
+  check(isTRUE(all.equal(out$ability, ab$ability)), "debias is OFF: ability unchanged")
+  say("
+%s", if (fail == 0L) "ALL CHECKS PASSED (debias disabled)" else "CHECK(S) FAILED")
+  quit(status = if (fail == 0L) 0L else 1L)
+}
+
 reg <- as.data.table(citius_events())
 gated <- DEPLOYED$family_debias$families
 say("gate: %s", paste(gated, collapse = ", "))
