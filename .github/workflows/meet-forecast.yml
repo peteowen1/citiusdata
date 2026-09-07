@@ -150,28 +150,54 @@ jobs:
           SKIP_ENTRIES: ${{ inputs.skip_entries }}
         run: |
           set -o pipefail
+          # Mirrors run_meet.ps1's step lists. Entries are "script[:arg]": the
+          # Birmingham scripts are meet-specific and take nothing, the
+          # finals-only ones are shared and take the meet id — and default to
+          # brussels2026 if it is omitted, which would quietly forecast the
+          # wrong meet.
           case "$MEET_ID" in
             birmingham2026)
               STEPS="parse_birmingham_entries.R resolve_birmingham_athletes.R build_birmingham_rounds.R predict_birmingham2026.R sanity_birmingham_card.R export_athletics_blog.R"
               ;;
+            budapest2026)
+              # Only Budapest has a fetch step: World Athletics answers its
+              # qualification endpoint for a championship but returns a server
+              # error for Diamond League ids. It needs CITIUS_WA_GRAPHQL_KEY;
+              # without that secret, dispatch with skip_entries and the chain
+              # runs on the published field instead.
+              STEPS="fetch_budapest_qualification_field.R:budapest2026 resolve_diamond_league_athletes.R:budapest2026 predict_diamond_league_final.R:budapest2026 sanity_diamond_league_card.R:budapest2026 export_athletics_blog.R"
+              ;;
+            brussels2026)
+              STEPS="resolve_diamond_league_athletes.R:brussels2026 predict_diamond_league_final.R:brussels2026 sanity_diamond_league_card.R:brussels2026 export_athletics_blog.R"
+              ;;
             *)
-              echo "::error::No step list for '$MEET_ID'. Diamond League meets need their own chain (no rounds, no entry PDF) — same limit run_meet.ps1 has."
+              echo "::error::No step list for '$MEET_ID'. A meet with rounds needs a Birmingham-shaped chain; a finals-only meet can usually reuse the Diamond-League one."
               exit 1
               ;;
           esac
 
-          for s in $STEPS; do
-            if [ "$s" = "parse_birmingham_entries.R" ] && [ "$SKIP_ENTRIES" = "true" ]; then
-              echo "--- skipping $s (skip_entries)"
-              continue
-            fi
+          for entry in $STEPS; do
+            s="${entry%%:*}"
+            arg="${entry#*:}"
+            [ "$arg" = "$s" ] && arg=""
+            # skip_entries covers whichever step sources the field for this
+            # meet shape: the PDF parse for Birmingham, the qualification fetch
+            # for Budapest. Both are the step that needs something external.
+            case "$s" in
+              parse_birmingham_entries.R|fetch_budapest_qualification_field.R)
+                if [ "$SKIP_ENTRIES" = "true" ]; then
+                  echo "--- skipping $s (skip_entries)"
+                  continue
+                fi
+                ;;
+            esac
             echo ""
-            echo "=== $s"
+            echo "=== $s ${arg}"
             # Aborts on the FIRST failing step and never reaches the publish.
             # A partial run that uploads is worse than no run: the site would
             # then serve a self-inconsistent set under a fresh "as at" stamp,
             # which is the failure run_meet.ps1's header calls out.
-            if ! Rscript "citiusdata/scripts/$s" 2>&1 | tee "/tmp/${s%.R}.log"; then
+            if ! Rscript "citiusdata/scripts/$s" $arg 2>&1 | tee "/tmp/${s%.R}.log"; then
               echo "::error::$s failed — stopping before anything is published."
               exit 1
             fi
