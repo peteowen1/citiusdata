@@ -30,6 +30,9 @@
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(data.table))
 source(here::here("citiusdata", "scripts", "_deployed.R"))
+# WAC-class weights, so the parameters are fitted for the races we care about.
+# Same table the scorecard uses; scripts/_score_weights.R.
+source(here::here("citiusdata", "scripts", "_score_weights.R"))
 OUT   <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, Sys.getenv("CITIUS_LAB_CACHE", "marks_lab_cache_2020"))
 SPLIT <- as.Date(Sys.getenv("CITIUS_FIT_SPLIT", "2024-01-01"))
@@ -76,7 +79,14 @@ if (!"meet_tier" %in% names(test)) {
   test[, meet_tier := "T1_elite"]
   say("cache predates the meet_tier column; treating every row as T1")
 }
-test[, row_w := fifelse(meet_tier == "T1_elite", 1, TIER_W)]
+# TWO WEIGHTS MULTIPLY HERE, and they answer different questions.
+#   TIER_W       stops the 27x more numerous T2 races dominating a T1+T2 fit
+#   WAC weight   makes an Olympic final count 10x a category F meet
+# A row's weight is the product: a T2 club final counts 0.037 * 1, a T1 Olympic
+# final 1 * 10. Fitting on the unweighted mean is what let today's parameters be
+# chosen by races the project does not forecast.
+test <- attach_score_weight(test, OUT)
+test[, row_w := fifelse(meet_tier == "T1_elite", 1, TIER_W) * sw]
 say("fit weights: %s T1 rows at 1.0, %s non-T1 rows at %.3f (effective n %.0f)",
     format(sum(test$meet_tier == "T1_elite"), big.mark = ","),
     format(sum(test$meet_tier != "T1_elite"), big.mark = ","),

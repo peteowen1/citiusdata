@@ -19,6 +19,11 @@
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(data.table))
 source(here::here("citiusdata", "scripts", "_deployed.R"))
+# WAC-class scoring weights. An Olympic final counts 10x a category F meet;
+# see scripts/_score_weights.R for the table and why. Set every weight to 1 via
+# CITIUS_SCORE_WEIGHTS to recover the unweighted numbers measured before
+# 2026-09-07.
+source(here::here("citiusdata", "scripts", "_score_weights.R"))
 OUT   <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, Sys.getenv("CITIUS_LAB_CACHE", "marks_lab_cache_2020"))
 SPLIT <- as.Date(Sys.getenv("CITIUS_FIT_SPLIT", "2024-01-01"))
@@ -75,11 +80,22 @@ score <- function(p) {
   d <- merge(merge(test, predict_at(p), by = c("athlete_id", "event_id", "month")),
              bm, by = c("athlete_id", "event_id", "month"))[date >= SPLIT]
   stopifnot("no held-out rows" = nrow(d) > 0)
+  d <- attach_score_weight(d, OUT, quiet = TRUE)
+  d <- d[sw > 0]
   d[, {
     dd <- 100 * (abs(pred - act) - abs(base_m - act))
-    ci <- if (.N >= 5L && stats::sd(dd) > 0) stats::t.test(dd)$conf.int else c(NA_real_, NA_real_)
-    .(races = uniqueN(race_key), n = .N,
-      model = mean(100 * abs(pred - act)), last5 = mean(100 * abs(base_m - act)),
+    # The interval is weighted too, or it would test a different population from
+    # the one the point estimate reports.
+    ci <- if (.N >= 5L && stats::sd(dd) > 0) {
+      mu <- sum(sw * dd) / sum(sw)
+      v  <- sum(sw * (dd - mu)^2) / sum(sw)
+      ne <- sum(sw)^2 / sum(sw^2)            # Kish effective sample size
+      se <- sqrt(v / ne)
+      mu + c(-1, 1) * stats::qt(0.975, max(ne - 1, 1)) * se
+    } else c(NA_real_, NA_real_)
+    .(races = uniqueN(race_key), n = sum(sw),
+      model = sum(sw * 100 * abs(pred - act)) / sum(sw),
+      last5 = sum(sw * 100 * abs(base_m - act)) / sum(sw),
       lo = ci[1], hi = ci[2])
   }, by = .(event_id, family)][
     , `:=`(gap = 100 * (model - last5) / last5, beat = model < last5,
@@ -87,6 +103,10 @@ score <- function(p) {
                      data.table::fifelse(hi < 0, "model better",
                      data.table::fifelse(lo > 0, "LAST-5 BETTER", "not separated"))))][]
 }
+cat("
+"); invisible(attach_score_weight(
+  merge(test[date >= SPLIT], bm, by = c("athlete_id", "event_id", "month")), OUT))
+
 dep <- list(hl = DEPLOYED$half_life, trim = 0.25, shrink = 1, adj = 1, rhl = Inf)
 e_dep <- score(dep); e_fit <- score(fit)
 
