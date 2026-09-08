@@ -1,3 +1,16 @@
+# SUPERSEDED 2026-09-08, do not run against a post-TIER_W=1 event_params.rds.
+#
+# These six values were tuned against the fit produced under the old
+# TIER_W=0.037 (see fit_event_params.R's TIER_W comment for why that was
+# wrong). After the fix, four of these six events -- Long Jump W, High Jump
+# M, High Jump W, 600m W -- are BETTER from the real fit alone than this
+# patch made them; running this file now would silently overwrite good
+# values with stale, worse ones for those four. Only Pole Vault W and 35km
+# Race Walk M still need their own look, and their replacement values are
+# in a fresh joint sweep run after the TIER_W fix, not here.
+#
+# Left in place for the method and the history, not for reuse as-is.
+#
 # TARGETED OVERRIDE of six event_params.rds rows, not a re-run of the fit.
 #
 # fit_event_params.R's own hierarchy leaves half_life and races_half_life at
