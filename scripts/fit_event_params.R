@@ -102,11 +102,29 @@ say("fit weights: %s T1 rows at 1.0, %s non-T1 rows at %.3f (effective n %.0f)",
     TIER_W, sum(test$row_w))
 
 # grid, and the (kappa_family, kappa_event) each parameter earned on its sweep
+#
+# PRECISION_SCALE SWEPT AND WAS DROPPED, 2026-09-08 (marks_hier_params.R,
+# CITIUS_HIER_PARAM=prec). Held-out beat count and pooled MAE were IDENTICAL
+# to two decimals across every one of the 30 (kappa_family, kappa_event)
+# combinations swept, and almost every event's raw per-event fit landed on
+# the existing global default (0) already -- the flat, suspicious-agreement
+# pattern this project treats as "no real signal", not a finding to force
+# into a table. Left out of SPEC entirely rather than added at a constant 0,
+# which would claim a per-event fit that was never actually made.
+#
+# PEAK_GAMMA SWEPT AND ADDED, same day, same tool (CITIUS_HIER_PARAM=peak).
+# Unlike precision_scale this one moved: held-out beats 77 -> 78 of 82 and
+# pooled MAE -6.98% -> -7.68% at (kappa_family=0, kappa_event=800), with real
+# per-family spread (hurdles +0.5, distance -0.5, combined +1.5) and a genuine
+# gain on Discus M, one of Pete's three named target events (held-out gap
+# -3.10% -> -3.82%). kappa_family=0 means no family-level shrinkage at all --
+# the sweep's own verdict, not a default.
 SPEC <- list(
   context_scale   = list(grid = seq(0, 1.5, by = 0.25),               kap = c(5000, 1600), glob = fit$adj),
   trim_tactical   = list(grid = c(0, 0.1, 0.15, 0.25, 0.4),           kap = c(5000, 100),  glob = fit$trim),
   half_life       = list(grid = c(60, 90, 180, 270, 365, 540, 730, 1095), kap = c(5000, 400), glob = fit$hl),
-  races_half_life = list(grid = c(2, 3, 5, 8, 12, 20, 40, Inf),       kap = c(5000, Inf),  glob = fit$rhl))
+  races_half_life = list(grid = c(2, 3, 5, 8, 12, 20, 40, Inf),       kap = c(5000, Inf),  glob = fit$rhl),
+  peak_gamma      = list(grid = seq(-1.5, 1.5, by = 0.5),             kap = c(0, 800),     glob = 0))
 
 hl_default <- function(fam) {
   v <- rep(fit$hl, length(fam)); hv <- unlist(DEPLOYED$hl_family)
@@ -122,6 +140,20 @@ predict_at <- function(nm, vals) {
   w <- pp$w_static * 0.5^(pp$age_days / hlv)
   rh <- g("races_half_life")
   w <- w * data.table::fifelse(is.finite(rh) & rh > 0, 0.5^(pp$.k / rh), 1)
+  pk <- g("peak_gamma")
+  if (any(pk != 0)) {
+    # `:=` updates by reference IN PLACE, so row order stays aligned with `pp`
+    # (and hence with `w`) -- a regroup-and-extract (`pp[, .(.q=...), by=pid]$.q`)
+    # would silently misalign, the exact bug class .k/.rhl exist to avoid.
+    # frank()'s default na.last=TRUE ranks an NA `perf` as the GROUP'S BEST
+    # mark, not a visible failure -- an NA reaching here (this pipeline's own
+    # convention is to filter it upstream, but that is an invariant, not a
+    # guarantee) would silently corrupt the whole pid's peak-gamma weight.
+    stopifnot("NA perf reaching peak_gamma rank" = !anyNA(pp$perf))
+    pp[, .q := data.table::frank(perf, ties.method = "first") / .N, by = pid]
+    w <- w * (pp$.q^pk)
+    pp[, .q := NULL]
+  }
   cs <- g("context_scale")
   p_use <- pp$perf_raw + cs * (pp$perf - pp$perf_raw)
   tv <- g("trim_tactical")

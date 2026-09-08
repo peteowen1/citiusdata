@@ -25,6 +25,15 @@
 # argmin, so it can only take grid values and it will sit on an edge when the
 # curve is flat or the data thin. That is precisely what the shrinkage is for.
 #
+# SIBLINGS ARE HELD AT EACH EVENT'S OWN CURRENT FIT, not the flat global.
+# `fit_event_params.R` (2026-09-08) fixed exactly this gap for the joint
+# per-event sweeps that rescued Pole Vault W and the walks: holding hl/rhl/adj/
+# trim at the flat global while sweeping the fifth is a materially weaker test
+# than holding them at each event's OWN row of `event_params.rds` -- the flat
+# global is often wrong for events that need per-event values in the first
+# place, so a kappa chosen against it can look better or worse than it really
+# is. `marks-parameter-optimisation-backlog-2026-09-08.md` item #3.
+#
 # THE VERDICT IS ON EVENTS BEATEN. Pooled error is dominated by a handful of
 # high-volume events, so a config can win on it while dropping whole events --
 # which is the trade this project keeps refusing, since the goal is per event.
@@ -44,23 +53,52 @@ PARAM <- Sys.getenv("CITIUS_HIER_PARAM", "adj")
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), sprintf(...), "\n", sep = "")
 
 pairs <- readRDS(file.path(CACHE, "pairs.rds"))
+# THE CACHE'S `tactical` FLAG IS THE UNGATED ONE (same defect fit_event_params.R
+# found and fixed 2026-09-08 in its own copy -- see marks-optimisation-2026-09-08.md
+# bug #2). Built before estimate_ability() gated the calibration override by
+# family, it still marks every throw and sprint. `val("trim")`'s `keep` filter
+# runs on every call regardless of which PARAM is being swept, so this affected
+# every sweep this script has ever produced, not only CITIUS_HIER_PARAM=trim.
+pairs[, tactical := tactical & family %in% citius:::.CITIUS_TACTICAL_FAMILIES]
 k     <- readRDS(file.path(CACHE, "keys.rds"))
 test  <- readRDS(file.path(CACHE, "test_scored.rds"))
 bm    <- readRDS(file.path(CACHE, "base_m.rds"))[, .(athlete_id, event_id, month, base_m)]
 fit   <- as.list(readRDS(file.path(OUT, "marks_fit_params.rds")))
+# precision_scale and peak_gamma have no entry in marks_fit_params.rds -- their
+# global value has never been through the coordinate descent that produced the
+# other five, only estimate_ability()'s own default (0 for both, measured
+# better than 1 for precision_scale and a genuine interior optimum for
+# peak_gamma -- docs/reviews/marks-optimisation-2026-09-07.md). Recorded here,
+# not in the file, until a global refit gives them a real provenance.
+fit$prec <- 0
+fit$peak <- 0
+# CURRENT PER-EVENT FIT, for siblings not being swept. Column names differ
+# from this script's short parameter names (adj/hl/rhl/trim/prec/peak);
+# ep_col maps them. event_params.rds has no prec/peak columns yet (that is
+# what this sweep exists to inform), so those two fall through to fit$prec /
+# fit$peak below -- the flat global is the only "sibling" value available for
+# them until fit_event_params.R is re-run with these two added.
+event_params <- readRDS(file.path(OUT, "event_params.rds"))
+ep_col <- c(adj = "context_scale", hl = "half_life", rhl = "races_half_life",
+            trim = "trim_tactical", prec = "precision_scale", peak = "peak_gamma")
 GRIDS <- list(adj = seq(0, 1.5, by = 0.25),
               hl  = c(60, 90, 180, 270, 365, 540, 730, 1095),
               rhl = c(2, 3, 5, 8, 12, 20, 40, 1e6),
               trim = c(0, 0.1, 0.15, 0.25, 0.4),
-              shrink = c(0, 0.25, 0.5, 1, 2))
+              shrink = c(0, 0.25, 0.5, 1, 2),
+              # SWEPT PAST THE EDGE OF SENSE on both sides (Rule #1,
+              # modelling-traps.md): precision_scale's global exploration
+              # found the lever kept "improving" below zero -- a heat trusted
+              # MORE than a final, nonsense as a model -- so that region is
+              # excluded here on purpose; the grid stays inside where the
+              # weights mean what they claim to mean. peak_gamma turned
+              # cleanly on both sides of zero (a real interior optimum), so
+              # its grid brackets zero properly.
+              prec = seq(0, 1.5, by = 0.25),
+              peak = seq(-1.5, 1.5, by = 0.5))
 stopifnot("unknown CITIUS_HIER_PARAM" = PARAM %in% names(GRIDS))
 GRID <- GRIDS[[PARAM]]
 
-hl_of <- function(fam, hl_global, hl_map) {
-  v <- rep(hl_global, length(fam))
-  if (length(hl_map)) { hv <- unlist(hl_map); i <- match(fam, names(hv)); v[!is.na(i)] <- hv[i[!is.na(i)]] }
-  v
-}
 # `pmap` is a named vector event_id -> value for PARAM; unnamed events use the
 # global value from `fit`.
 predict_at <- function(pmap = NULL) {
@@ -68,17 +106,44 @@ predict_at <- function(pmap = NULL) {
   data.table::setorder(pp, pid, age_days)
   pp[, .k := seq_len(.N) - 1L, by = pid]
   val <- function(nm) {
-    v <- rep(fit[[nm]], nrow(pp))
+    # Siblings default to each event's OWN current fit (event_params.rds),
+    # not the flat global -- see the header note above this function's block.
+    v <- if (nm %in% names(ep_col) && ep_col[[nm]] %in% names(event_params)) {
+      i <- match(pp$event_id, event_params$event_id)
+      out <- event_params[[ep_col[[nm]]]][i]
+      out[is.na(out)] <- fit[[nm]]
+      out
+    } else rep(fit[[nm]], nrow(pp))
     if (identical(nm, PARAM) && !is.null(pmap)) {
       i <- match(pp$event_id, names(pmap)); v[!is.na(i)] <- unname(pmap[i[!is.na(i)]])
     }
     v
   }
-  hlv <- if (identical(PARAM, "hl") && !is.null(pmap)) val("hl") else
-    hl_of(pp$family, fit$hl, DEPLOYED$hl_family)
-  w <- pp$w_static * 0.5^(pp$age_days / hlv)
+  hlv <- val("hl")
+  # w_static was cached at half_life = Inf (recency off) and result_weight()'s
+  # own precision_scale default of 1 -- so w_static IS the raw context
+  # precision (tier x round), already raised to the power 1. Any other
+  # exponent is w_static^precision_scale, no need to un-bake anything.
+  precv <- val("prec")
+  w <- (pp$w_static^precv) * 0.5^(pp$age_days / hlv)
   rhlv <- val("rhl")
   w <- w * data.table::fifelse(is.finite(rhlv) & rhlv > 0, 0.5^(pp$.k / rhlv), 1)
+  # PEAK_GAMMA: rank within pid (== one athlete-event-asof snapshot's own
+  # history rows), matching estimate_ability()'s by = .(athlete_id, event_id)
+  # grouping over the analogous window -- same mechanism, same formula.
+  peakv <- val("peak")
+  if (any(peakv != 0)) {
+    # `:=` updates by reference IN PLACE, so row order stays aligned with `pp`
+    # (and hence with `w`) -- `pp[, .(.q=...), by=pid]$.q` regroups and would
+    # silently misalign, the exact bug class .rhl/.k avoid elsewhere in this
+    # file. frank()'s default na.last=TRUE ranks an NA `perf` as the group's
+    # BEST mark rather than failing visibly -- see fit_event_params.R's copy
+    # of this same block for the full note.
+    stopifnot("NA perf reaching peak_gamma rank" = !anyNA(pp$perf))
+    pp[, .q := data.table::frank(perf, ties.method = "first") / .N, by = pid]
+    w <- w * (pp$.q^peakv)
+    pp[, .q := NULL]
+  }
   p_use <- pp$perf_raw + val("adj") * (pp$perf - pp$perf_raw)
   trimv <- val("trim")
   keep <- !(pp$tactical & !is.na(pp$rk) & trimv > 0 & pp$rk <= floor(pp$grp_n * trimv))
