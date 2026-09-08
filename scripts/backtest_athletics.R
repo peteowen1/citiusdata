@@ -94,8 +94,36 @@ OUTCOMES <- Sys.getenv("CITIUS_BT_OUTCOMES", "championship_results.rds")
 # +0.0273 (t = +24.2). That is 10-50x any parameter change adopted the same day,
 # and it holds while LACKING several of them. Mean w_total 1.59 -> 7.47.
 HISTORY  <- Sys.getenv("CITIUS_BT_HISTORY", "athletics_corpus.rds")
+
+# HOISTED FROM ITS ORIGINAL SPOT further down (was computed only after the
+# full corpus below was already loaded). USE_STORE depends only on Sys.getenv
+# calls and HISTORY/OUTCOMES, already resolved above -- nothing here changes
+# by moving it earlier.
+#
+# WHY THIS MATTERS HERE: `hist_raw` below is the ENTIRE corpus (286 MB
+# compressed, several GB once loaded as a data.table) and, when USE_STORE is
+# TRUE and HISTORY != OUTCOMES, is NEVER READ AGAIN -- every per-meet history
+# lookup goes through the partitioned store instead (see `past <- tick("read",
+# if (USE_STORE) ...)` in run_meet()). It sat in memory for the whole run as
+# pure dead weight. Measured 2026-09-08: this is very plausibly the actual
+# source of the "~5.85 GB before any meet runs" floor that forced
+# _run_event_params_arm.ps1's 12 GB requirement -- the calibration object
+# alone is only 268 MB (object.size(), same date). NOT verified against a
+# full before/after run; if this arm's numbers ever look different from a
+# pre-2026-09-08 run of the same config, re-check this change first.
+STORE <- file.path(OUT, Sys.getenv("CITIUS_BT_STORE", "athletics_corpus_store"))
+USE_STORE <- dir.exists(STORE) && (identical(HISTORY, OUTCOMES) ||
+                                   nzchar(Sys.getenv("CITIUS_BT_STORE")))
+NEED_FULL_CORPUS <- identical(HISTORY, OUTCOMES) || !USE_STORE
+# `clean` (below) is only guaranteed non-NULL when this holds -- true by
+# construction of the two expressions above, not asserted anywhere further
+# down. Insurance against a future edit to either line silently breaking the
+# implication and un-guarding a `clean[...]` read.
+stopifnot("NEED_FULL_CORPUS/USE_STORE invariant broken" = NEED_FULL_CORPUS || USE_STORE)
+
 champs      <- readRDS(file.path(OUT, OUTCOMES))
-hist_raw    <- if (identical(HISTORY, OUTCOMES)) champs else readRDS(file.path(OUT, HISTORY))
+hist_raw    <- if (identical(HISTORY, OUTCOMES)) champs else
+  if (NEED_FULL_CORPUS) readRDS(file.path(OUT, HISTORY)) else NULL
 # Resolved ONCE. This line and the meta block below used to call Sys.getenv()
 # separately with DIFFERENT defaults -- "calibration_corpus.rds" here and
 # "calibration.rds" there -- so an arm run without the variable set loaded one
@@ -582,8 +610,16 @@ if (!is.null(dev_ids)) {
   )
 }
 
-clean <- flag_implausible(hist_raw)[!is.na(event_id) & !is.na(perf)]
-if (!is.null(dev_ids)) clean <- clean[as.character(athlete_id) %in% dev_ids]
+# SKIPPED ENTIRELY when NEED_FULL_CORPUS is FALSE (USE_STORE and HISTORY !=
+# OUTCOMES) -- `clean` is only read from the !USE_STORE fallback branch in
+# run_meet() and the export gate below, both already conditioned on the same
+# flag, and from the identical(HISTORY, OUTCOMES) branch of outcome_rows
+# just below. NULL is safe everywhere else it could be touched.
+clean <- if (NEED_FULL_CORPUS) {
+  x <- flag_implausible(hist_raw)[!is.na(event_id) & !is.na(perf)]
+  if (!is.null(dev_ids)) x <- x[as.character(athlete_id) %in% dev_ids]
+  x
+} else NULL
 outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
   clean
 } else {
@@ -620,18 +656,12 @@ outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
 keep_cols <- c("athlete_id", "event_id", "date", "perf", "age", "round", "tier",
                "meet_tier", "competition_id", "comp_start", "place", "race_key",
                "wind", "momentum", "indoor", "venue_country")
-clean <- clean[, intersect(keep_cols, names(clean)), with = FALSE]
+if (!is.null(clean)) clean <- clean[, intersect(keep_cols, names(clean)), with = FALSE]
 outcome_rows <- outcome_rows[, intersect(keep_cols, names(outcome_rows)), with = FALSE]
 
-# Prefer the partitioned parquet store when it exists: the per-meet read drops
-# from 46.1s to 0.39s at 8.6M rows. The .rds path is kept so the script still
-# runs before build_stores.R has been run.
-STORE <- file.path(OUT, Sys.getenv("CITIUS_BT_STORE", "athletics_corpus_store"))
-# The store is built from ONE history file. Reading it while HISTORY points
-# somewhere else would silently ignore the arm under test and run the baseline
-# twice -- the A/B would come back a dead heat and look like a null result.
-USE_STORE <- dir.exists(STORE) && (identical(HISTORY, OUTCOMES) ||
-                                   nzchar(Sys.getenv("CITIUS_BT_STORE")))
+# STORE/USE_STORE are now resolved near the top of the script (see the
+# NEED_FULL_CORPUS comment there) -- not recomputed here, so a change to one
+# copy cannot silently diverge from the other.
 cli::cli_alert_info(if (USE_STORE) "Reading history from the parquet store."
                     else "No parquet store; filtering the in-memory corpus.")
 # Ask the store only for columns it holds. `comp_start` and `place` are OUTCOME
@@ -639,9 +669,13 @@ cli::cli_alert_info(if (USE_STORE) "Reading history from the parquet store."
 # corpus store does not carry comp_start at all. Requesting them aborted the run.
 STORE_COLS <- if (USE_STORE)
   intersect(keep_cols, names(arrow::open_dataset(STORE))) else keep_cols
-cli::cli_alert_info(
-  "Narrowed to {ncol(clean)} column{?s} ({format(object.size(clean), units = 'MB')})."
-)
+if (!is.null(clean)) {
+  cli::cli_alert_info(
+    "Narrowed to {ncol(clean)} column{?s} ({format(object.size(clean), units = 'MB')})."
+  )
+} else {
+  cli::cli_alert_info("Full corpus load skipped -- store covers every per-meet history read.")
+}
 
 # --- the cache belongs to ONE arm -------------------------------------------
 #
@@ -1027,7 +1061,8 @@ run_meet <- function(i) {
                                      sigma_mode = SIGMA_MODE,
                                      sigma_parts = SIGMA_PARTS,
                                      only = unique(as.character(block$athlete_id)),
-                                     peak_gamma = PEAK_GAMMA,
+                                     peak_gamma = if (is.null(EVENT_PARAMS) || !"peak_gamma" %in% names(EVENT_PARAMS))
+                                       PEAK_GAMMA else EVENT_PARAMS[, .(event_id, family, peak_gamma)],
                                      robust_location = ROBUST_LOCATION,
                                      decouple_peak = DECOUPLE_PEAK))
   } else {
@@ -1097,7 +1132,13 @@ run_meet <- function(i) {
                        calibration = calibration, adjust_context = ADJUST_CONTEXT,
                        adjust_race = ADJUST_RACE, sigma_mode = SIGMA_MODE, sigma_parts = SIGMA_PARTS,
                        only = only_ids,
-                       peak_gamma = PEAK_GAMMA,
+                       # Unreachable with EVENT_PARAMS set (line ~1047 forces hl_map to
+                       # NULL whenever EVENT_PARAMS is non-NULL, which routes to the
+                       # single-call branch above instead) -- kept consistent with it
+                       # anyway rather than leaving a second, differently-wired copy of
+                       # the same parameter sitting here as a trap for the next change.
+                       peak_gamma = if (is.null(EVENT_PARAMS) || !"peak_gamma" %in% names(EVENT_PARAMS))
+                         PEAK_GAMMA else EVENT_PARAMS[, .(event_id, family, peak_gamma)],
                        robust_location = ROBUST_LOCATION,
                        decouple_peak = DECOUPLE_PEAK)
     }), fill = TRUE))
