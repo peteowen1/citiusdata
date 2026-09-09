@@ -342,6 +342,7 @@ for (mid in DL_MEETS) {
   cli::cli_alert_success("{mid}: sanity checks passed; the card is publishable.")
 
   dp <- setDT(readRDS(cf))
+  card_stamp <- max(dp$generated_at)  # captured before KEEP/generated_at overwrite below
 
   # p_final is STRUCTURAL here, not estimated: in a straight final, being in the
   # field IS being in the final. event.qmd already knows this -- it prints a
@@ -383,6 +384,31 @@ for (mid in DL_MEETS) {
   artefacts[[sprintf("%s-rounds.parquet", mid)]]      <- dlab
   artefacts[[sprintf("%s-events.parquet", mid)]]      <- dev
 
+  # Nation projection, if predict_diamond_league_final.R wrote one. Optional,
+  # not required (`sanity_diamond_league_card.R` above does not check it):
+  # older cards -- Brussels, whose forecast is now historical and will not be
+  # re-run -- predate this and have none, and a re-export of a meet's other
+  # artefacts must not abort for that. Requested in inthegame-blog#680;
+  # nations.qmd was 404ing on {meet_id}-nations.parquet for every DL-shaped
+  # meet. Same joint-per-simulation-podium reasoning and the same staleness
+  # gate as Birmingham's nations table just above.
+  nat_f_dl <- file.path(D, sprintf("%s_nations.parquet", mid))
+  if (file.exists(nat_f_dl)) {
+    nat_dl <- setDT(as.data.frame(read_parquet(nat_f_dl)))
+    nat_stamp_dl <- max(nat_dl$generated_at)
+    gap_dl <- as.numeric(difftime(nat_stamp_dl, card_stamp, units = "mins"))
+    if (!is.finite(gap_dl) || abs(gap_dl) > 10) {
+      cli::cli_alert_warning(
+        "{mid}: {.file {basename(nat_f_dl)}} is {round(abs(gap_dl))} min from the card's own run -- not published this time. Re-run predict_diamond_league_final.R for {mid} so both come from one simulation.")
+    } else {
+      nat_dl[, generated_at := NOW]
+      artefacts[[sprintf("%s-nations.parquet", mid)]] <- nat_dl
+      cli::cli_alert_success("{mid}: nation projection ({nrow(nat_dl)} nation{?s}) will publish.")
+    }
+  } else {
+    cli::cli_alert_info("{mid}: no {.file {basename(nat_f_dl)}} -- nations page will 404 for this meet.")
+  }
+
   # counts_source is "single_final", not "derived": "derived" is what triggers
   # event.qmd's note explaining how heat counts were guessed, and a one-day
   # final has no heats to explain. The caveats are this shape's, not
@@ -391,6 +417,16 @@ for (mid in DL_MEETS) {
   fld_type <- as.character(unique(dcard$field_type)[1])
   dl_blocks[[mid]] <- list(
     events_modelled = uniqueN(dcard$event_id),
+    # meet.qmd's "What this card covers" cell guards on BOTH events_modelled
+    # and events_in_programme together, and only this one was ever set -- the
+    # cell rendered nothing for every DL-shaped meet. Unlike Birmingham there
+    # is no technical-regulations document to read a firm programme size from
+    # (these fields come from a third-party compiler or a best-effort WA
+    # fetch, not an official confirmed program), so this is honestly
+    # events_modelled itself rather than a guessed larger number -- true, and
+    # says "everything fetchable was modelled" rather than implying a gap that
+    # isn't sourced. Found via inthegame-blog#680.
+    events_in_programme = uniqueN(dcard$event_id),
     athletes = uniqueN(dcard$athlete_id),
     cutoff = as.character(unique(dcard$cutoff)[1]),
     counts_source = "single_final",
