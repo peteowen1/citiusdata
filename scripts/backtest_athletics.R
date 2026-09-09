@@ -1144,13 +1144,36 @@ run_meet <- function(i) {
     }), fill = TRUE))
   }
 
-  # estimate_ability() strips the championship offset from championship history,
-  # leaving ability on a NON-championship top-tier-final footing. Every meet
-  # scored here is a championship, so it has to go back on -- without this half
-  # the correction runs one way and makes predictions worse, not better.
-  if (!is.null(calibration$championship) && nrow(calibration$championship)) {
-    ability <- project_championship(ability, calibration)
-  }
+  # CHAMPIONSHIP OFFSET -- NOW GATED ON THE RACE ACTUALLY BEING A CHAMPIONSHIP.
+  # Applied per race inside the loop below, not here.
+  #
+  # This used to run unconditionally on every meet, on the stated assumption
+  # that "every meet scored here is a championship". That was true when the
+  # backtest only scored global championships. It is false for a T1_elite
+  # population: measured 2026-09-09, 347 of 4,273 scored races (8.1%) are OW
+  # championships and the other 3,926 (91.9%) were getting a championship
+  # uplift they should never have had.
+  #
+  # WHY IT IS WRONG, not merely imprecise. fit_championship_effect() fits the
+  # offset by contrasting championship against NON-championship TOP-TIER FINALS
+  # for the same athlete-event, and estimate_ability() leaves ability on that
+  # non-championship top-tier-final footing. A Diamond League final IS a
+  # non-championship top-tier final, so ability is already on exactly the right
+  # footing for it -- adding the offset double-counts. Measured effect on
+  # predicted marks: jump +1.27%, throw +1.46%, road -2.18% (championship
+  # marathons are slower than paced city races), which is most of the marks
+  # error this backtest was reporting on non-championship races.
+  #
+  # GATED ON THE SAME PREDICATE IT WAS FITTED WITH. fit_championship_effect()
+  # uses .is_championship(tier); so does this. An apply-side gate that differs
+  # from the fit-side one is the exact bug class this file has been bitten by
+  # twice (the tactical-family gate, 2026-09-08).
+  #
+  # PLACINGS ARE UNAFFECTED EITHER WAY. The offset is per FAMILY, and every
+  # athlete in a race shares one event and therefore one family, so it shifts
+  # the whole field by an identical constant and cancels out of every pairwise
+  # comparison. p_gold/p_medal are bit-identical; only predicted MARKS move.
+  CHAMP_OK <- !is.null(calibration$championship) && nrow(calibration$championship)
 
   # Key ONCE per meet, not once per race. The loop below previously bracket-filtered
   # `ability` for every race -- O(races x nrow(ability)) -- which is cheap on the
@@ -1183,6 +1206,14 @@ run_meet <- function(i) {
     entrants <- ability[.(ev, as.character(field$athlete_id)), nomatch = NULL]
     if (nrow(entrants) < 4L) next
     data.table::setorder(entrants, .ord)
+    # See the CHAMPIONSHIP OFFSET note above the loop. Applied here, per race,
+    # only when this race is genuinely a championship -- and in the same
+    # position in the sequence (before condition_prior) that the old
+    # unconditional meet-level call occupied, so a championship race is
+    # bit-identical to the previous behaviour.
+    if (CHAMP_OK && isTRUE(citius:::.is_championship(field$tier[1]))) {
+      entrants <- project_championship(entrants, calibration)
+    }
     # Optional: shrink toward the FIELD rather than the whole event. Empirical
     # Bayes otherwise pulls a thinly-evidenced entrant toward the unconditional
     # event mean, which includes a long tail of athletes who never contest a
