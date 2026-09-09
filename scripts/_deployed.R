@@ -236,18 +236,25 @@ DEPLOYED <- list(
   #                          would REPLACE hl_family rather than compose with it.
   # ---------------------------------------------------------------------------
 
-  # RACE SHOCK, excess strip with fitted persistence (built 2026-09-06, NOT YET
-  # PROMOTED -- flip to TRUE together with a calibration that carries
-  # $race_shock). estimate_ability(adjust_race = TRUE) then strips
+  # RACE SHOCK, excess strip with fitted persistence. Built 2026-09-06,
+  # PROMOTED 2026-09-07 alongside calibration_corpus_wac_coast_0904_full2.rds,
+  # which carries the $race_shock table this needs. (Comment corrected
+  # 2026-09-09: it still read "NOT YET PROMOTED -- flip to TRUE" while the
+  # setting below was already TRUE, contradicting the LIVE LEVERS table above.
+  # In the one file that exists to be the single source of truth, a comment
+  # that disagrees with the value beside it is the whole failure mode.)
+  # estimate_ability(adjust_race = TRUE) strips
   # (1 - beta) * (race effect - expected effect for that event x tier x round)
   # from every historical mark; beta by tier of the shocked race (top 0.53,
   # high 0.72, mid 0.86, low 1.02 on the 2026-09-06 fit). Judged by the
   # marks-only arm `backtest_excess_strip.rds` against ctrl_tierfix.
   adjust_race = TRUE,
 
-  # RACE CONTEXT for the simulation (built 2026-09-06, NOT YET PROMOTED --
-  # flip `enabled` with a calibration that carries $condition_sd_context and
-  # $spread_scales). When enabled, every shipping simulate_event() call gets
+  # RACE CONTEXT for the simulation. Built 2026-09-06, PROMOTED 2026-09-07
+  # alongside calibration_corpus_wac_coast_0904_full2.rds, which carries the
+  # $condition_sd_context and $spread_scales tables this needs. (Comment
+  # corrected 2026-09-09; see the race-shock note above for why.)
+  # Enabled, every shipping simulate_event() call gets
   # list(meet_tier, round_class) via deployed_race_context(), so the shared
   # shock and the mark-distribution spread are the cell's values (a T1 final
   # shares 0.33-0.96 of the event-wide shock by family) rather than the
@@ -457,9 +464,23 @@ deployed_ability <- function(past, as_of, calibration,
 .deployed_ability_raw <- function(past, as_of, calibration) {
   hl_map <- DEPLOYED$hl_family
   if (!length(hl_map)) {
+    # EVERY ADJUSTMENT THE OTHER BRANCH PASSES MUST BE PASSED HERE TOO.
+    # `adjust_race` was missing from this call while the per-family branch below
+    # passed it, so this branch silently fell back to estimate_ability()'s own
+    # default of FALSE -- the race-shock strip off, no error, no stamp change.
+    # Exactly the failure this file's header describes ("promoting a change
+    # meant editing five files and forgetting one was invisible"), and exactly
+    # the one the per-family branch's own history already records.
+    #
+    # DORMANT BUT AIMED AT THE NEXT PROMOTION when found (2026-09-09 review):
+    # hl_family is non-empty today so this branch never runs, but the
+    # event_params note above says that table REPLACES the per-family map. The
+    # moment event_params.rds is promoted, hl_map goes empty, this branch takes
+    # over, and adjust_race would have turned itself off for every family.
     return(estimate_ability(past, as_of = as_of, half_life = DEPLOYED$half_life,
                             races_half_life = DEPLOYED$races_half_life,
-                            calibration = calibration))
+                            calibration = calibration,
+                            adjust_race = isTRUE(DEPLOYED$adjust_race)))
   }
   reg_f <- data.table::as.data.table(citius_events()[, c("event_id", "family")])
   pf <- merge(data.table::as.data.table(past), reg_f, by = "event_id", all.x = TRUE)
