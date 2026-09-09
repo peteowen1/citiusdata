@@ -44,7 +44,15 @@ $LOG = "C:\dev\citiusverse\citiusdata\event_params_arm_chunked_log.txt"
 # this leaves real margin above it rather than the razor-thin gap that let
 # tonight's live probe hit 3 MB available. Raise this if a watched run still
 # gets close.
-$MIN_AVAIL_MB   = 8000
+#
+# LOWERED 8000 -> 5500 after fixing the actual memory floor (see
+# backtest_athletics.R's NEED_FULL_CORPUS comment): a live 1-meet run with
+# the fix in place measured a peak of 3.9GB, not the pre-fix ~12GB this
+# script's original margin was sized against. 5500 keeps real headroom above
+# that measured number without the old, now-unfounded 8000 padding -- raise
+# again if a real 25-meet chunk (not yet measured, only 1 meet) turns out to
+# need more.
+$MIN_AVAIL_MB   = 5500
 $CHUNK_MEETS    = 25      # backtest_athletics.R's own MAX_PER_RUN default
 $MAX_CHUNKS     = 30      # generous margin above ceil(450/25) = 18
 $WAIT_SECS      = 120     # between memory-gate retries
