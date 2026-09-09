@@ -114,6 +114,15 @@ out <- r[, ..need]
 extra_cov <- vapply(out, function(x) mean(!is.na(x)), numeric(1))
 say("column fill rates for the new rows (0%% on a column that is normally populated is a mapping bug):")
 print(round(sort(extra_cov), 3))
+# PRINTING THE COVERAGE IS NOT THE SAME AS ASSERTING IT. This printed the
+# smoking gun and kept going -- exactly the "assert coverage, not presence"
+# rule this repo has already been bitten by, and a straight regression from
+# append_meet_to_store.R's own gate, which this script otherwise mirrors.
+# comp_name/comp_tier are exempt because they are legitimately NA for some
+# tiers/rows even when the mapping is correct -- see the header.
+zero <- names(extra_cov)[extra_cov == 0 & !(names(extra_cov) %in% c("comp_name", "comp_tier"))]
+if (length(zero)) cli::cli_abort(
+  "column{?s} 100%% empty after mapping: {.field {zero}} -- fix the mapping rather than writing an empty column.")
 
 if (DRY) { say("DRY RUN -- nothing written"); quit(status = 0) }
 
