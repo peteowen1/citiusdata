@@ -920,6 +920,22 @@ AGE_WARN$n <- 0L; AGE_WARN$last <- NA_character_
 # Races that actually received the shock add-back. Reported at the end so a
 # lookup that matched nothing is visible instead of looking like a null arm.
 SHOCK <- new.env(parent = emptyenv()); SHOCK$n <- 0L
+# Races that actually received the championship offset, counted for the same
+# reason SHOCK is: the gate is invisible when it misfires. project_championship()
+# shifts a whole field by one per-family constant, so it cancels out of every
+# placing -- p_gold, p_medal and every probability metric are bit-identical
+# whether it fired or not. A run where CHAMP_OK is FALSE (an older calibration
+# with no $championship table) or where tier never matches OW applies the offset
+# to ZERO races and looks, in every log line and every scored metric, exactly
+# like a healthy run. Only the predicted MARKS are wrong, by up to 2.2%.
+# Added after review, 2026-09-09.
+CHAMP <- new.env(parent = emptyenv())
+CHAMP$n <- 0L; CHAMP$na_tier <- 0L; CHAMP$mixed_tier <- 0L
+# Top level, not inside run_meet(): the end-of-run report below reads it, and a
+# PSOCK worker needs it exported by name (see export_vars) or parallel mode dies
+# with "object 'CHAMP_OK' not found" while the serial path works by lexical
+# scoping -- the exact trap the export_vars comment documents.
+CHAMP_OK <- !is.null(calibration$championship) && nrow(calibration$championship)
 
 # History rows whose event has no registry family, counted the same way and for
 # the same reason: the check below sits INSIDE the per-meet loop, so warning per
@@ -957,6 +973,9 @@ run_meet <- function(i) {
   # every prediction un-shifted and come back looking exactly like a null
   # result -- the vacuous pass this file's other guards exist to prevent.
   local_shock_applied <- 0L
+  local_champ_applied <- 0L
+  local_champ_na <- 0L
+  local_champ_mixed <- 0L
   local_nofam <- list(rows = 0L, is_nofam_meet = FALSE, events = character())
 
   # Two restrictions make the per-meet refit ~10x cheaper without changing a
@@ -1040,7 +1059,9 @@ run_meet <- function(i) {
   if (rows < 2000L) {
     return(list(cid = cid, out = list(), rows = rows, timing = local_timing,
                 age_warn = local_age_warn, nofam = local_nofam,
-                shock_applied = local_shock_applied))
+                shock_applied = local_shock_applied,
+                champ_applied = local_champ_applied,
+                champ_na = local_champ_na, champ_mixed = local_champ_mixed))
   }
   # The event-params table drives the single-call path: it carries a half-life
   # per event, so the per-family split has nothing to add.
@@ -1173,7 +1194,6 @@ run_meet <- function(i) {
   # athlete in a race shares one event and therefore one family, so it shifts
   # the whole field by an identical constant and cancels out of every pairwise
   # comparison. p_gold/p_medal are bit-identical; only predicted MARKS move.
-  CHAMP_OK <- !is.null(calibration$championship) && nrow(calibration$championship)
 
   # Key ONCE per meet, not once per race. The loop below previously bracket-filtered
   # `ability` for every race -- O(races x nrow(ability)) -- which is cheap on the
@@ -1189,6 +1209,28 @@ run_meet <- function(i) {
   data.table::setkey(ability, event_id, athlete_id)
   # Split once rather than bracketing `block` inside the loop for the same reason.
   by_race <- split(block, block$race_key)
+
+  # MODE, not [1]. The feed's `tier` is per-RESULT and a single meet is
+  # documented to carry up to four different grades across its own results
+  # (.scratch/athletics-calendar/issues/03-diamond-league-tier-defect.md), so
+  # the first row is an arbitrary pick where the race disagrees with itself.
+  # A scalar is required rather than the vector: project_tier() recycles with
+  # rep_len() against the ability rows, and `entrants` is in ability order
+  # while `field` is not -- passing the vector would misalign tier to athlete.
+  #
+  # HOISTED out of the per-race loop 2026-09-09. It is a pure helper and was
+  # being redefined once per race, but the real reason is that the championship
+  # gate below needs it and sat ABOVE the old definition -- so that gate was
+  # reading `field$tier[1]`, the exact arbitrary-first-row pattern this comment
+  # warns against. Worse there than for project_tier(): the tier projection
+  # applies a continuous shrink, so a wrong tier only nudges it, whereas the
+  # championship gate is a step function that applies or withholds the whole
+  # family offset for the entire field. Caught in review, 2026-09-09.
+  .mode1 <- function(x) {
+    x <- x[!is.na(x)]
+    if (!length(x)) return(NA_character_)
+    names(sort(table(as.character(x)), decreasing = TRUE))[1]
+  }
 
   out <- list()
   # Score one RACE, not one competition+event. Club and gala meets run an event
@@ -1211,8 +1253,18 @@ run_meet <- function(i) {
     # position in the sequence (before condition_prior) that the old
     # unconditional meet-level call occupied, so a championship race is
     # bit-identical to the previous behaviour.
-    if (CHAMP_OK && isTRUE(citius:::.is_championship(field$tier[1]))) {
+    # Mixed or absent tier within ONE race means the classification below rests
+    # on a modal vote rather than a clean signal. Measured 2026-09-09: 162 of
+    # 4,273 scored races disagree with themselves on tier (none currently mix OW
+    # with non-OW, so no verdict actually flips today), and 449 races carry no
+    # tier at all. Said out loud rather than left to a silent modal pick.
+    .tier_race <- .mode1(field$tier)
+    if (CHAMP_OK && is.na(.tier_race)) local_champ_na <- local_champ_na + 1L
+    if (CHAMP_OK && data.table::uniqueN(field$tier, na.rm = TRUE) > 1L)
+      local_champ_mixed <- local_champ_mixed + 1L
+    if (CHAMP_OK && isTRUE(citius:::.is_championship(.tier_race))) {
       entrants <- project_championship(entrants, calibration)
+      local_champ_applied <- local_champ_applied + 1L
     }
     # Optional: shrink toward the FIELD rather than the whole event. Empirical
     # Bayes otherwise pulls a thinly-evidenced entrant toward the unconditional
@@ -1260,18 +1312,8 @@ run_meet <- function(i) {
     # the same answer: shrinking toward a field mean that has itself shifted by
     # the same constant leaves the constant intact. Placed after aging for the
     # same reason -- a uniform additive shift commutes with all of it.
-    # MODE, not [1]. The feed's `tier` is per-RESULT and a single meet is
-    # documented to carry up to four different grades across its own results
-    # (.scratch/athletics-calendar/issues/03-diamond-league-tier-defect.md), so
-    # the first row is an arbitrary pick where the race disagrees with itself.
-    # A scalar is required rather than the vector: project_tier() recycles with
-    # rep_len() against the ability rows, and `entrants` is in ability order
-    # while `field` is not -- passing the vector would misalign tier to athlete.
-    .mode1 <- function(x) {
-      x <- x[!is.na(x)]
-      if (!length(x)) return(NA_character_)
-      names(sort(table(as.character(x)), decreasing = TRUE))[1]
-    }
+    # `.mode1()` is now defined once above the loop; see its comment there for
+    # why the MODE and not [1].
     # SELECTION SHRINKAGE, applied BEFORE the projections below. The order is
     # load-bearing: prior_mu is on the top-tier-final footing that
     # estimate_ability(adjust_context = TRUE) produced, and project_tier() moves
@@ -1506,7 +1548,9 @@ run_meet <- function(i) {
   }
   list(cid = cid, out = out, rows = rows, timing = local_timing,
        age_warn = local_age_warn, nofam = local_nofam,
-       shock_applied = local_shock_applied)
+       shock_applied = local_shock_applied,
+       champ_applied = local_champ_applied,
+       champ_na = local_champ_na, champ_mixed = local_champ_mixed)
 }
 
 # CITIUS_BT_WORKERS=1 (default) is byte-for-byte the original single-process
@@ -1529,7 +1573,7 @@ if (N_WORKERS > 1L) {
                     "dev_ids", "elite_ids", "USE_MEET_TIER", "calibration", "PRIOR_WEIGHT",
                     "mom_eff", "aging", "N_SIMS", "hl_map", "half_life", "ADJUST_CONTEXT",
                     "ADJUST_RACE", "SIGMA_MODE", "SIGMA_PARTS", "PEAK_GAMMA",
-                    "ROBUST_LOCATION", "DECOUPLE_PEAK",
+                    "ROBUST_LOCATION", "DECOUPLE_PEAK", "CHAMP_OK",
                     # run_meet() reads these at the project_tier()/
                     # project_round() calls. Without them here the serial path
                     # works (lexical scoping) and every PSOCK worker dies with
@@ -1598,6 +1642,9 @@ if (N_WORKERS > 1L) {
     TIMING$sim <- TIMING$sim + r$timing$sim
     AGE_WARN$n <- AGE_WARN$n + r$age_warn
     SHOCK$n <- SHOCK$n + (if (is.null(r$shock_applied)) 0L else r$shock_applied)
+    CHAMP$n <- CHAMP$n + (if (is.null(r$champ_applied)) 0L else r$champ_applied)
+    CHAMP$na_tier <- CHAMP$na_tier + (if (is.null(r$champ_na)) 0L else r$champ_na)
+    CHAMP$mixed_tier <- CHAMP$mixed_tier + (if (is.null(r$champ_mixed)) 0L else r$champ_mixed)
     if (isTRUE(r$nofam$is_nofam_meet)) {
       NOFAM$rows <- NOFAM$rows + r$nofam$rows
       NOFAM$meets <- NOFAM$meets + 1L
@@ -1620,6 +1667,9 @@ if (N_WORKERS > 1L) {
     TIMING$sim <- TIMING$sim + r$timing$sim
     AGE_WARN$n <- AGE_WARN$n + r$age_warn
     SHOCK$n <- SHOCK$n + (if (is.null(r$shock_applied)) 0L else r$shock_applied)
+    CHAMP$n <- CHAMP$n + (if (is.null(r$champ_applied)) 0L else r$champ_applied)
+    CHAMP$na_tier <- CHAMP$na_tier + (if (is.null(r$champ_na)) 0L else r$champ_na)
+    CHAMP$mixed_tier <- CHAMP$mixed_tier + (if (is.null(r$champ_mixed)) 0L else r$champ_mixed)
     if (isTRUE(r$nofam$is_nofam_meet)) {
       NOFAM$rows <- NOFAM$rows + r$nofam$rows
       NOFAM$meets <- NOFAM$meets + 1L
@@ -1685,6 +1735,28 @@ if (nzchar(SHOCK_FILE)) {
            and would score as a clean null. Check the tier/round/family keys in
            {.file {SHOCK_FILE}} against what the scored races actually carry."))
   cli::cli_alert_success("Shock add-back applied to {SHOCK$n} race{?s}.")
+}
+# CHAMPIONSHIP OFFSET COVERAGE. Reported every run, because a gate that fires on
+# nothing is invisible: the offset is a per-family constant, so placings and
+# every probability metric are bit-identical whether it applied or not, and only
+# the predicted marks move. A silent zero would look exactly like a healthy run.
+if (CHAMP_OK) {
+  cli::cli_alert_info(
+    "Championship offset applied to {CHAMP$n} of {nrow(pool)} scored meet{?s}' races.")
+  if (CHAMP$n == 0L) cli::cli_alert_warning(c(
+    "!" = "calibration$championship is present but the offset was applied to ZERO races.",
+    "i" = "Expected on a population with no OW-tier meets (Diamond League, national
+           championships), and wrong if this run was meant to include Olympics or
+           World Championships. Check what {.code tier} the scored races carry."))
+} else {
+  cli::cli_alert_warning(
+    "No calibration$championship table; championship races were NOT offset.")
+}
+if (CHAMP$na_tier > 0L || CHAMP$mixed_tier > 0L) {
+  cli::cli_alert_warning(
+    "Tier is unreliable on some scored races: {CHAMP$na_tier} with no tier at all,
+     {CHAMP$mixed_tier} disagreeing with themselves. Both were classified by a
+     modal vote; a championship mis-tagged this way would silently lose its offset.")
 }
 if (NOFAM$rows > 0L) {
   cli::cli_alert_warning(
