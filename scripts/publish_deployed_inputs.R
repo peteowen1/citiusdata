@@ -68,7 +68,16 @@ source(deployed_r)
 #     manifest: the championship results the athlete resolver falls back to when
 #     no database is reachable (a runner never has one), and the catalogue the
 #     history rescue-rebuild needs.
-from_deployed <- c(DEPLOYED$history_rds, DEPLOYED$calibration, DEPLOYED$aging)
+# DEPLOYED$event_params is file-based like the three above, but optional --
+# NULL means the global parameters are intended (deployed_event_params()'s own
+# contract). Omitting it here was a real gap: deployed_event_params() ABORTS
+# LOUDLY when it is set to a name the data dir doesn't have, which is the
+# correct behaviour for that accessor, but it meant every CI dispatch would
+# hit that abort on the very first deployed_ability() call -- the promoted
+# event_params.rds was never part of the manifest, so a runner would never
+# have it. Caught in review before a single CI run paid for it.
+from_deployed <- c(DEPLOYED$history_rds, DEPLOYED$calibration, DEPLOYED$aging,
+                    DEPLOYED$event_params)
 fixed <- c(
   "championship_results.rds",
   "competition_catalogue.parquet",

@@ -36,15 +36,31 @@ MARKS_ONLY <- .env_int("CITIUS_BT_MARKS_ONLY", "0") == 1
 # The marks recency blend, read once here so it lands in the cache fingerprint
 # and in the run's settings. The MARKS_ONLY branch below has to apply it by hand
 # because it skips simulate_event(), which is where the blend normally happens.
-MARKS_BLEND <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_MARKS_BLEND", "0")))
-if (!is.finite(MARKS_BLEND) || MARKS_BLEND < 0 || MARKS_BLEND > 1) MARKS_BLEND <- 0
+.marks_blend_raw <- Sys.getenv("CITIUS_MARKS_BLEND", "0")
+MARKS_BLEND <- suppressWarnings(as.numeric(.marks_blend_raw))
+if (!is.finite(MARKS_BLEND) || MARKS_BLEND < 0 || MARKS_BLEND > 1) {
+  # A typo, stray whitespace or a comma-for-decimal parses to NA or
+  # out-of-range and silently resets to 0 -- the exact shape TIER_W was fixed
+  # for below, reintroduced here because the fix was not applied to every knob
+  # that shares it. A reset run is then fingerprinted identically to a
+  # deliberate control (arm_fingerprint's marks_blend = 0 either way), so the
+  # only way to tell them apart is this line. Caught in review, 2026-09-09.
+  if (nzchar(.marks_blend_raw) && .marks_blend_raw != "0") cli::cli_alert_warning(
+    "CITIUS_MARKS_BLEND={.val {.marks_blend_raw}} did not parse to a value in [0,1] -- reset to 0.")
+  MARKS_BLEND <- 0
+}
 # RACES-SINCE DECAY. Inf is off and is the default, so an arm that does not set
 # it is bit-identical to before. It is NOT independent of the calendar
 # half-life: 365 days had been standing in for a cap on how many results
 # accumulate, so with this on the calendar half-life wants roughly 730. Set both
 # or neither -- 730 alone is much worse than the deployed 365.
-RACES_HALF_LIFE <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_RACES_HALF_LIFE", "Inf")))
-if (is.na(RACES_HALF_LIFE) || RACES_HALF_LIFE <= 0) RACES_HALF_LIFE <- Inf
+.races_hl_raw <- Sys.getenv("CITIUS_RACES_HALF_LIFE", "Inf")
+RACES_HALF_LIFE <- suppressWarnings(as.numeric(.races_hl_raw))
+if (is.na(RACES_HALF_LIFE) || RACES_HALF_LIFE <= 0) {
+  if (nzchar(.races_hl_raw) && .races_hl_raw != "Inf") cli::cli_alert_warning(
+    "CITIUS_RACES_HALF_LIFE={.val {.races_hl_raw}} did not parse to a positive number -- reset to Inf (off).")
+  RACES_HALF_LIFE <- Inf
+}
 
 # PER-EVENT PARAMETER TABLES, from scripts/fit_event_params.R. One artefact
 # carrying half_life, races_half_life, trim_tactical and context_scale per
@@ -765,6 +781,11 @@ arm_fingerprint <- list(
   marks_blend = MARKS_BLEND,
   races_half_life = RACES_HALF_LIFE,
   event_params = if (nzchar(Sys.getenv("CITIUS_EVENT_PARAMS", ""))) Sys.getenv("CITIUS_EVENT_PARAMS") else NA_character_,
+  # By filename alone would be the same gap family_debias_md5 exists to close:
+  # fit_event_params.R rewrites event_params.rds in place under the same name
+  # on every refit, so a cache keyed on the path would serve a stale arm after
+  # a refit instead of recomputing. Caught in review, 2026-09-09.
+  event_params_md5 = if (nzchar(Sys.getenv("CITIUS_EVENT_PARAMS", ""))) md5_of(Sys.getenv("CITIUS_EVENT_PARAMS")) else NA_character_,
   sel_shrink = if (is.na(SEL_SHRINK)) "" else format(SEL_SHRINK),
   sel_sigma = SEL_SIGMA)
 
@@ -919,7 +940,7 @@ AGE_WARN <- new.env(parent = emptyenv())
 AGE_WARN$n <- 0L; AGE_WARN$last <- NA_character_
 # Races that actually received the shock add-back. Reported at the end so a
 # lookup that matched nothing is visible instead of looking like a null arm.
-SHOCK <- new.env(parent = emptyenv()); SHOCK$n <- 0L
+SHOCK <- new.env(parent = emptyenv()); SHOCK$n <- 0L; SHOCK$fallback <- 0L
 # Races that actually received the championship offset, counted for the same
 # reason SHOCK is: the gate is invisible when it misfires. project_championship()
 # shifts a whole field by one per-family constant, so it cancels out of every
@@ -973,6 +994,7 @@ run_meet <- function(i) {
   # every prediction un-shifted and come back looking exactly like a null
   # result -- the vacuous pass this file's other guards exist to prevent.
   local_shock_applied <- 0L
+  local_shock_fallback <- 0L
   local_champ_applied <- 0L
   local_champ_na <- 0L
   local_champ_mixed <- 0L
@@ -1060,6 +1082,7 @@ run_meet <- function(i) {
     return(list(cid = cid, out = list(), rows = rows, timing = local_timing,
                 age_warn = local_age_warn, nofam = local_nofam,
                 shock_applied = local_shock_applied,
+                shock_fallback = local_shock_fallback,
                 champ_applied = local_champ_applied,
                 champ_na = local_champ_na, champ_mixed = local_champ_mixed))
   }
@@ -1396,14 +1419,26 @@ run_meet <- function(i) {
         .ct <- ctl[competition_id == as.character(cid)]
         if (nrow(.ct)) .tier1 <- .ct$meet_tier[1]
       }
-      if (is.na(.tier1)) .tier1 <- .tier_class_of(field)[1]
+      # .tier_class_of(field) returns one value per row; [1] was the same
+      # arbitrary-first-row pick .mode1() was introduced to replace elsewhere in
+      # this function. A mixed-tier field would silently take whichever result
+      # happened to sort first instead of the field's actual modal tier.
+      if (is.na(.tier1)) .tier1 <- .mode1(.tier_class_of(field))
       .rc1 <- .round_class(.mode1(field$round))
       .fam1 <- .citius_event_registry$family[match(ev, .citius_event_registry$event_id)]
       k <- shock_tbl[.(.tier1, .rc1, .fam1), on = .(meet_tier, round_class, family),
                      nomatch = NULL]
-      if (!nrow(k)) k <- shock_tbl[.(.tier1, .rc1), on = .(meet_tier, round_class),
-                                   nomatch = NULL][1]
+      # FAMILY-AGNOSTIC FALLBACK. The tier x round x family grid is not fully
+      # populated, so an exact cell can miss -- this falls back to whichever row
+      # sorts first for the tier/round alone, silently applying another family's
+      # expected shock (sprint shock onto a throw, say). Counted separately from
+      # an exact match so a run that's quietly leaning on this fallback is
+      # visible rather than reading identically to a clean exact-match arm.
+      .exact_match <- nrow(k) > 0
+      if (!.exact_match) k <- shock_tbl[.(.tier1, .rc1), on = .(meet_tier, round_class),
+                                        nomatch = NULL][1]
       if (nrow(k) && is.finite(k$expected_shock[1])) {
+        if (!.exact_match) local_shock_fallback <- local_shock_fallback + 1L
         entrants[, ability := ability + k$expected_shock[1]]
         # `<-`, NOT `<<-`. This loop is in run_meet()'s own body, so `<<-` would
         # skip run_meet's scope and assign a GLOBAL, leaving the returned
@@ -1549,6 +1584,7 @@ run_meet <- function(i) {
   list(cid = cid, out = out, rows = rows, timing = local_timing,
        age_warn = local_age_warn, nofam = local_nofam,
        shock_applied = local_shock_applied,
+       shock_fallback = local_shock_fallback,
        champ_applied = local_champ_applied,
        champ_na = local_champ_na, champ_mixed = local_champ_mixed)
 }
@@ -1642,6 +1678,7 @@ if (N_WORKERS > 1L) {
     TIMING$sim <- TIMING$sim + r$timing$sim
     AGE_WARN$n <- AGE_WARN$n + r$age_warn
     SHOCK$n <- SHOCK$n + (if (is.null(r$shock_applied)) 0L else r$shock_applied)
+    SHOCK$fallback <- SHOCK$fallback + (if (is.null(r$shock_fallback)) 0L else r$shock_fallback)
     CHAMP$n <- CHAMP$n + (if (is.null(r$champ_applied)) 0L else r$champ_applied)
     CHAMP$na_tier <- CHAMP$na_tier + (if (is.null(r$champ_na)) 0L else r$champ_na)
     CHAMP$mixed_tier <- CHAMP$mixed_tier + (if (is.null(r$champ_mixed)) 0L else r$champ_mixed)
@@ -1667,6 +1704,7 @@ if (N_WORKERS > 1L) {
     TIMING$sim <- TIMING$sim + r$timing$sim
     AGE_WARN$n <- AGE_WARN$n + r$age_warn
     SHOCK$n <- SHOCK$n + (if (is.null(r$shock_applied)) 0L else r$shock_applied)
+    SHOCK$fallback <- SHOCK$fallback + (if (is.null(r$shock_fallback)) 0L else r$shock_fallback)
     CHAMP$n <- CHAMP$n + (if (is.null(r$champ_applied)) 0L else r$champ_applied)
     CHAMP$na_tier <- CHAMP$na_tier + (if (is.null(r$champ_na)) 0L else r$champ_na)
     CHAMP$mixed_tier <- CHAMP$mixed_tier + (if (is.null(r$champ_mixed)) 0L else r$champ_mixed)
@@ -1735,6 +1773,10 @@ if (nzchar(SHOCK_FILE)) {
            and would score as a clean null. Check the tier/round/family keys in
            {.file {SHOCK_FILE}} against what the scored races actually carry."))
   cli::cli_alert_success("Shock add-back applied to {SHOCK$n} race{?s}.")
+  if (SHOCK$fallback > 0L) cli::cli_alert_warning(
+    "{SHOCK$fallback} of those {round(100*SHOCK$fallback/SHOCK$n)}% used the
+     family-agnostic fallback cell (exact tier x round x family cell missing) --
+     another family's expected shock, not this race's own.")
 }
 # CHAMPIONSHIP OFFSET COVERAGE. Reported every run, because a gate that fires on
 # nothing is invisible: the offset is a per-family constant, so placings and

@@ -69,17 +69,20 @@ sim_event <- function(field, ab, ev, cal, label) {
   # size = the whole entry field. project_field defaults to 8, which selects a
   # FINAL -- pre-tournament the question is who wins out of everyone entered,
   # and picking the eight best beforehand would assume the answer.
+  # Each tryCatch logs what it caught rather than swallowing it -- a bare NULL
+  # here reads identically whether the event had too little history or one of
+  # these three genuinely crashed. Caught in review, 2026-09-09.
   proj <- tryCatch(project_field(ab[athlete_id %in% f$person_id],
                                  event = ev, as_of = CUT, size = nrow(f)),
-                   error = function(e) NULL)
+                   error = function(e) { cli::cli_alert_danger("{ev}: project_field() failed: {conditionMessage(e)}"); NULL })
   if (is.null(proj) || !nrow(proj)) return(NULL)
   sim <- tryCatch(simulate_event(proj, n_sims = N_SIMS, calibration = cal,
                                  context = deployed_race_context("final")),
-                  error = function(e) NULL)
+                  error = function(e) { cli::cli_alert_danger("{ev}: simulate_event() failed: {conditionMessage(e)}"); NULL })
   if (is.null(sim)) return(NULL)
   # simulate_event returns the raw simulation matrices; medal_probs() reduces
   # them to per-athlete probabilities.
-  s <- tryCatch(medal_probs(sim), error = function(e) NULL)
+  s <- tryCatch(medal_probs(sim), error = function(e) { cli::cli_alert_danger("{ev}: medal_probs() failed: {conditionMessage(e)}"); NULL })
   if (is.null(s) || !nrow(s)) return(NULL)
   s <- merge(s, unique(f[, .(person_id, athlete_name, country)]),
              by.x = "athlete_id", by.y = "person_id", all.x = TRUE)

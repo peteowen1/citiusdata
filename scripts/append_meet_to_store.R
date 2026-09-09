@@ -105,6 +105,36 @@ if (length(missing)) {
 }
 out <- r[, ..store_cols]
 
+# CAST TO THE STORE'S OWN SCHEMA. `athletics_competition_results()` returns
+# `competition_id` as integer; the store's own type (set the first time
+# anything wrote a competition_id column) is string. write_parquet() does not
+# error on that -- it just writes an Int32 file next to Utf8 files in the same
+# partition. A plain read (deployed_history(), backtest_athletics.R) silently
+# re-types the WHOLE column across every file rather than failing, so the
+# corruption is invisible until something filters on competition_id
+# specifically -- this script's OWN verification step below does exactly that,
+# which is what caught it: it throws "Expression not supported in Arrow" on a
+# type-mixed partition instead of confirming the append.
+#
+# Cast every column generically, not just this one, so a future column this
+# script hands NA-filled or type-mismatched values for gets the same
+# protection rather than a second hand-fix.
+ds_types <- setNames(vapply(store_cols, function(cn) ds$schema$GetFieldByName(cn)$type$ToString(),
+                             character(1)), store_cols)
+for (cn in store_cols) {
+  want <- ds_types[[cn]]
+  have <- out[[cn]]
+  if (grepl("^string|^utf8", want, ignore.case = TRUE) && !is.character(have)) {
+    set(out, j = cn, value = as.character(have))
+  } else if (grepl("^double|^float", want, ignore.case = TRUE) && !is.double(have)) {
+    set(out, j = cn, value = as.double(have))
+  } else if (grepl("^int", want, ignore.case = TRUE) && !is.integer(have)) {
+    set(out, j = cn, value = as.integer(have))
+  } else if (grepl("^bool", want, ignore.case = TRUE) && !is.logical(have)) {
+    set(out, j = cn, value = as.logical(have))
+  }
+}
+
 # --- validate BEFORE writing --------------------------------------------------
 stopifnot("perf must be finite"      = all(is.finite(out$perf) | is.na(out$perf)),
           "event_id must be present" = !anyNA(out$event_id),
@@ -112,6 +142,17 @@ stopifnot("perf must be finite"      = all(is.finite(out$perf) | is.na(out$perf)
 cov <- vapply(out, function(x) mean(!is.na(x)), numeric(1))
 say("column fill rates (any 0%% is a mapping bug, not a data gap):")
 print(round(sort(cov), 3))
+still_mismatched <- store_cols[vapply(store_cols, function(cn) {
+  want <- ds_types[[cn]]
+  have <- out[[cn]]
+  (grepl("^string|^utf8", want, ignore.case = TRUE) && !is.character(have)) ||
+    (grepl("^double|^float", want, ignore.case = TRUE) && !is.double(have)) ||
+    (grepl("^int", want, ignore.case = TRUE) && !is.integer(have)) ||
+    (grepl("^bool", want, ignore.case = TRUE) && !is.logical(have))
+}, logical(1))]
+if (length(still_mismatched)) cli::cli_abort(
+  "type cast failed for column{?s} {.field {still_mismatched}} -- writing this
+   would silently corrupt the store schema. Fix the cast rule above.")
 zero <- names(cov)[cov == 0 & !(names(cov) %in% c("comp_name"))]
 if (length(zero)) cli::cli_abort(
   "column{?s} 100% empty after mapping: {.field {zero}} -- fix the mapping rather than writing an empty column.")

@@ -477,11 +477,20 @@ deployed_history <- function(dir, events, from, to) {
       # back to the feed tier silently. Same trap as everywhere else in this
       # repo; the difference is that this one says so out loud.
       cov <- 100 * mean(!is.na(d$meet_tier))
-      if (cov < 50) cli::cli_abort(c(
+      # 50% was a floor for a TOTAL join failure (a type mismatch leaves it
+      # ~0%), not a partial one. Measured 2026-09-09 on championship_results:
+      # every row carries a competition_id and every one resolves to a
+      # meet_tier -- the healthy baseline is 100%, not some lower ceiling from
+      # structurally unjoinable rows. So a join that's actually degraded to,
+      # say, 70% would pass this guard silently with only an info line, while
+      # serving WAC-fitted offsets to the 30% that didn't match. Caught in
+      # review, 2026-09-09.
+      if (cov < 95) cli::cli_abort(c(
         "Rescue rebuild: meet_tier attached to only {round(cov, 1)}% of rows.",
         i = "DEPLOYED$calibration is meet_tier-fitted, so this store would
              serve predictions on mismatched labels. Check the
-             competition_id type on both sides of the join."))
+             competition_id type on both sides of the join.",
+        i = "Measured baseline is 100% coverage when the join is healthy."))
       cli::cli_alert_info("meet_tier attached to {round(cov, 1)}% of rescue-rebuild rows.")
     } else {
       cli::cli_abort(c(
@@ -549,11 +558,12 @@ deployed_ability <- function(past, as_of, calibration,
     # meant editing five files and forgetting one was invisible"), and exactly
     # the one the per-family branch's own history already records.
     #
-    # DORMANT BUT AIMED AT THE NEXT PROMOTION when found (2026-09-09 review):
-    # hl_family is non-empty today so this branch never runs, but the
-    # event_params note above says that table REPLACES the per-family map. The
-    # moment event_params.rds is promoted, hl_map goes empty, this branch takes
-    # over, and adjust_race would have turned itself off for every family.
+    # WAS DORMANT WHEN FOUND (2026-09-09 review), NOW THE ACTIVE BRANCH: this
+    # fix landed in the same commit that promoted event_params.rds, which
+    # empties hl_map and makes this the branch every deployed_ability() call
+    # takes. Left dormant it would have turned adjust_race off for every
+    # family the moment the promotion shipped, with the stamp still reading
+    # `strip4fam`. Fixed here, so both branches now pass adjust_race correctly.
     .col <- function(cn, fallback) if (is.null(event_params)) fallback else
       event_params[, c("event_id", "family", cn), with = FALSE]
     return(estimate_ability(past, as_of = as_of,

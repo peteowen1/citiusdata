@@ -70,8 +70,21 @@ build <- function(src, dest, label, join_tier = FALSE, data = NULL) {
     d <- merge(d, CAT_TBL, by = "competition_id", all.x = TRUE)
     cov <- 100 * mean(!is.na(d$meet_tier))
     cli::cli_alert_info("  {label}: meet_tier attached to {round(cov, 1)}% of rows.")
-    if (cov <= 50) {
-      cli::cli_abort("{label}: meet_tier coverage {round(cov, 1)}% -- join is broken, refusing to ship it silently.")
+    # cov ALONE cannot be the guard: athletics_corpus.rds has career-route rows
+    # with no competition_id at all (measured 2026-09-09: 33.4% of rows), so its
+    # healthy ceiling is ~66.6%, not 100% -- a coverage-of-all-rows floor would
+    # either let a real partial join failure through (the old 50% did) or abort
+    # a perfectly healthy corpus build if raised to match championship_results'
+    # 100% ceiling. The invariant that actually holds regardless of how many
+    # rows carry a competition_id: of the ones that DO, the join should resolve
+    # essentially all of them. Measured 100.0% on both stores when healthy.
+    # Caught in review, 2026-09-09 -- same gap as the rescue-rebuild guard in
+    # _deployed.R, fixed there the same day.
+    has_cid <- !is.na(d$competition_id)
+    cov_joinable <- if (any(has_cid)) 100 * mean(!is.na(d$meet_tier[has_cid])) else NA_real_
+    cli::cli_alert_info("  {label}: of rows WITH a competition_id, {round(cov_joinable, 1)}% resolved.")
+    if (is.na(cov_joinable) || cov_joinable < 95) {
+      cli::cli_abort("{label}: of rows carrying a competition_id, only {round(cov_joinable, 1)}% resolved to meet_tier -- join is broken, refusing to ship it silently.")
     }
   }
 
