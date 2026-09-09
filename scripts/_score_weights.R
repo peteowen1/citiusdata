@@ -170,10 +170,37 @@ wac_score_weights <- function() {
 # at the one place every scorer reads it.
 .race_tier_lookup <- function(out_dir) {
   f <- file.path(out_dir, "race_tier.rds")
-  if (file.exists(f)) return(readRDS(f))
-  ch <- data.table::setDT(readRDS(file.path(out_dir, "championship_results.rds")))
+  src <- file.path(out_dir, "championship_results.rds")
+  # FINGERPRINTED, because this cache had no invalidation at all. It is built
+  # once from championship_results.rds and then returned forever: every scorer
+  # and every fitter (fit_event_params.R via attach_score_weight()) reads it
+  # first, so a re-harvest that CORRECTS a meeting's WAC grade would never reach
+  # any of them until somebody remembered to delete the file by hand. The
+  # comments above describe exactly that scenario -- Weltklasse Zurich's grade
+  # moved GL -> GW -> DF -> GW -> DF across the years -- so a corrected tier is
+  # a real event, not a hypothetical one.
+  #
+  # This is the "rotate the cache after fixing cached work" failure: the
+  # behaviour moves and the fingerprint does not, so the flag reads the same
+  # before and after. Keyed on the source's mtime and size, which is enough to
+  # catch a re-harvest without paying for a hash of a 4.5M-row file.
+  # Added after review, 2026-09-09.
+  .fp <- function() {
+    i <- file.info(src)
+    list(mtime = as.numeric(i$mtime), size = as.numeric(i$size))
+  }
+  want <- .fp()
+  if (file.exists(f)) {
+    got <- readRDS(f)
+    fp <- attr(got, "src_fp")
+    if (!is.null(fp) && isTRUE(all.equal(fp, want))) return(got)
+    cli::cli_alert_info(
+      "race_tier.rds is stale against championship_results.rds ({if (is.null(fp)) 'no fingerprint' else 'fingerprint differs'}); rebuilding.")
+  }
+  ch <- data.table::setDT(readRDS(src))
   lk <- unique(ch[, .(race_key, race_tier = tier)], by = "race_key")
   rm(ch); invisible(gc())
+  attr(lk, "src_fp") <- want
   saveRDS(lk, f)
   lk
 }

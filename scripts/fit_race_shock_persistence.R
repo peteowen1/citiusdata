@@ -193,3 +193,29 @@ fwrite(by_fam, file.path(OUT, "race_shock_persistence_by_family.csv"))
 fwrite(by_gap, file.path(OUT, "race_shock_persistence_by_gap.csv"))
 fwrite(by_size, file.path(OUT, "race_shock_persistence_by_size.csv"))
 say("wrote %s with $race_shock (beta %.4f, %d family rows, %s expected cells)", DST, overall$beta, nrow(by_fam), format(nrow(expected), big.mark = ","))
+
+# DOES ANYTHING ACTUALLY READ WHAT WE JUST WROTE?
+#
+# This script's default output is `<cal>_persist.rds`, but the only consumer,
+# build_calibration_compose.R, defaults to reading `..._persist5.rds` -- a
+# hand-numbered name someone reached by re-running this fitter five times with
+# CITIUS_SHOCK_OUT overridden. So running this script exactly as its own usage
+# line documents overwrites a file NOTHING READS, prints the success line above,
+# and exits 0, while the composer keeps using an artefact from a different run.
+# The deployed calibration is built from _persist5.
+#
+# That is this project's own "a fitter completing and writing its artefact is not
+# evidence the scorer reads it" lesson, in the same shape that once had a
+# scorecard reporting numbers for a model the fitter had not produced. Said out
+# loud here rather than fixed by renaming, because renaming the default would
+# silently change which artefact the next compose run picks up.
+# Added after review, 2026-09-09.
+.consumer_default <- "calibration_race_eb_perevent_persist5.rds"
+.consumer_wants <- Sys.getenv("CITIUS_COMPOSE_SHOCK", .consumer_default)
+if (!identical(basename(DST), basename(.consumer_wants))) {
+  cli::cli_alert_warning(c(
+    "!" = "build_calibration_compose.R reads {.file {.consumer_wants}}, but this run wrote {.file {basename(DST)}}.",
+    "i" = "Nothing will pick this fit up. Either re-run with
+           {.code CITIUS_SHOCK_OUT={.consumer_wants}}, or point the composer at
+           this file with {.code CITIUS_COMPOSE_SHOCK={basename(DST)}}."))
+}

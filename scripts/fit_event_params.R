@@ -83,7 +83,19 @@ fit   <- as.list(readRDS(file.path(OUT, "marks_fit_params.rds")))
 #
 # Inert on a T1-only cache, where every row is T1 and the weight is 1 throughout.
 TIER_W <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_LAB_TIER_WEIGHT", "1")))
-if (!is.finite(TIER_W) || TIER_W < 0) TIER_W <- 1
+if (!is.finite(TIER_W) || TIER_W < 0) {
+  # SAY SO. A typo, stray whitespace or an accidentally-quoted value parses to
+  # NA, silently becomes 1, and the run then looks identical to a deliberate
+  # TIER_W=1 run in every log line -- including the "fit weights:" line below,
+  # which would report 1.000 either way. _score_weights.R validates its own
+  # CITIUS_SCORE_WEIGHTS strictly and stop()s on the same class of bad input;
+  # two closely related weighting knobs written the same week should not fail in
+  # opposite directions. Warned rather than fatal because 1 is a sane default
+  # and this is a lab knob, not a shipping one. Added after review, 2026-09-09.
+  .raw <- Sys.getenv("CITIUS_LAB_TIER_WEIGHT", "1")
+  say("CITIUS_LAB_TIER_WEIGHT=%s is not a finite number >= 0; using 1", .raw)
+  TIER_W <- 1
+}
 if (!"meet_tier" %in% names(test)) {
   test[, meet_tier := "T1_elite"]
   say("cache predates the meet_tier column; treating every row as T1")
