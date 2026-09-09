@@ -21,7 +21,12 @@
 DEPLOYED <- list(
   # Bump on every promotion. Written into prediction outputs so any artefact can
   # be traced to the configuration that produced it.
-  stamp = "2026-08-13 csigma_coast",
+  # Must contain the arm exactly as derived from the calibration FILENAME
+  # (`calibration_corpus_wac_coast_0904.rds` -> `wac_coast_0904`), because the
+  # stamp is the only thing a reader of a published card can use to tell which
+  # model produced it. Dropping the `_0904` made the stamp name a different arm
+  # from the file it actually loads.
+  stamp = "2026-09-09 wac_coast_0904_full2 ctxsd strip4fam evparams5 (debias OFF, blend OFF)",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -67,7 +72,49 @@ DEPLOYED <- list(
   # The DEPLOYED file carries the trait fitted on the FULL corpus. The excluded
   # refit was a measurement device; there is no leakage when forecasting races
   # that have not happened.
-  calibration = "calibration_corpus_csigma_coast.rds",
+  # PROMOTED 2026-09-04, replacing calibration_corpus_csigma_coast.rds. Same
+  # corpus and the same coasting trait; the ONE input that differs is which
+  # label the tier offsets were fitted on -- the catalogue's meet_tier (WAC:
+  # OW/DF/GW/GL -> T1, A/B/C/D -> T2, E/F -> T3) instead of the feed's
+  # per-result `tier`, which is internally inconsistent (one meeting can carry
+  # four grades across its own results) and whose fitted scale was not even
+  # monotonic (mid corrected 1.43% while low corrected only 1.22%).
+  #
+  # This exact change was REJECTED on 2026-08-29 (T1 marks MAE +3.15% worse,
+  # p=3e-15) and that verdict stood until the catalogue underneath it was
+  # rebuilt. Re-run 2026-09-04 on 53,311 paired T1_elite predictions across 74
+  # events: marks MAE 2.495% -> 2.428% (-2.68%, p=1.9e-283), gold logloss
+  # 0.1675 -> 0.1662 (p=1.3e-04), medal logloss a tie (p=0.785). No metric
+  # traded against another, which is the shape of a real fix rather than a
+  # tuning knob.
+  #
+  # PAIRED WITH build_stores.R's join_tier = TRUE. This file names a
+  # meet_tier-FITTED calibration, so the history it is applied to must CARRY
+  # meet_tier. Promoting one without the other applies offsets fitted on one
+  # label set to a different label set -- silent, and no test fails.
+  #
+  # TWO THINGS TO KNOW BEFORE TRUSTING THIS FURTHER, both recorded rather than
+  # buried. (1) The reversal is not attributed: the 2026-09-04 population is
+  # not size-matched to the run it overturned, so "the catalogue fixes did it"
+  # is likely but unproven, and the test that would settle it was skipped in
+  # favour of shipping. (2) It is not uniform -- ~19 of 67 events got WORSE,
+  # concentrated in Hammer Throw M (+0.233pp), High Jump M (+0.232) and W, the
+  # race walks, and 1500m M. Per-event table:
+  # citiusdata/data/wac_reverify_by_event_0904.csv.
+  # PROMOTED 2026-09-06 (evening): the same calibration with three tables
+  # attached by build_calibration_compose.R -- $condition_sd_context (shared
+  # shock per event x tier x round), $spread_scales (per-family multipliers
+  # fitted on hold-out residuals, method validated out of sample: 2024 finals
+  # 50% interval covers 48.8%, 90% covers 89.7%, from 62.5% / 96.2%), and
+  # $race_shock with the EB-shrunk race table (read only when adjust_race is
+  # TRUE). Everything the old file had is unchanged in this one.
+  # 2026-09-07 05:15: _full2 adds the per-race, family-gated race-shock strip
+  # ($race_shock with by_race beta and families = sprint/hurdles/jump/throw,
+  # composed from calibration_race_eb_perevent_persist5.rds). Full-simulation
+  # arm vs the control: medal logloss pooled -0.41% (sprint -1.93%, throw
+  # -0.29%, jump +0.40%, hurdles +0.10%), marks MAE pooled -0.27% (sprint
+  # -0.85%, jump -1.08%, throw -1.12%). Jumps are the watch item.
+  calibration = "calibration_corpus_wac_coast_0904_full2.rds",
 
   # AGING -- the blended curve, adopted 2026-07-29.
   aging = "aging.rds",
@@ -109,12 +156,249 @@ DEPLOYED <- list(
   # History depth per estimate. TWELVE YEARS, and do not shorten it on the
   # argument that old marks carry negligible weight -- w_total is a SUM and it
   # drives shrinkage. Cutting to seven years moved p_gold by up to 0.246.
-  history_days = 4380L
+  history_days = 4380L,
+
+  # FAMILY-POOL MARKS DEBIAS, gated to four families. PROMOTED 2026-09-06.
+  #
+  # WHAT IT CORRECTS. The coasting trait (see CALIBRATION above) lifts jogged
+  # heats, which raises ability LEVELS, so absolute marks run fast. That cost
+  # was recorded there as "correctable, and queued" on 2026-08-13. Measured on
+  # 2026-09-05 (docs/reviews/marks-lose-to-last5-2026-09-05.md) it is a
+  # PER-FAMILY level bias that cancels globally: throw +2.03%, jump +1.41%,
+  # hurdles +1.37%, sprint +1.30% optimistic, road -1.79% PESSIMISTIC, pooled
+  # -0.05%. Every global bias check therefore called the model unbiased.
+  #
+  # WHAT THIS DOES. Subtracts a fitted per-event level offset (percent of mark,
+  # event shrunk toward family x sex, fit by fit_family_pool_offsets.R on the
+  # WAC control arm with data strictly before 2020-01-01) from `ability` in
+  # deployed_ability(). It is a per-event CONSTANT, so every entrant in a race
+  # moves together and placings, p_gold and p_medal are unchanged bit-for-bit;
+  # only the predicted mark moves. check_deployed_debias.R asserts both.
+  #
+  # WHY GATED. Applied blanket on the T1_elite 2020+ goal set the debias took
+  # events beating last-5 on marks from 18 to 25 of 54 with zero event-level
+  # regressions, but pooled MAE got WORSE (+23.7%) because road/marathon are
+  # 36% of predictions and were pushed the wrong way. Per family, control ->
+  # debias marks MAE (goal_by_event_fullhistory_0905 vs _debias_0905):
+  #   sprint  -21.2% (8 of 8 events better)   road     +40.8% (1 of 6 better)
+  #   hurdles -18.3% (5 of 6)                 middle    +9.5% (1 of 6)
+  #   jump    -10.4% (8 of 8)                 combined  +5.0% (0 of 2)
+  #   throw    -9.8% (7 of 8)                 distance  +3.7% (4 of 8)
+  #                                           walk      +1.8% (0 of 2)
+  # The gate is the four families where it wins -- exactly the four the family
+  # bias table predicted. Every one of the +6 flipped events is in them, so the
+  # gated version keeps the whole gain and drops every regression.
+  #
+  # OPEN, recorded not resolved: road's +40.8% under a ~1pp correction is too
+  # large for a level shift alone (Marathon M 2.90% -> 4.27%). Its fitted
+  # offset is -0.98 (fs_map road|M) while the family runs 1.79% pessimistic, so
+  # the sign should HELP. Something about how the offsets are fitted for road
+  # is wrong and has not been chased; the gate makes it moot for shipping.
+  # DISABLED 2026-09-07 13:30, hours after the race-shock strip was promoted.
+  # The two corrections address the SAME optimism in the SAME four families and
+  # now stack. Measured on the gate-verified marks lab (T1 finals 2025-2026, 39
+  # scoreable events, a config reproducing estimate_ability() to 0.0000%):
+  # turning the debias off improves marks MAE in ALL 27 gated events -- sprint
+  # -27.8%, hurdles -26.8%, throw -16.0%, jump -15.7% -- and takes events
+  # beating last-5 from 10 to 18 of 39, pooled from +11.5% worse than the
+  # baseline to -0.5% better. Ungated families are bit-identical either way.
+  #
+  # Both promotions were individually correct on their own evidence: the debias
+  # won on a PRE-STRIP model (2026-09-05, 18 -> 25 events on the 2020+ set), and
+  # the strip won with the debias OFF (2026-09-07 full-sim arm, medal logloss
+  # -0.41%, marks -0.27%). Neither arm tested them together. This is the
+  # double-count.
+  #
+  # The offsets are stale as well as redundant: fitted with a 2020-01-01 holdout
+  # on a model two calibrations old. Re-enable only after a refit against the
+  # CURRENT model, judged on the standard apparatus with the strip on.
+  family_debias = NULL,
+
+  # ---------------------------------------------------------------------------
+  # LIVE LEVERS THAT MOVE THE LEVEL OF PREDICTIONS. Keep this list current.
+  #
+  # It exists because on 2026-09-07 the family debias and the race-shock excess
+  # strip were promoted eight hours apart, each validated against a control
+  # lacking the other, and together they removed the same optimism twice --
+  # marks 16-28% worse per family. No fingerprint could catch it, because both
+  # arms were internally valid. Before promoting anything that shifts the level
+  # of a prediction, read this list and ask what else already shifts the same
+  # quantity for the same population.
+  #
+  #   adjust_race       ON   strips non-persistent race shock from history;
+  #                          lowers ability in sprint/hurdles/jump/throw
+  #   family_debias     OFF  refuted on top of the strip, see below
+  #   marks_blend       OFF  withdrawn 2026-09-07: blending with the baseline
+  #                          is not a way to beat the baseline. See below.
+  #   race_context      ON   changes spread, not centre
+  #   event_params      OFF  fitted per-event half_life, races_half_life,
+  #                          trim_tactical and context_scale. Not promoted;
+  #                          would REPLACE hl_family rather than compose with it.
+  # ---------------------------------------------------------------------------
+
+  # RACE SHOCK, excess strip with fitted persistence. Built 2026-09-06,
+  # PROMOTED 2026-09-07 alongside calibration_corpus_wac_coast_0904_full2.rds,
+  # which carries the $race_shock table this needs. (Comment corrected
+  # 2026-09-09: it still read "NOT YET PROMOTED -- flip to TRUE" while the
+  # setting below was already TRUE, contradicting the LIVE LEVERS table above.
+  # In the one file that exists to be the single source of truth, a comment
+  # that disagrees with the value beside it is the whole failure mode.)
+  # estimate_ability(adjust_race = TRUE) strips
+  # (1 - beta) * (race effect - expected effect for that event x tier x round)
+  # from every historical mark; beta by tier of the shocked race (top 0.53,
+  # high 0.72, mid 0.86, low 1.02 on the 2026-09-06 fit). Judged by the
+  # marks-only arm `backtest_excess_strip.rds` against ctrl_tierfix.
+  adjust_race = TRUE,
+
+  # RACE CONTEXT for the simulation. Built 2026-09-06, PROMOTED 2026-09-07
+  # alongside calibration_corpus_wac_coast_0904_full2.rds, which carries the
+  # $condition_sd_context and $spread_scales tables this needs. (Comment
+  # corrected 2026-09-09; see the race-shock note above for why.)
+  # Enabled, every shipping simulate_event() call gets
+  # list(meet_tier, round_class) via deployed_race_context(), so the shared
+  # shock and the mark-distribution spread are the cell's values (a T1 final
+  # shares 0.33-0.96 of the event-wide shock by family) rather than the
+  # corpus-wide ones. Judged by pit_coverage_check.R on 2024 and 2025 finals.
+  race_context = list(enabled = TRUE, meet_tier = "T1_elite"),
+
+  # MARKS RECENCY BLEND: OFF, and it is a diagnostic lever rather than a model
+  # component. Deployed at 0.5 on 2026-09-07 and withdrawn the same day.
+  #
+  # Pete's objection, which is right: "You can't blend with a baseline to beat a
+  # baseline cause then you're stealing the baseline's info." A model containing
+  # last-5 cannot be honestly scored against last-5; the term does nothing for
+  # an athlete with no recent history, which is where prediction is hardest; and
+  # it could only ever touch MARKS, never the ranking. That last point was sold
+  # as a safety property and is really the tell -- a term that has to be kept
+  # away from the quantity deciding medals is a patch on a metric.
+  #
+  # What it measured is still valuable and is now an open defect: mixing in a
+  # plain unweighted mean of five raw marks improves held-out mark error by ~4%
+  # and takes events beating that baseline from 18 of 44 to 36. So `ability` is
+  # systematically wrong as a point forecast in a way a dumb average is not.
+  # Finding and fixing THAT is the work. docs/reviews/marks-blend-2026-09-07.md.
+  #
+  # `estimate_ability()` still emits `recent_mean` -- it is the ingredient, and
+  # the diagnostics need it. Nothing consumes it while this is 0.
+  marks_blend = 0,
+
+  # RACES-SINCE DECAY: not promoted. Inf is off, which is what runs today.
+  #
+  # A result carries half weight once the athlete has run this many more races
+  # in the event, on top of the calendar `half_life`. Measured on 2024+ held out
+  # against a like-for-like last-5 baseline, 44 events:
+  #
+  #   half_life 365, races Inf   28 of 44   MAE 2.1487   <- deployed
+  #   half_life 730, races Inf   17 of 44   MAE 2.2420
+  #   half_life 365, races 5     36 of 44   MAE 2.0939
+  #   half_life 730, races 5     37 of 44   MAE 2.0791
+  #
+  # PROMOTE THE PAIR OR NEITHER. 730 alone is much worse than the deployed 365,
+  # because a 365-day half-life had been doing two jobs -- discounting stale
+  # form, and crudely capping how many results accumulate. Only once races-since
+  # handles the second can the calendar decay relax to its real value.
+  #
+  # Blocked on the medal arm: this changes `ability`, so it moves finishing
+  # orders, and nothing about marks licenses that.
+  # docs/reviews/marks-blend-2026-09-07.md
+  races_half_life = Inf,
+
+  # PER-EVENT PARAMETER TABLES. PROMOTED 2026-09-09, after the medal arm.
+  #
+  # `scripts/fit_event_params.R` writes `data/event_params.rds`: one row per
+  # event carrying `half_life`, `races_half_life`, `trim_tactical`,
+  # `context_scale` and `peak_gamma`, each fitted on the fit years then shrunk
+  # twice -- the event toward its family, the family toward the global value,
+  # each in proportion to its own evidence.
+  #
+  # WHAT THE GATE ACTUALLY SAID. `_run_event_params_arm_chunked.ps1` ran both
+  # arms to completion over 395 meets (2026-09-09), ctrl = this config without
+  # the table, event = with it. On T1_elite, 1,760 races / 28,457 predictions:
+  #   medal Brier   -3.16%  p = 4.5e-06
+  #   medal logloss -2.34%  p = 0.000138
+  #   gold logloss  -1.66%  p = 0.041
+  #   marks MAE     -1.18%  p = 1.6e-05
+  #   favourite picked correctly 48.4% -> 49.6%
+  # Against last-5 rather than against ctrl, the same arm reads marks MAE
+  # -7.26% (p = 2.9e-75) and medal logloss -6.90% (p = 1.8e-20).
+  #
+  # THE MARKS NUMBERS ABOVE ARE POST-CORRECTION, and the correction matters:
+  # the arm as first run applied a championship offset to 92% of races that
+  # were not championships, which made marks look WORSE. Fixed in
+  # backtest_athletics.R (gated on .is_championship); placings were bit-
+  # identical either way (0.0000000000), so the medal verdict is unaffected by
+  # it. The corrected marks figures come from applying the fix analytically to
+  # the completed arms rather than re-running seven hours -- verified to
+  # reproduce a real re-run to 0.000000% across 8,142 rows.
+  #
+  # SETTING THIS DISABLES `hl_family` ABOVE. The table carries a half-life per
+  # event, and leaving the family override on would stack two corrections that
+  # were each fitted with the other absent -- the same shape as the debias and
+  # the strip double-counting on 2026-09-07. Enforced below in
+  # .deployed_ability_raw(), and by backtest_athletics.R; any other consumer
+  # must too.
+  #
+  # AND IT WAS NOT SAFE TO PROMOTE UNTIL 2026-09-09. Emptying hl_family routes
+  # .deployed_ability_raw() to its no-map branch, which was silently omitting
+  # `adjust_race` and so would have turned the race-shock strip off for every
+  # family while the stamp still read `strip4fam`. Fixed in the same session;
+  # see that branch's own comment.
+  event_params = "event_params.rds"
 )
+Sys.setenv(CITIUS_MARKS_BLEND = as.character(DEPLOYED$marks_blend))
 
 # --- accessors ---------------------------------------------------------------
 
 deployed_calibration <- function(dir) readRDS(file.path(dir, DEPLOYED$calibration))
+
+#' The per-event parameter table DEPLOYED names, or NULL when none is set.
+#'
+#' Aborts rather than falling back if the file is named but missing: a silent
+#' NULL here would run the global parameters while every stamped artefact
+#' claimed `evparams5`, which is precisely the promoted-config-not-reaching-the-
+#' consumer failure this file exists to prevent.
+deployed_event_params <- function(dir = here::here("citiusdata", "data")) {
+  nm <- DEPLOYED$event_params
+  if (is.null(nm) || !nzchar(nm)) return(NULL)
+  f <- file.path(dir, nm)
+  if (!file.exists(f)) cli::cli_abort(c(
+    "x" = "DEPLOYED$event_params names {.file {nm}} but it is not at {.path {f}}.",
+    "i" = "Build it with {.code scripts/fit_event_params.R}, or set
+           {.code event_params = NULL} if the global parameters are intended."))
+  ep <- data.table::as.data.table(readRDS(f))
+  # `family` is required because .col() below subsets it unconditionally. Left
+  # out of this list, a table without it failed deep inside estimate_ability()
+  # with "column not found: [family]" mid-prediction, rather than here with the
+  # message that names the fix.
+  need <- c("event_id", "family", "half_life", "races_half_life",
+            "trim_tactical", "context_scale")
+  miss <- setdiff(need, names(ep))
+  if (length(miss)) cli::cli_abort(
+    "{.file {nm}} is missing column{?s}: {.field {miss}}.")
+
+  # COVERAGE, NOT PRESENCE. citius:::.event_param() resolves an absent event by
+  # matching its FAMILY against the table -- and match() takes the first row with
+  # that family, which in a one-row-per-event table is an arbitrary sibling's
+  # already-twice-shrunk value, not a family average. That is a silent, plausible
+  # wrong answer. It cannot happen while the table covers the registry, so check
+  # that here rather than relying on the fit and the registry never drifting.
+  reg <- citius::citius_events()$event_id
+  gap <- setdiff(reg, ep$event_id)
+  if (length(gap)) cli::cli_abort(c(
+    "x" = "{.file {nm}} covers {nrow(ep)} events but the registry has {length(reg)};
+           {length(gap)} missing: {.field {utils::head(gap, 8)}}.",
+    "i" = "An event absent from the table silently inherits an arbitrary sibling's
+           fitted value. Rebuild with {.code scripts/fit_event_params.R}."))
+
+  # A row that was never fitted is a legitimate state -- it now inherits its
+  # family rather than the flat global -- but it is worth naming, because 4 of
+  # these are live athletics events and reading it off a value fingerprint is how
+  # the 730 -> 180 race-walk regression was found rather than prevented.
+  if ("fitted" %in% names(ep) && any(!ep$fitted)) cli::cli_inform(
+    "{.file {nm}}: {sum(!ep$fitted)} of {nrow(ep)} events carry family-inherited
+     parameters rather than their own fit.")
+  ep
+}
 
 deployed_aging <- function(dir) {
   f <- file.path(dir, DEPLOYED$aging)
@@ -169,20 +453,55 @@ deployed_history <- function(dir, events, from, to) {
   )
   ok <- tryCatch({
     d <- flag_implausible(data.table::setDT(readRDS(src)))
-    # A meet_tier join was added here 2026-08-29 to switch this fallback onto
-    # the catalogue's per-competition tier, matching a fix that was then
-    # PROPERLY TESTED and REJECTED (.scratch/athletics-calendar/issues/
-    # 03-diamond-league-tier-defect.md addendum, 2026-08-29): T1 elite
-    # regressed +3.15% (p=3e-15) against the deployed feed-tier calibration.
-    # DEPLOYED$calibration is still fitted on the feed's `tier`, not
-    # `meet_tier` -- joining meet_tier here without a matching calibration
-    # refit would silently apply the wrong offsets to every rescue rebuild.
-    # Reverted 2026-08-30 to keep this fallback consistent with the deployed
-    # calibration until a same-source refit is adopted (see build_stores.R's
-    # matching join_tier = FALSE for the same reason).
+    # This fallback MUST carry meet_tier, because DEPLOYED$calibration is now
+    # fitted on meet_tier (promoted 2026-09-04). It was reverted to feed-tier
+    # on 2026-08-30 when the calibration was feed-tier-fitted, and is restored
+    # here for exactly the same reason it was removed: the label the history
+    # carries has to match the label the offsets were fitted on. A rescue
+    # rebuild that silently dropped meet_tier would apply WAC-fitted offsets
+    # to feed-tier labels on every prediction it served, with nothing failing.
+    # Mirrors build_stores.R's join_tier = TRUE.
+    ctl_f <- file.path(dir, "competition_catalogue.parquet")
+    if (file.exists(ctl_f)) {
+      ctl <- data.table::as.data.table(
+        arrow::read_parquet(ctl_f, col_select = c("competition_id", "meet_tier")))
+      ctl[, competition_id := as.character(competition_id)]
+      d[, .cid := as.character(competition_id)]
+      d <- merge(d, ctl, by.x = ".cid", by.y = "competition_id",
+                 all.x = TRUE, sort = FALSE)
+      d[, .cid := NULL]
+      # Coverage, asserted rather than assumed. The catalogue round-trips
+      # competition_id through parquet as character while the harvest holds an
+      # integer, so a type mismatch here matches nothing and leaves meet_tier
+      # 100% NA -- which looks exactly like "the join did nothing" and falls
+      # back to the feed tier silently. Same trap as everywhere else in this
+      # repo; the difference is that this one says so out loud.
+      cov <- 100 * mean(!is.na(d$meet_tier))
+      # 50% was a floor for a TOTAL join failure (a type mismatch leaves it
+      # ~0%), not a partial one. Measured 2026-09-09 on championship_results:
+      # every row carries a competition_id and every one resolves to a
+      # meet_tier -- the healthy baseline is 100%, not some lower ceiling from
+      # structurally unjoinable rows. So a join that's actually degraded to,
+      # say, 70% would pass this guard silently with only an info line, while
+      # serving WAC-fitted offsets to the 30% that didn't match. Caught in
+      # review, 2026-09-09.
+      if (cov < 95) cli::cli_abort(c(
+        "Rescue rebuild: meet_tier attached to only {round(cov, 1)}% of rows.",
+        i = "DEPLOYED$calibration is meet_tier-fitted, so this store would
+             serve predictions on mismatched labels. Check the
+             competition_id type on both sides of the join.",
+        i = "Measured baseline is 100% coverage when the join is healthy."))
+      cli::cli_alert_info("meet_tier attached to {round(cov, 1)}% of rescue-rebuild rows.")
+    } else {
+      cli::cli_abort(c(
+        "Rescue rebuild needs {.file competition_catalogue.parquet} and it is missing.",
+        i = "DEPLOYED$calibration is fitted on the catalogue's meet_tier; without
+             it this store can only carry the feed's tier, which is the wrong
+             label set for those offsets."))
+    }
     keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "round",
-              "tier", "competition_id", "comp_start", "place", "race_key",
-              "sex", "discipline", "wind", "indoor", "comp_name")
+              "tier", "meet_tier", "competition_id", "comp_start", "place",
+              "race_key", "sex", "discipline", "wind", "indoor", "comp_name")
     d <- d[, intersect(keep, names(d)), with = FALSE]
     data.table::setorderv(d, intersect(c("event_id", "date"), names(d)))
     write_results_store(d, file.path(dir, DEPLOYED$history_store))
@@ -208,11 +527,55 @@ deployed_history <- function(dir, events, from, to) {
 #' `estimate_ability()` takes a single half-life, so the history is split by
 #' family and stacked. Each event belongs to exactly one family, so no
 #' athlete-event is estimated twice.
-deployed_ability <- function(past, as_of, calibration) {
+#' The race context every shipping simulate_event() call passes, or NULL while
+#' DEPLOYED$race_context$enabled is FALSE (then simulate_event() behaves exactly
+#' as before). `round_class` is "final" for a medal forecast; the live Glasgow
+#' script passes the round it is simulating.
+deployed_race_context <- function(round_class = "final",
+                                  meet_tier = DEPLOYED$race_context$meet_tier) {
+  if (!isTRUE(DEPLOYED$race_context$enabled)) return(NULL)
+  list(meet_tier = meet_tier, round_class = round_class)
+}
+
+deployed_ability <- function(past, as_of, calibration,
+                             debias = deployed_debias_offsets(),
+                             event_params = deployed_event_params()) {
+  deployed_debias(.deployed_ability_raw(past, as_of, calibration, event_params), debias)
+}
+
+.deployed_ability_raw <- function(past, as_of, calibration, event_params = deployed_event_params()) {
   hl_map <- DEPLOYED$hl_family
+  # THE TABLE REPLACES THE FAMILY MAP, enforced here rather than trusted to a
+  # comment. It already carries a half-life per event; leaving hl_family on top
+  # would stack two corrections each fitted with the other absent.
+  if (!is.null(event_params)) hl_map <- NULL
   if (!length(hl_map)) {
-    return(estimate_ability(past, as_of = as_of, half_life = DEPLOYED$half_life,
-                            calibration = calibration))
+    # EVERY ADJUSTMENT THE OTHER BRANCH PASSES MUST BE PASSED HERE TOO.
+    # `adjust_race` was missing from this call while the per-family branch below
+    # passed it, so this branch silently fell back to estimate_ability()'s own
+    # default of FALSE -- the race-shock strip off, no error, no stamp change.
+    # Exactly the failure this file's header describes ("promoting a change
+    # meant editing five files and forgetting one was invisible"), and exactly
+    # the one the per-family branch's own history already records.
+    #
+    # WAS DORMANT WHEN FOUND (2026-09-09 review), NOW THE ACTIVE BRANCH: this
+    # fix landed in the same commit that promoted event_params.rds, which
+    # empties hl_map and makes this the branch every deployed_ability() call
+    # takes. Left dormant it would have turned adjust_race off for every
+    # family the moment the promotion shipped, with the stamp still reading
+    # `strip4fam`. Fixed here, so both branches now pass adjust_race correctly.
+    .col <- function(cn, fallback) if (is.null(event_params)) fallback else
+      event_params[, c("event_id", "family", cn), with = FALSE]
+    return(estimate_ability(past, as_of = as_of,
+                            half_life = .col("half_life", DEPLOYED$half_life),
+                            races_half_life = .col("races_half_life", DEPLOYED$races_half_life),
+                            trim_tactical = .col("trim_tactical", 0.25),
+                            context_scale = .col("context_scale", 1),
+                            peak_gamma = if (is.null(event_params) ||
+                                             !"peak_gamma" %in% names(event_params)) 0 else
+                              event_params[, c("event_id", "family", "peak_gamma"), with = FALSE],
+                            calibration = calibration,
+                            adjust_race = isTRUE(DEPLOYED$adjust_race)))
   }
   reg_f <- data.table::as.data.table(citius_events()[, c("event_id", "family")])
   pf <- merge(data.table::as.data.table(past), reg_f, by = "event_id", all.x = TRUE)
@@ -235,8 +598,74 @@ deployed_ability <- function(past, as_of, calibration) {
     fam <- g$family[1]
     hl <- if (!is.na(fam) && fam %in% names(hl_map)) hl_map[[fam]] else DEPLOYED$half_life
     estimate_ability(g[, !"family"], as_of = as_of, half_life = hl,
-                     calibration = calibration)
+                     races_half_life = DEPLOYED$races_half_life,
+                     calibration = calibration,
+                     adjust_race = isTRUE(DEPLOYED$adjust_race))
   }), fill = TRUE)
+}
+
+#' Read the family-pool marks offsets DEPLOYED names, or NULL when none is set.
+#'
+#' Returns the fitted list from fit_family_pool_offsets.R (`mu0`, `fs_map`,
+#' `ev_map`, provenance) with the family gate and file name attached.
+deployed_debias_offsets <- function(dir = here::here("citiusdata", "data")) {
+  cfg <- DEPLOYED$family_debias
+  if (is.null(cfg)) return(NULL)
+  f <- file.path(dir, cfg$file)
+  if (!file.exists(f)) cli::cli_abort(c(
+    "DEPLOYED names family-pool offsets {.file {f}} but the file does not exist.",
+    "i" = "Run {.file citiusdata/scripts/fit_family_pool_offsets.R} first."))
+  o <- readRDS(f)
+  if (!all(c("mu0", "fs_map", "ev_map") %in% names(o))) cli::cli_abort(
+    "{.file {f}} is not a family-pool offsets object (needs mu0, fs_map, ev_map).")
+  o$families <- cfg$families
+  o$file <- cfg$file
+  o
+}
+
+#' Subtract the fitted per-event level offset from `ability`, gated by family.
+#'
+#' The offset is a per-event CONSTANT (percent of mark): every entrant in a race
+#' moves by the same amount, so placings and every probability are unchanged
+#' and only the predicted mark moves. Lookup order matches the backtest arm
+#' that measured it (backtest_athletics.R, CITIUS_BT_FAMILY_DEBIAS): event map,
+#' else family x sex map, else the grand mean. Events outside the family gate
+#' get 0. `ability_peak` is shifted too when present so the two columns keep
+#' their relationship; medal_probs() reads the mark from `ability`.
+#'
+#' Adds a `debias_offset` column (pp, 0 where not applied) so any output can be
+#' audited for what was subtracted.
+deployed_debias <- function(ab, offsets = deployed_debias_offsets()) {
+  if (!data.table::is.data.table(ab)) ab <- data.table::as.data.table(ab)
+  if (is.null(offsets) || !nrow(ab)) {
+    ab[, debias_offset := 0]
+    return(ab[])
+  }
+  reg <- data.table::as.data.table(citius_events())[, c("event_id", "family", "sex")]
+  reg[, fs := paste(family, sex, sep = "|")]
+  k   <- match(ab$event_id, reg$event_id)
+  fam <- reg$family[k]
+  fs  <- reg$fs[k]
+  off <- unname(offsets$ev_map[ab$event_id])
+  miss <- is.na(off)
+  off[miss] <- unname(offsets$fs_map[fs[miss]])
+  off[is.na(off)] <- offsets$mu0
+  gate <- !is.na(fam) & fam %in% offsets$families
+  off[!gate] <- 0
+  # A gated family with every offset zero means the lookup matched nothing --
+  # the same "flag is on, behaviour is off" shape as the meet_tier no-op of
+  # 2026-09-06. Say so instead of shipping the control model under a new stamp.
+  if (any(gate) && !any(off[gate] != 0)) cli::cli_abort(
+    "family-pool debias: {sum(gate)} ability rows are in gated families and every offset resolved to zero.")
+  ab[, debias_offset := off]
+  ab[, ability := ability - debias_offset / 100]
+  if ("ability_peak" %in% names(ab)) ab[, ability_peak := ability_peak - debias_offset / 100]
+  n_hit <- sum(off != 0)
+  cli::cli_alert_info(paste0(
+    "family-pool debias ({offsets$file}): shifted {n_hit} of {nrow(ab)} ability rows ",
+    "across {length(unique(ab$event_id[off != 0]))} events in {.val {offsets$families}}; ",
+    "mean offset {round(mean(off[off != 0]), 3)}pp."))
+  ab[]
 }
 
 #' Apply the field-conditional prior and the aging projection to one race field.

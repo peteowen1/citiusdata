@@ -44,4 +44,8 @@ harvested ahead of time, cached here, and refreshed on a schedule.
 
 ## Status
 
-Scaffolded. Nothing harvested yet.
+**Live** (this line said "nothing harvested yet" until 2026-09-06 — it was
+written at scaffold time and never revisited). A 6.66M-row athletics corpus
+and a swimming corpus, partitioned parquet stores, the backtest harness, the
+deployed configuration (`scripts/_deployed.R`) and the blog export all live
+here. Current state is always the top of `../NEXT-STEPS.md`.

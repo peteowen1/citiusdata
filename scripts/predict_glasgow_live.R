@@ -175,7 +175,8 @@ for (ev in sort(unique(res$event_id))) {
   # conditioning travels with the column instead of living in a comment.
   pos <- position_probs(
     simulate_event(ent[athlete_id %in% r[p_final > 0.01]$athlete_id],
-                   n_sims = N_SIMS, calibration = cal, seed = 20260728L),
+                   n_sims = N_SIMS, calibration = cal, seed = 20260728L,
+                   context = deployed_race_context("final")),
     max_position = n_final, wide = TRUE)
   data.table::setnames(pos, sub("^pos_", "infinal_", names(pos)))
   r <- merge(r, pos, by = "athlete_id", all.x = TRUE)

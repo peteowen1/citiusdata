@@ -33,6 +33,55 @@ N_SIMS <- .env_int("CITIUS_BT_NSIMS", "10000")
 # approximation). Only valid for a marks-MAE comparison -- p_gold/p_medal/
 # median_rank come back NA, so never set this for a Brier/logloss run.
 MARKS_ONLY <- .env_int("CITIUS_BT_MARKS_ONLY", "0") == 1
+# The marks recency blend, read once here so it lands in the cache fingerprint
+# and in the run's settings. The MARKS_ONLY branch below has to apply it by hand
+# because it skips simulate_event(), which is where the blend normally happens.
+.marks_blend_raw <- Sys.getenv("CITIUS_MARKS_BLEND", "0")
+MARKS_BLEND <- suppressWarnings(as.numeric(.marks_blend_raw))
+if (!is.finite(MARKS_BLEND) || MARKS_BLEND < 0 || MARKS_BLEND > 1) {
+  # A typo, stray whitespace or a comma-for-decimal parses to NA or
+  # out-of-range and silently resets to 0 -- the exact shape TIER_W was fixed
+  # for below, reintroduced here because the fix was not applied to every knob
+  # that shares it. A reset run is then fingerprinted identically to a
+  # deliberate control (arm_fingerprint's marks_blend = 0 either way), so the
+  # only way to tell them apart is this line. Caught in review, 2026-09-09.
+  if (nzchar(.marks_blend_raw) && .marks_blend_raw != "0") cli::cli_alert_warning(
+    "CITIUS_MARKS_BLEND={.val {.marks_blend_raw}} did not parse to a value in [0,1] -- reset to 0.")
+  MARKS_BLEND <- 0
+}
+# RACES-SINCE DECAY. Inf is off and is the default, so an arm that does not set
+# it is bit-identical to before. It is NOT independent of the calendar
+# half-life: 365 days had been standing in for a cap on how many results
+# accumulate, so with this on the calendar half-life wants roughly 730. Set both
+# or neither -- 730 alone is much worse than the deployed 365.
+.races_hl_raw <- Sys.getenv("CITIUS_RACES_HALF_LIFE", "Inf")
+RACES_HALF_LIFE <- suppressWarnings(as.numeric(.races_hl_raw))
+if (is.na(RACES_HALF_LIFE) || RACES_HALF_LIFE <= 0) {
+  if (nzchar(.races_hl_raw) && .races_hl_raw != "Inf") cli::cli_alert_warning(
+    "CITIUS_RACES_HALF_LIFE={.val {.races_hl_raw}} did not parse to a positive number -- reset to Inf (off).")
+  RACES_HALF_LIFE <- Inf
+}
+
+# PER-EVENT PARAMETER TABLES, from scripts/fit_event_params.R. One artefact
+# carrying half_life, races_half_life, trim_tactical and context_scale per
+# event, each fitted then shrunk twice -- event toward family, family toward
+# global -- so a thin event inherits rather than invents.
+#
+# When set, it REPLACES the per-family half-life map. The table already carries
+# a half-life per event, and running both would apply the family override on top
+# of values fitted with that override absent. Stated here because the two
+# compose silently rather than conflicting.
+EVENT_PARAMS <- NULL
+.ep_file <- Sys.getenv("CITIUS_EVENT_PARAMS", "")
+if (nzchar(.ep_file)) {
+  .ep_path <- if (file.exists(.ep_file)) .ep_file else file.path(OUT, .ep_file)
+  if (!file.exists(.ep_path)) cli::cli_abort("CITIUS_EVENT_PARAMS: no file at {.path {.ep_path}}.")
+  EVENT_PARAMS <- as.data.table(readRDS(.ep_path))
+  .need <- c("event_id", "half_life", "races_half_life", "trim_tactical", "context_scale")
+  .miss <- setdiff(.need, names(EVENT_PARAMS))
+  if (length(.miss)) cli::cli_abort("CITIUS_EVENT_PARAMS is missing column{?s}: {.field {.miss}}.")
+  cli::cli_inform("Per-event parameters from {.path {basename(.ep_path)}} ({nrow(EVENT_PARAMS)} events); per-family half-life map DISABLED.")
+}
 MAX_PER_RUN <- .env_int("CITIUS_BT_MEETS", "25")
 # History depth per refit. TWELVE YEARS, and do not shorten it on the argument
 # that old marks carry negligible weight.
@@ -61,8 +110,36 @@ OUTCOMES <- Sys.getenv("CITIUS_BT_OUTCOMES", "championship_results.rds")
 # +0.0273 (t = +24.2). That is 10-50x any parameter change adopted the same day,
 # and it holds while LACKING several of them. Mean w_total 1.59 -> 7.47.
 HISTORY  <- Sys.getenv("CITIUS_BT_HISTORY", "athletics_corpus.rds")
+
+# HOISTED FROM ITS ORIGINAL SPOT further down (was computed only after the
+# full corpus below was already loaded). USE_STORE depends only on Sys.getenv
+# calls and HISTORY/OUTCOMES, already resolved above -- nothing here changes
+# by moving it earlier.
+#
+# WHY THIS MATTERS HERE: `hist_raw` below is the ENTIRE corpus (286 MB
+# compressed, several GB once loaded as a data.table) and, when USE_STORE is
+# TRUE and HISTORY != OUTCOMES, is NEVER READ AGAIN -- every per-meet history
+# lookup goes through the partitioned store instead (see `past <- tick("read",
+# if (USE_STORE) ...)` in run_meet()). It sat in memory for the whole run as
+# pure dead weight. Measured 2026-09-08: this is very plausibly the actual
+# source of the "~5.85 GB before any meet runs" floor that forced
+# _run_event_params_arm.ps1's 12 GB requirement -- the calibration object
+# alone is only 268 MB (object.size(), same date). NOT verified against a
+# full before/after run; if this arm's numbers ever look different from a
+# pre-2026-09-08 run of the same config, re-check this change first.
+STORE <- file.path(OUT, Sys.getenv("CITIUS_BT_STORE", "athletics_corpus_store"))
+USE_STORE <- dir.exists(STORE) && (identical(HISTORY, OUTCOMES) ||
+                                   nzchar(Sys.getenv("CITIUS_BT_STORE")))
+NEED_FULL_CORPUS <- identical(HISTORY, OUTCOMES) || !USE_STORE
+# `clean` (below) is only guaranteed non-NULL when this holds -- true by
+# construction of the two expressions above, not asserted anywhere further
+# down. Insurance against a future edit to either line silently breaking the
+# implication and un-guarding a `clean[...]` read.
+stopifnot("NEED_FULL_CORPUS/USE_STORE invariant broken" = NEED_FULL_CORPUS || USE_STORE)
+
 champs      <- readRDS(file.path(OUT, OUTCOMES))
-hist_raw    <- if (identical(HISTORY, OUTCOMES)) champs else readRDS(file.path(OUT, HISTORY))
+hist_raw    <- if (identical(HISTORY, OUTCOMES)) champs else
+  if (NEED_FULL_CORPUS) readRDS(file.path(OUT, HISTORY)) else NULL
 # Resolved ONCE. This line and the meta block below used to call Sys.getenv()
 # separately with DIFFERENT defaults -- "calibration_corpus.rds" here and
 # "calibration.rds" there -- so an arm run without the variable set loaded one
@@ -271,6 +348,15 @@ ADJUST_CONTEXT <- !identical(tolower(Sys.getenv("CITIUS_BT_CONTEXT", "on")), "of
 ADJUST_RACE <- nzchar(Sys.getenv("CITIUS_BT_ADJUST_RACE", ""))
 if (ADJUST_RACE) cli::cli_alert_info(
   "Race effect ON: applying {.field calibration$race} at prediction time.")
+# CONTEXT-CONDITIONAL condition_sd (2026-09-06): pass each race's catalogue
+# meet_tier and round class to simulate_event(). Only does anything when the
+# calibration file carries a condition_sd_context table
+# (build_calibration_condsd_context.R). A shared shock cannot move placings,
+# so this arm is judged on marks-distribution calibration (PIT) first; the
+# medal metrics move only through athlete sensitivity.
+COND_CONTEXT <- nzchar(Sys.getenv("CITIUS_BT_COND_CONTEXT", ""))
+if (COND_CONTEXT) cli::cli_alert_info(
+  "Context-conditional condition_sd ON: simulate_event() gets meet_tier x round_class.")
 # Use the catalogue's meet_tier for the context adjustment instead of the feed's
 # per-result `tier`, which varies within a single meet and labels the Diamond
 # League "low". Off by default so it is measured as its own arm.
@@ -368,8 +454,15 @@ if (!is.na(SEL_SHRINK)) cli::cli_alert_info(
 # here as a fixed lookup, not refit per meet -- same "single global correction"
 # shape as TIER_SHRINK/ROUND_SHRINK above and SEL_SHRINK below, if applied.
 FAMILY_DEBIAS <- nzchar(Sys.getenv("CITIUS_BT_FAMILY_DEBIAS", ""))
+# WHICH offsets file. Defaulted so existing callers are unchanged, but
+# parameterised because the offsets are now something we sweep: fitted on
+# [2016, 2020) they OVER-correct the 2020+ era (every family flips from
+# over-optimistic to pessimistic), so the scale is a free parameter that has
+# to be measured rather than assumed. The file's md5 is already in the arm
+# fingerprint below, so two scales cannot share a cache.
+.fp_file <- Sys.getenv("CITIUS_BT_FAMILY_DEBIAS_FILE", "family_pool_offsets.rds")
 if (FAMILY_DEBIAS) {
-  .fp_path <- here::here("citiusdata", "data", "family_pool_offsets.rds")
+  .fp_path <- here::here("citiusdata", "data", .fp_file)
   if (!file.exists(.fp_path)) cli::cli_abort(
     "{.envvar CITIUS_BT_FAMILY_DEBIAS} is set but {.file {.fp_path}} does not ",
     "exist. Run {.file fit_family_pool_offsets.R} first.")
@@ -424,6 +517,48 @@ if (FAMILY_DEBIAS) {
 # winner on full history before adopting anything. The median says a screening
 # result will nearly always survive; the max says confirmation is not optional.
 ELITE_HISTORY <- nzchar(Sys.getenv("CITIUS_BT_ELITE_HISTORY", ""))
+
+# RESTRICT THE TRAINING HISTORY BY MEET TIER (Pete's goal, 2026-09-05: "train
+# all T1 and T2 leading up to a T1 event and test on the T1 event").
+#
+#   CITIUS_BT_TRAIN_TIERS=T1_elite,T2_strong
+#
+# DIFFERENT KNOB FROM CITIUS_BT_TIER, and conflating them is the easy mistake:
+# CITIUS_BT_TIER picks which meets are SCORED, leaving the model untouched;
+# this picks which rows the model LEARNS FROM, which changes prior_mu and
+# sigma_between -- population statistics. So this produces a DIFFERENT MODEL,
+# not a subsample of the existing one, exactly as CITIUS_BT_ATHLETES does.
+#
+# IT IS ALSO NOT FREE, and the direction is predictable: ~33% of corpus rows
+# are career-route rows carrying no competition_id at all, so they have no
+# meet_tier and this filter DROPS them. Whether that costs accuracy is the
+# question the arm exists to answer -- the corpus itself was measured worth
+# 10-50x every parameter change of its week, so removing a third of it is a
+# real bet, not a tidy-up.
+#
+# Requires a store built with join_tier = TRUE (true since 2026-09-04).
+# Target-race shock add-back. See the application site in run_meet() for what
+# it does and why it refuses without CITIUS_BT_ADJUST_RACE.
+#   CITIUS_BT_SHOCK_ADDBACK=expected_race_shock.csv
+SHOCK_FILE <- Sys.getenv("CITIUS_BT_SHOCK_ADDBACK", "")
+shock_tbl <- NULL
+if (nzchar(SHOCK_FILE)) {
+  .sf <- file.path(OUT, SHOCK_FILE)
+  if (!file.exists(.sf)) cli::cli_abort(
+    "{.envvar CITIUS_BT_SHOCK_ADDBACK} is set to {.file {SHOCK_FILE}}, which does not exist.")
+  shock_tbl <- data.table::setDT(data.table::fread(.sf))
+  req <- c("meet_tier", "round_class", "family", "expected_shock")
+  if (!all(req %chin% names(shock_tbl))) cli::cli_abort(
+    "{.file {SHOCK_FILE}} needs columns {.val {req}}.")
+  cli::cli_alert_info(
+    "Shock add-back ON from {.file {SHOCK_FILE}}: {nrow(shock_tbl)} cell{?s}, median {round(100*(exp(median(shock_tbl$expected_shock))-1), 3)}% of a mark.")
+}
+
+TRAIN_TIERS <- trimws(strsplit(Sys.getenv("CITIUS_BT_TRAIN_TIERS", ""), ",")[[1]])
+TRAIN_TIERS <- TRAIN_TIERS[nzchar(TRAIN_TIERS)]
+if (length(TRAIN_TIERS)) cli::cli_alert_info(
+  "Training history restricted to meet_tier {.val {TRAIN_TIERS}} -- this is a DIFFERENT MODEL, not a subsample.")
+
 TIER_FILTER <- Sys.getenv("CITIUS_BT_TIER", "")
 if (USE_MEET_TIER || nzchar(TIER_FILTER) || ELITE_HISTORY) {
   ctl <- setDT(arrow::read_parquet(file.path(OUT, "competition_catalogue.parquet")))
@@ -491,8 +626,16 @@ if (!is.null(dev_ids)) {
   )
 }
 
-clean <- flag_implausible(hist_raw)[!is.na(event_id) & !is.na(perf)]
-if (!is.null(dev_ids)) clean <- clean[as.character(athlete_id) %in% dev_ids]
+# SKIPPED ENTIRELY when NEED_FULL_CORPUS is FALSE (USE_STORE and HISTORY !=
+# OUTCOMES) -- `clean` is only read from the !USE_STORE fallback branch in
+# run_meet() and the export gate below, both already conditioned on the same
+# flag, and from the identical(HISTORY, OUTCOMES) branch of outcome_rows
+# just below. NULL is safe everywhere else it could be touched.
+clean <- if (NEED_FULL_CORPUS) {
+  x <- flag_implausible(hist_raw)[!is.na(event_id) & !is.na(perf)]
+  if (!is.null(dev_ids)) x <- x[as.character(athlete_id) %in% dev_ids]
+  x
+} else NULL
 outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
   clean
 } else {
@@ -521,21 +664,20 @@ outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
 # the `wind` note above describes. `venue_country` additionally decides the
 # hemisphere for the seasonal phase, and its absence is what blocked the season
 # effect from being wired on 2026-07-30.
+# `meet_tier` is read when CITIUS_BT_TRAIN_TIERS restricts the training pool,
+# and by .tier_class_of() whenever the column is present (which is how the
+# 2026-09-04 WAC promotion actually reaches the model). Narrowing it away would
+# silently drop the arm back to the feed's `tier` and report a dead heat --
+# the same trap the `wind` and `indoor` notes above describe.
 keep_cols <- c("athlete_id", "event_id", "date", "perf", "age", "round", "tier",
-               "competition_id", "comp_start", "place", "race_key", "wind",
-               "momentum", "indoor", "venue_country")
-clean <- clean[, intersect(keep_cols, names(clean)), with = FALSE]
+               "meet_tier", "competition_id", "comp_start", "place", "race_key",
+               "wind", "momentum", "indoor", "venue_country")
+if (!is.null(clean)) clean <- clean[, intersect(keep_cols, names(clean)), with = FALSE]
 outcome_rows <- outcome_rows[, intersect(keep_cols, names(outcome_rows)), with = FALSE]
 
-# Prefer the partitioned parquet store when it exists: the per-meet read drops
-# from 46.1s to 0.39s at 8.6M rows. The .rds path is kept so the script still
-# runs before build_stores.R has been run.
-STORE <- file.path(OUT, Sys.getenv("CITIUS_BT_STORE", "athletics_corpus_store"))
-# The store is built from ONE history file. Reading it while HISTORY points
-# somewhere else would silently ignore the arm under test and run the baseline
-# twice -- the A/B would come back a dead heat and look like a null result.
-USE_STORE <- dir.exists(STORE) && (identical(HISTORY, OUTCOMES) ||
-                                   nzchar(Sys.getenv("CITIUS_BT_STORE")))
+# STORE/USE_STORE are now resolved near the top of the script (see the
+# NEED_FULL_CORPUS comment there) -- not recomputed here, so a change to one
+# copy cannot silently diverge from the other.
 cli::cli_alert_info(if (USE_STORE) "Reading history from the parquet store."
                     else "No parquet store; filtering the in-memory corpus.")
 # Ask the store only for columns it holds. `comp_start` and `place` are OUTCOME
@@ -543,9 +685,13 @@ cli::cli_alert_info(if (USE_STORE) "Reading history from the parquet store."
 # corpus store does not carry comp_start at all. Requesting them aborted the run.
 STORE_COLS <- if (USE_STORE)
   intersect(keep_cols, names(arrow::open_dataset(STORE))) else keep_cols
-cli::cli_alert_info(
-  "Narrowed to {ncol(clean)} column{?s} ({format(object.size(clean), units = 'MB')})."
-)
+if (!is.null(clean)) {
+  cli::cli_alert_info(
+    "Narrowed to {ncol(clean)} column{?s} ({format(object.size(clean), units = 'MB')})."
+  )
+} else {
+  cli::cli_alert_info("Full corpus load skipped -- store covers every per-meet history read.")
+}
 
 # --- the cache belongs to ONE arm -------------------------------------------
 #
@@ -590,6 +736,16 @@ arm_fingerprint <- list(
   adjust_context = ADJUST_CONTEXT, adjust_race = ADJUST_RACE,
   use_meet_tier = USE_MEET_TIER,
   tier_filter = TIER_FILTER, elite_history = ELITE_HISTORY,
+  # Without this, a T1+T2-trained arm and its full-history control share a
+  # cache: the second one read back the first's predictions and the A/B came
+  # home a dead heat. Same failure the project_tier/family_debias/marks_only
+  # fields above were each added to prevent, and it restricts the HISTORY, so
+  # it changes every prediction rather than a subset.
+  train_tiers = paste(TRAIN_TIERS, collapse = ","),
+  # Same reason as every other field here: an arm with the add-back and one
+  # without it must not share a cache and come home a dead heat.
+  shock_addback = SHOCK_FILE,
+  shock_addback_md5 = if (nzchar(SHOCK_FILE)) md5_of(SHOCK_FILE) else NA_character_,
   history_days = HISTORY_DAYS, n_sims = N_SIMS, cohort = COHORT,
   athletes = ATHLETES, peak_gamma = PEAK_GAMMA,
   robust_location = ROBUST_LOCATION, decouple_peak = DECOUPLE_PEAK,
@@ -607,7 +763,13 @@ arm_fingerprint <- list(
   # must never read back cached meets from an arm run without it.
   sigma_scale = if (is.na(SIGMA_SCALE)) "" else format(SIGMA_SCALE),
   family_debias = FAMILY_DEBIAS,
-  family_debias_md5 = if (FAMILY_DEBIAS) md5_of("family_pool_offsets.rds") else NA_character_,
+  cond_context = COND_CONTEXT,
+  # Hash the file this arm ACTUALLY read, not the default name. Hashing the
+  # default while reading a scaled variant would let every scale in a sweep
+  # share one cache and come back a dead heat -- the exact failure the rest of
+  # this fingerprint exists to prevent, reintroduced by parameterising the path.
+  family_debias_file = if (FAMILY_DEBIAS) .fp_file else NA_character_,
+  family_debias_md5 = if (FAMILY_DEBIAS) md5_of(.fp_file) else NA_character_,
   family_debias_holdout = if (FAMILY_DEBIAS) format(as.Date(.fp$fit_holdout)) else NA_character_,
   # Same failure class as project_tier/round and family_debias above, for two
   # flags added alongside them: MARKS_ONLY changes every predicted column's
@@ -616,6 +778,14 @@ arm_fingerprint <- list(
   # by one config could be silently read back as another's -- caught in
   # review before this shipped.
   marks_only = MARKS_ONLY,
+  marks_blend = MARKS_BLEND,
+  races_half_life = RACES_HALF_LIFE,
+  event_params = if (nzchar(Sys.getenv("CITIUS_EVENT_PARAMS", ""))) Sys.getenv("CITIUS_EVENT_PARAMS") else NA_character_,
+  # By filename alone would be the same gap family_debias_md5 exists to close:
+  # fit_event_params.R rewrites event_params.rds in place under the same name
+  # on every refit, so a cache keyed on the path would serve a stale arm after
+  # a refit instead of recomputing. Caught in review, 2026-09-09.
+  event_params_md5 = if (nzchar(Sys.getenv("CITIUS_EVENT_PARAMS", ""))) md5_of(Sys.getenv("CITIUS_EVENT_PARAMS")) else NA_character_,
   sel_shrink = if (is.na(SEL_SHRINK)) "" else format(SEL_SHRINK),
   sel_sigma = SEL_SIGMA)
 
@@ -768,6 +938,25 @@ tick <- function(slot, expr) {
 # blindness. Counted here and reported with the summary.
 AGE_WARN <- new.env(parent = emptyenv())
 AGE_WARN$n <- 0L; AGE_WARN$last <- NA_character_
+# Races that actually received the shock add-back. Reported at the end so a
+# lookup that matched nothing is visible instead of looking like a null arm.
+SHOCK <- new.env(parent = emptyenv()); SHOCK$n <- 0L; SHOCK$fallback <- 0L
+# Races that actually received the championship offset, counted for the same
+# reason SHOCK is: the gate is invisible when it misfires. project_championship()
+# shifts a whole field by one per-family constant, so it cancels out of every
+# placing -- p_gold, p_medal and every probability metric are bit-identical
+# whether it fired or not. A run where CHAMP_OK is FALSE (an older calibration
+# with no $championship table) or where tier never matches OW applies the offset
+# to ZERO races and looks, in every log line and every scored metric, exactly
+# like a healthy run. Only the predicted MARKS are wrong, by up to 2.2%.
+# Added after review, 2026-09-09.
+CHAMP <- new.env(parent = emptyenv())
+CHAMP$n <- 0L; CHAMP$na_tier <- 0L; CHAMP$mixed_tier <- 0L
+# Top level, not inside run_meet(): the end-of-run report below reads it, and a
+# PSOCK worker needs it exported by name (see export_vars) or parallel mode dies
+# with "object 'CHAMP_OK' not found" while the serial path works by lexical
+# scoping -- the exact trap the export_vars comment documents.
+CHAMP_OK <- !is.null(calibration$championship) && nrow(calibration$championship)
 
 # History rows whose event has no registry family, counted the same way and for
 # the same reason: the check below sits INSIDE the per-meet loop, so warning per
@@ -801,6 +990,14 @@ run_meet <- function(i) {
     out
   }
   local_age_warn <- 0L
+  # Counted, not assumed. An add-back whose lookup matched no cell would leave
+  # every prediction un-shifted and come back looking exactly like a null
+  # result -- the vacuous pass this file's other guards exist to prevent.
+  local_shock_applied <- 0L
+  local_shock_fallback <- 0L
+  local_champ_applied <- 0L
+  local_champ_na <- 0L
+  local_champ_mixed <- 0L
   local_nofam <- list(rows = 0L, is_nofam_meet = FALSE, events = character())
 
   # Two restrictions make the per-meet refit ~10x cheaper without changing a
@@ -827,6 +1024,19 @@ run_meet <- function(i) {
             event_id %in% meet_events]
   })
   if (!is.null(dev_ids)) past <- past[as.character(athlete_id) %in% dev_ids]
+  # Training-tier restriction. Applied to the HISTORY only -- the meet being
+  # forecast is chosen by TIER_FILTER and is untouched by this.
+  if (length(TRAIN_TIERS)) {
+    if (!"meet_tier" %in% names(past)) {
+      # Silence here would mean the arm ran UNRESTRICTED under a restricted
+      # arm's name and cache, and reported the control's numbers as the
+      # treatment's -- a dead heat that looks like a null result.
+      cli::cli_abort(c(
+        "x" = "{.envvar CITIUS_BT_TRAIN_TIERS} is set but the history carries no {.field meet_tier}.",
+        "i" = "Rebuild the store with {.code join_tier = TRUE} (build_stores.R)."))
+    }
+    past <- past[meet_tier %chin% TRAIN_TIERS]
+  }
   if (!is.null(elite_ids)) {
     # Always union the entrants: an entrant without a prior T1 final still needs
     # their own history, or they would be estimated from nothing.
@@ -834,28 +1044,69 @@ run_meet <- function(i) {
                    union(elite_ids, as.character(block$athlete_id))]
   }
   if (USE_MEET_TIER && "competition_id" %in% names(past)) {
-    past[, .cid := as.character(competition_id)]
-    past <- merge(past, ctl, by.x = ".cid", by.y = "competition_id",
-                  all.x = TRUE, sort = FALSE)
-    past[, .cid := NULL]
+    # The store gained its OWN meet_tier when build_stores.R started passing
+    # join_tier = TRUE, and keep_cols retains it. Merging ctl on top then hit
+    # data.table's duplicate-name rule and produced meet_tier.x / meet_tier.y,
+    # leaving no bare `meet_tier` at all -- so .tier_class_of() took its
+    # `!"meet_tier" %in% names(dt)` early return and silently used the FEED
+    # tier. CITIUS_BT_MEET_TIER=1 announced the catalogue and delivered the
+    # feed. Both columns come from the same catalogue, so prefer the one
+    # already on the rows and only merge when it is genuinely absent.
+    if (!"meet_tier" %in% names(past)) {
+      past[, .cid := as.character(competition_id)]
+      past <- merge(past, ctl, by.x = ".cid", by.y = "competition_id",
+                    all.x = TRUE, sort = FALSE)
+      past[, .cid := NULL]
+      tier_src <- "catalogue merge"
+    } else {
+      tier_src <- "the store (join_tier)"
+    }
+    # Coverage, not presence. The old line computed mean(!is.na(NULL)) and
+    # printed "NaN%" -- a value that named the defect precisely and that I read
+    # past twice. A tier column that is present and 0% populated is the failure
+    # this flag exists to avoid, so it aborts rather than reports.
+    .fill <- if ("meet_tier" %in% names(past)) mean(!is.na(past$meet_tier)) else NA_real_
+    if (!is.finite(.fill) || .fill == 0) {
+      cli::cli_abort(c(
+        "x" = "{.envvar CITIUS_BT_MEET_TIER} is on but no usable {.field meet_tier} reached the history.",
+        "i" = "Columns present: {.val {grep('^meet_tier', names(past), value = TRUE)}}.",
+        "i" = "Without it the context adjustment falls back to the feed tier, silently."))
+    }
     if (i == 1L) cli::cli_alert_info(
-      "meet_tier attached to {round(100*mean(!is.na(past$meet_tier)))}% of history rows.")
+      # NB `{tier_src}`, not `{.src}` -- cli reads a leading dot as an inline
+      # style tag ({.file}, {.val}) and errors on an unknown one.
+      "meet_tier from {tier_src}: {round(100*.fill)}% of history rows.")
   }
   rows <- nrow(past)
   if (rows < 2000L) {
     return(list(cid = cid, out = list(), rows = rows, timing = local_timing,
-                age_warn = local_age_warn, nofam = local_nofam))
+                age_warn = local_age_warn, nofam = local_nofam,
+                shock_applied = local_shock_applied,
+                shock_fallback = local_shock_fallback,
+                champ_applied = local_champ_applied,
+                champ_na = local_champ_na, champ_mixed = local_champ_mixed))
   }
+  # The event-params table drives the single-call path: it carries a half-life
+  # per event, so the per-family split has nothing to add.
+  if (!is.null(EVENT_PARAMS)) hl_map <- NULL
   ability <- if (is.null(hl_map)) {
     tick("ability", estimate_ability(past, as_of = cut_date,
-                                     half_life = half_life,
+                                     half_life = if (is.null(EVENT_PARAMS)) half_life else
+                                       EVENT_PARAMS[, .(event_id, family, half_life)],
+                                     races_half_life = if (is.null(EVENT_PARAMS)) RACES_HALF_LIFE else
+                                       EVENT_PARAMS[, .(event_id, family, races_half_life)],
+                                     context_scale = if (is.null(EVENT_PARAMS)) 1 else
+                                       EVENT_PARAMS[, .(event_id, family, context_scale)],
+                                     trim_tactical = if (is.null(EVENT_PARAMS)) 0.25 else
+                                       EVENT_PARAMS[, .(event_id, family, trim_tactical)],
                                      calibration = calibration,
                                      adjust_context = ADJUST_CONTEXT,
                                      adjust_race = ADJUST_RACE,
                                      sigma_mode = SIGMA_MODE,
                                      sigma_parts = SIGMA_PARTS,
                                      only = unique(as.character(block$athlete_id)),
-                                     peak_gamma = PEAK_GAMMA,
+                                     peak_gamma = if (is.null(EVENT_PARAMS) || !"peak_gamma" %in% names(EVENT_PARAMS))
+                                       PEAK_GAMMA else EVENT_PARAMS[, .(event_id, family, peak_gamma)],
                                      robust_location = ROBUST_LOCATION,
                                      decouple_peak = DECOUPLE_PEAK))
   } else {
@@ -921,22 +1172,51 @@ run_meet <- function(i) {
       hl <- if (!is.na(g$family[1]) && g$family[1] %in% names(hl_map))
         hl_map[[g$family[1]]] else half_life
       estimate_ability(g[, !"family"], as_of = cut_date, half_life = hl,
+                       races_half_life = RACES_HALF_LIFE,
                        calibration = calibration, adjust_context = ADJUST_CONTEXT,
                        adjust_race = ADJUST_RACE, sigma_mode = SIGMA_MODE, sigma_parts = SIGMA_PARTS,
                        only = only_ids,
-                       peak_gamma = PEAK_GAMMA,
+                       # Unreachable with EVENT_PARAMS set (line ~1047 forces hl_map to
+                       # NULL whenever EVENT_PARAMS is non-NULL, which routes to the
+                       # single-call branch above instead) -- kept consistent with it
+                       # anyway rather than leaving a second, differently-wired copy of
+                       # the same parameter sitting here as a trap for the next change.
+                       peak_gamma = if (is.null(EVENT_PARAMS) || !"peak_gamma" %in% names(EVENT_PARAMS))
+                         PEAK_GAMMA else EVENT_PARAMS[, .(event_id, family, peak_gamma)],
                        robust_location = ROBUST_LOCATION,
                        decouple_peak = DECOUPLE_PEAK)
     }), fill = TRUE))
   }
 
-  # estimate_ability() strips the championship offset from championship history,
-  # leaving ability on a NON-championship top-tier-final footing. Every meet
-  # scored here is a championship, so it has to go back on -- without this half
-  # the correction runs one way and makes predictions worse, not better.
-  if (!is.null(calibration$championship) && nrow(calibration$championship)) {
-    ability <- project_championship(ability, calibration)
-  }
+  # CHAMPIONSHIP OFFSET -- NOW GATED ON THE RACE ACTUALLY BEING A CHAMPIONSHIP.
+  # Applied per race inside the loop below, not here.
+  #
+  # This used to run unconditionally on every meet, on the stated assumption
+  # that "every meet scored here is a championship". That was true when the
+  # backtest only scored global championships. It is false for a T1_elite
+  # population: measured 2026-09-09, 347 of 4,273 scored races (8.1%) are OW
+  # championships and the other 3,926 (91.9%) were getting a championship
+  # uplift they should never have had.
+  #
+  # WHY IT IS WRONG, not merely imprecise. fit_championship_effect() fits the
+  # offset by contrasting championship against NON-championship TOP-TIER FINALS
+  # for the same athlete-event, and estimate_ability() leaves ability on that
+  # non-championship top-tier-final footing. A Diamond League final IS a
+  # non-championship top-tier final, so ability is already on exactly the right
+  # footing for it -- adding the offset double-counts. Measured effect on
+  # predicted marks: jump +1.27%, throw +1.46%, road -2.18% (championship
+  # marathons are slower than paced city races), which is most of the marks
+  # error this backtest was reporting on non-championship races.
+  #
+  # GATED ON THE SAME PREDICATE IT WAS FITTED WITH. fit_championship_effect()
+  # uses .is_championship(tier); so does this. An apply-side gate that differs
+  # from the fit-side one is the exact bug class this file has been bitten by
+  # twice (the tactical-family gate, 2026-09-08).
+  #
+  # PLACINGS ARE UNAFFECTED EITHER WAY. The offset is per FAMILY, and every
+  # athlete in a race shares one event and therefore one family, so it shifts
+  # the whole field by an identical constant and cancels out of every pairwise
+  # comparison. p_gold/p_medal are bit-identical; only predicted MARKS move.
 
   # Key ONCE per meet, not once per race. The loop below previously bracket-filtered
   # `ability` for every race -- O(races x nrow(ability)) -- which is cheap on the
@@ -952,6 +1232,28 @@ run_meet <- function(i) {
   data.table::setkey(ability, event_id, athlete_id)
   # Split once rather than bracketing `block` inside the loop for the same reason.
   by_race <- split(block, block$race_key)
+
+  # MODE, not [1]. The feed's `tier` is per-RESULT and a single meet is
+  # documented to carry up to four different grades across its own results
+  # (.scratch/athletics-calendar/issues/03-diamond-league-tier-defect.md), so
+  # the first row is an arbitrary pick where the race disagrees with itself.
+  # A scalar is required rather than the vector: project_tier() recycles with
+  # rep_len() against the ability rows, and `entrants` is in ability order
+  # while `field` is not -- passing the vector would misalign tier to athlete.
+  #
+  # HOISTED out of the per-race loop 2026-09-09. It is a pure helper and was
+  # being redefined once per race, but the real reason is that the championship
+  # gate below needs it and sat ABOVE the old definition -- so that gate was
+  # reading `field$tier[1]`, the exact arbitrary-first-row pattern this comment
+  # warns against. Worse there than for project_tier(): the tier projection
+  # applies a continuous shrink, so a wrong tier only nudges it, whereas the
+  # championship gate is a step function that applies or withholds the whole
+  # family offset for the entire field. Caught in review, 2026-09-09.
+  .mode1 <- function(x) {
+    x <- x[!is.na(x)]
+    if (!length(x)) return(NA_character_)
+    names(sort(table(as.character(x)), decreasing = TRUE))[1]
+  }
 
   out <- list()
   # Score one RACE, not one competition+event. Club and gala meets run an event
@@ -969,6 +1271,24 @@ run_meet <- function(i) {
     entrants <- ability[.(ev, as.character(field$athlete_id)), nomatch = NULL]
     if (nrow(entrants) < 4L) next
     data.table::setorder(entrants, .ord)
+    # See the CHAMPIONSHIP OFFSET note above the loop. Applied here, per race,
+    # only when this race is genuinely a championship -- and in the same
+    # position in the sequence (before condition_prior) that the old
+    # unconditional meet-level call occupied, so a championship race is
+    # bit-identical to the previous behaviour.
+    # Mixed or absent tier within ONE race means the classification below rests
+    # on a modal vote rather than a clean signal. Measured 2026-09-09: 162 of
+    # 4,273 scored races disagree with themselves on tier (none currently mix OW
+    # with non-OW, so no verdict actually flips today), and 449 races carry no
+    # tier at all. Said out loud rather than left to a silent modal pick.
+    .tier_race <- .mode1(field$tier)
+    if (CHAMP_OK && is.na(.tier_race)) local_champ_na <- local_champ_na + 1L
+    if (CHAMP_OK && data.table::uniqueN(field$tier, na.rm = TRUE) > 1L)
+      local_champ_mixed <- local_champ_mixed + 1L
+    if (CHAMP_OK && isTRUE(citius:::.is_championship(.tier_race))) {
+      entrants <- project_championship(entrants, calibration)
+      local_champ_applied <- local_champ_applied + 1L
+    }
     # Optional: shrink toward the FIELD rather than the whole event. Empirical
     # Bayes otherwise pulls a thinly-evidenced entrant toward the unconditional
     # event mean, which includes a long tail of athletes who never contest a
@@ -1015,18 +1335,8 @@ run_meet <- function(i) {
     # the same answer: shrinking toward a field mean that has itself shifted by
     # the same constant leaves the constant intact. Placed after aging for the
     # same reason -- a uniform additive shift commutes with all of it.
-    # MODE, not [1]. The feed's `tier` is per-RESULT and a single meet is
-    # documented to carry up to four different grades across its own results
-    # (.scratch/athletics-calendar/issues/03-diamond-league-tier-defect.md), so
-    # the first row is an arbitrary pick where the race disagrees with itself.
-    # A scalar is required rather than the vector: project_tier() recycles with
-    # rep_len() against the ability rows, and `entrants` is in ability order
-    # while `field` is not -- passing the vector would misalign tier to athlete.
-    .mode1 <- function(x) {
-      x <- x[!is.na(x)]
-      if (!length(x)) return(NA_character_)
-      names(sort(table(as.character(x)), decreasing = TRUE))[1]
-    }
+    # `.mode1()` is now defined once above the loop; see its comment there for
+    # why the MODE and not [1].
     # SELECTION SHRINKAGE, applied BEFORE the projections below. The order is
     # load-bearing: prior_mu is on the top-tier-final footing that
     # estimate_ability(adjust_context = TRUE) produced, and project_tier() moves
@@ -1072,6 +1382,74 @@ run_meet <- function(i) {
       entrants <- project_round(entrants, .mode1(field$round), calibration,
                                 shrink = ROUND_SHRINK)
     }
+    # THE TARGET-RACE SHOCK ADD-BACK -- the missing counterpart of adjust_race.
+    #
+    # adjust_race SUBTRACTS the fitted shock from every historical mark, making
+    # ability conditions-neutral. Nothing put it back for the race being
+    # forecast, so a championship final -- which runs fast -- was predicted from
+    # neutral ability and came out systematically slow. That asymmetry is what
+    # made raw marks MAE look worse when race adjustment was switched on, while
+    # the directional bias it fixes was real and large (optimism for athletes
+    # coming off a shock +0.638 -> +0.353, p = 8.09e-98).
+    #
+    # Only ~9% of a shock is forecastable (R2 0.093 from tier, round, family and
+    # meet strength), so this adds back the small systematic part and leaves the
+    # rest to condition_sd, which is where a race-day lottery belongs.
+    #
+    # UNIFORM ACROSS THE FIELD, like the tier and round projections above and
+    # for the same reason -- it is a property of the race, not of the athlete --
+    # so it commutes with everything applied before it.
+    #
+    # ONLY MEANINGFUL WITH adjust_race ON. Adding a shock back that was never
+    # removed would double-count it, so this refuses rather than silently
+    # shifting every prediction of a control arm.
+    if (!is.null(shock_tbl)) {
+      if (!ADJUST_RACE) cli::cli_abort(c(
+        "x" = "{.envvar CITIUS_BT_SHOCK_ADDBACK} is set but {.envvar CITIUS_BT_ADJUST_RACE} is not.",
+        "i" = "The add-back is the counterpart of removing the shock from history.
+               Applied alone it double-counts the shock into every prediction."))
+      # meet_tier comes from the CATALOGUE, not the field. championship_results
+      # carries only the feed's per-result `tier` -- no meet_tier column at all
+      # -- so reading it off `field` silently yielded NA and every lookup
+      # missed. Caught by the zero-application guard below on the first smoke
+      # test; without that guard this arm would have run to completion with
+      # every prediction unshifted and scored as a clean null.
+      .tier1 <- NA_character_
+      if (exists("ctl", inherits = TRUE)) {
+        .ct <- ctl[competition_id == as.character(cid)]
+        if (nrow(.ct)) .tier1 <- .ct$meet_tier[1]
+      }
+      # .tier_class_of(field) returns one value per row; [1] was the same
+      # arbitrary-first-row pick .mode1() was introduced to replace elsewhere in
+      # this function. A mixed-tier field would silently take whichever result
+      # happened to sort first instead of the field's actual modal tier.
+      if (is.na(.tier1)) .tier1 <- .mode1(.tier_class_of(field))
+      .rc1 <- .round_class(.mode1(field$round))
+      .fam1 <- .citius_event_registry$family[match(ev, .citius_event_registry$event_id)]
+      k <- shock_tbl[.(.tier1, .rc1, .fam1), on = .(meet_tier, round_class, family),
+                     nomatch = NULL]
+      # FAMILY-AGNOSTIC FALLBACK. The tier x round x family grid is not fully
+      # populated, so an exact cell can miss -- this falls back to whichever row
+      # sorts first for the tier/round alone, silently applying another family's
+      # expected shock (sprint shock onto a throw, say). Counted separately from
+      # an exact match so a run that's quietly leaning on this fallback is
+      # visible rather than reading identically to a clean exact-match arm.
+      .exact_match <- nrow(k) > 0
+      if (!.exact_match) k <- shock_tbl[.(.tier1, .rc1), on = .(meet_tier, round_class),
+                                        nomatch = NULL][1]
+      if (nrow(k) && is.finite(k$expected_shock[1])) {
+        if (!.exact_match) local_shock_fallback <- local_shock_fallback + 1L
+        entrants[, ability := ability + k$expected_shock[1]]
+        # `<-`, NOT `<<-`. This loop is in run_meet()'s own body, so `<<-` would
+        # skip run_meet's scope and assign a GLOBAL, leaving the returned
+        # counter at zero while the add-back was in fact being applied. Copied
+        # from the `local_age_warn <<-` a few lines up, which is correct only
+        # because it sits inside a warning handler -- a nested function, one
+        # scope deeper. Cost a wrong diagnosis: the zero-count guard fired and
+        # I went looking for a broken lookup that was working.
+        local_shock_applied <- local_shock_applied + 1L
+      }
+    }
     # FAMILY-POOL DEBIAS, applied LAST -- after aging and the tier/round
     # projections, immediately before simulation. Order matters less here than
     # for selection shrinkage: this offset was fit against the FINAL predicted
@@ -1108,18 +1486,42 @@ run_meet <- function(i) {
       # closed-form shortcut for those, which is why this path leaves them NA
       # rather than guessing, and why it must never be used for a Brier/
       # logloss/placement comparison.
+      #
+      # THE BLEND MUST BE APPLIED HERE TOO. simulate_event() centres the mark
+      # distribution on (1 - b) * ability + b * recent_mean, and this branch
+      # does not call simulate_event(). Reading `ability` alone would make a
+      # marks-only arm measure the UNBLENDED model while claiming to test the
+      # blended one, and the arm would come back showing the blend does
+      # nothing -- a false negative that looks exactly like a null result.
+      # Caught before the confirming arm ran, 2026-09-07.
       reg_idx <- match(ev, .citius_event_registry$event_id)
       .orient <- .citius_event_registry$orientation[reg_idx]
       if (is.na(.orient)) .orient <- -1L
+      .mu <- entrants$ability
+      if (MARKS_BLEND > 0 && "recent_mean" %in% names(entrants)) {
+        .has <- is.finite(entrants$recent_mean)
+        .mu[.has] <- (1 - MARKS_BLEND) * entrants$ability[.has] +
+          MARKS_BLEND * entrants$recent_mean[.has]
+      }
       mp <- data.table::data.table(
         athlete_id = entrants$athlete_id,
         p_gold = NA_real_, p_medal = NA_real_, p_top8 = NA_real_,
         median_rank = NA_real_,
-        median_mark = perf_to_mark(entrants$ability, .orient)
+        median_mark = perf_to_mark(.mu, .orient)
       )
     } else {
+      .ctx <- NULL
+      if (COND_CONTEXT) {
+        .ctx_tier <- NA_character_
+        if (exists("ctl", inherits = TRUE)) {
+          .ct <- ctl[competition_id == as.character(cid)]
+          if (nrow(.ct)) .ctx_tier <- .ct$meet_tier[1]
+        }
+        .ctx <- list(meet_tier = .ctx_tier, round_class = .round_class(.mode1(field$round)))
+      }
       sim <- tick("sim", simulate_event(entrants, n_sims = N_SIMS,
-                                        calibration = calibration, seed = 11L))
+                                        calibration = calibration, seed = 11L,
+                                        context = .ctx))
       mp <- medal_probs(sim)
     }
     key <- rk
@@ -1180,7 +1582,11 @@ run_meet <- function(i) {
         merged = .merged))
   }
   list(cid = cid, out = out, rows = rows, timing = local_timing,
-       age_warn = local_age_warn, nofam = local_nofam)
+       age_warn = local_age_warn, nofam = local_nofam,
+       shock_applied = local_shock_applied,
+       shock_fallback = local_shock_fallback,
+       champ_applied = local_champ_applied,
+       champ_na = local_champ_na, champ_mixed = local_champ_mixed)
 }
 
 # CITIUS_BT_WORKERS=1 (default) is byte-for-byte the original single-process
@@ -1203,7 +1609,7 @@ if (N_WORKERS > 1L) {
                     "dev_ids", "elite_ids", "USE_MEET_TIER", "calibration", "PRIOR_WEIGHT",
                     "mom_eff", "aging", "N_SIMS", "hl_map", "half_life", "ADJUST_CONTEXT",
                     "ADJUST_RACE", "SIGMA_MODE", "SIGMA_PARTS", "PEAK_GAMMA",
-                    "ROBUST_LOCATION", "DECOUPLE_PEAK",
+                    "ROBUST_LOCATION", "DECOUPLE_PEAK", "CHAMP_OK",
                     # run_meet() reads these at the project_tier()/
                     # project_round() calls. Without them here the serial path
                     # works (lexical scoping) and every PSOCK worker dies with
@@ -1220,7 +1626,21 @@ if (N_WORKERS > 1L) {
                     # every earlier parallel arm happened to run with it TRUE.
                     # Same trap again: run_meet()'s `if (MARKS_ONLY)` check
                     # also runs on every worker unconditionally.
-                    "FAMILY_DEBIAS", "MARKS_ONLY")
+                    # MARKS_BLEND for the same reason: the MARKS_ONLY branch
+                    # reads it on every worker whatever its value.
+                    "FAMILY_DEBIAS", "MARKS_ONLY", "MARKS_BLEND", "RACES_HALF_LIFE",
+                    "EVENT_PARAMS",
+                    "COND_CONTEXT",
+                    # run_meet()'s `if (length(TRAIN_TIERS))` check runs on
+                    # every worker regardless of the value, so the binding must
+                    # exist even when empty -- the same reason FAMILY_DEBIAS is
+                    # exported unconditionally one line up, learned the hard way
+                    # when every FALSE parallel arm died on a missing object.
+                    "TRAIN_TIERS",
+                    # run_meet() reads shock_tbl and ADJUST_RACE on every worker
+                    # regardless of whether the add-back is on, so both bindings
+                    # must exist even when NULL -- the FAMILY_DEBIAS trap again.
+                    "shock_tbl", "ADJUST_RACE")
   # `clean` is the in-memory fallback corpus, potentially gigabytes -- exporting
   # it would copy that to every worker. Only export it when it will actually be
   # read (no store), which is exactly the case the memory cost is unavoidable.
@@ -1257,6 +1677,11 @@ if (N_WORKERS > 1L) {
     TIMING$ability <- TIMING$ability + r$timing$ability
     TIMING$sim <- TIMING$sim + r$timing$sim
     AGE_WARN$n <- AGE_WARN$n + r$age_warn
+    SHOCK$n <- SHOCK$n + (if (is.null(r$shock_applied)) 0L else r$shock_applied)
+    SHOCK$fallback <- SHOCK$fallback + (if (is.null(r$shock_fallback)) 0L else r$shock_fallback)
+    CHAMP$n <- CHAMP$n + (if (is.null(r$champ_applied)) 0L else r$champ_applied)
+    CHAMP$na_tier <- CHAMP$na_tier + (if (is.null(r$champ_na)) 0L else r$champ_na)
+    CHAMP$mixed_tier <- CHAMP$mixed_tier + (if (is.null(r$champ_mixed)) 0L else r$champ_mixed)
     if (isTRUE(r$nofam$is_nofam_meet)) {
       NOFAM$rows <- NOFAM$rows + r$nofam$rows
       NOFAM$meets <- NOFAM$meets + 1L
@@ -1278,6 +1703,11 @@ if (N_WORKERS > 1L) {
     TIMING$ability <- TIMING$ability + r$timing$ability
     TIMING$sim <- TIMING$sim + r$timing$sim
     AGE_WARN$n <- AGE_WARN$n + r$age_warn
+    SHOCK$n <- SHOCK$n + (if (is.null(r$shock_applied)) 0L else r$shock_applied)
+    SHOCK$fallback <- SHOCK$fallback + (if (is.null(r$shock_fallback)) 0L else r$shock_fallback)
+    CHAMP$n <- CHAMP$n + (if (is.null(r$champ_applied)) 0L else r$champ_applied)
+    CHAMP$na_tier <- CHAMP$na_tier + (if (is.null(r$champ_na)) 0L else r$champ_na)
+    CHAMP$mixed_tier <- CHAMP$mixed_tier + (if (is.null(r$champ_mixed)) 0L else r$champ_mixed)
     if (isTRUE(r$nofam$is_nofam_meet)) {
       NOFAM$rows <- NOFAM$rows + r$nofam$rows
       NOFAM$meets <- NOFAM$meets + 1L
@@ -1336,6 +1766,40 @@ medal <- score_predictions(pred[race_id %in% keep],
                            outc[race_id %in% keep, .(race_id, athlete_id, hit = hit_medal)],
                            "p_medal")
 
+if (nzchar(SHOCK_FILE)) {
+  if (SHOCK$n == 0L) cli::cli_abort(c(
+    "x" = "The shock add-back was configured but applied to ZERO races.",
+    "i" = "Every prediction is unshifted, so this arm is identical to its control
+           and would score as a clean null. Check the tier/round/family keys in
+           {.file {SHOCK_FILE}} against what the scored races actually carry."))
+  cli::cli_alert_success("Shock add-back applied to {SHOCK$n} race{?s}.")
+  if (SHOCK$fallback > 0L) cli::cli_alert_warning(
+    "{SHOCK$fallback} of those {round(100*SHOCK$fallback/SHOCK$n)}% used the
+     family-agnostic fallback cell (exact tier x round x family cell missing) --
+     another family's expected shock, not this race's own.")
+}
+# CHAMPIONSHIP OFFSET COVERAGE. Reported every run, because a gate that fires on
+# nothing is invisible: the offset is a per-family constant, so placings and
+# every probability metric are bit-identical whether it applied or not, and only
+# the predicted marks move. A silent zero would look exactly like a healthy run.
+if (CHAMP_OK) {
+  cli::cli_alert_info(
+    "Championship offset applied to {CHAMP$n} of {nrow(pool)} scored meet{?s}' races.")
+  if (CHAMP$n == 0L) cli::cli_alert_warning(c(
+    "!" = "calibration$championship is present but the offset was applied to ZERO races.",
+    "i" = "Expected on a population with no OW-tier meets (Diamond League, national
+           championships), and wrong if this run was meant to include Olympics or
+           World Championships. Check what {.code tier} the scored races carry."))
+} else {
+  cli::cli_alert_warning(
+    "No calibration$championship table; championship races were NOT offset.")
+}
+if (CHAMP$na_tier > 0L || CHAMP$mixed_tier > 0L) {
+  cli::cli_alert_warning(
+    "Tier is unreliable on some scored races: {CHAMP$na_tier} with no tier at all,
+     {CHAMP$mixed_tier} disagreeing with themselves. Both were classified by a
+     modal vote; a championship mis-tagged this way would silently lose its offset.")
+}
 if (NOFAM$rows > 0L) {
   cli::cli_alert_warning(
     "{format(NOFAM$rows, big.mark = ',')} history row{?s} across {length(NOFAM$events)} event{?s} had no registry family on {NOFAM$meets} meet{?s}; estimated at half_life = {half_life}.")

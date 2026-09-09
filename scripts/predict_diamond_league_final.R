@@ -117,6 +117,24 @@ stopifnot(
     max(past$date, na.rm = TRUE) < MEET_START)
 cli::cli_alert_info("History: {format(nrow(past), big.mark = ',')} row{?s}, {min(past$date)} to {max(past$date)}.")
 
+# FABLE-redteam-2026-09-07 F3: the calendar's prediction_cutoff is a PLAN (the
+# day before the meet), not the data boundary. Run on 2026-08-31 from a corpus
+# ending 2026-08-27, the cards were stamped cutoff 2026-09-10 / 2026-09-03 and
+# the site printed "locked from data before <cutoff>", claiming 1-10 September
+# results were used. They were not. The stamped cutoff is now the smaller of the
+# requested cutoff and the last date actually in the history; the requested
+# date and the history boundary are stamped alongside it so the page can say
+# both. CUT itself (the as_of for ability decay and ages) is deliberately left
+# as the meet-relative date -- that is a modelling choice, not a provenance one.
+CUT_REQUESTED <- CUT
+HISTORY_MAX_DATE <- as.Date(max(past$date, na.rm = TRUE))
+CUT_STAMPED <- min(CUT_REQUESTED, HISTORY_MAX_DATE)
+if (CUT_STAMPED < CUT_REQUESTED) {
+  cli::cli_alert_warning(
+    "Requested cutoff {CUT_REQUESTED} is after the last history date {HISTORY_MAX_DATE}; stamping cutoff = {CUT_STAMPED}.")
+}
+stopifnot("stamped cutoff must not be later than the run date" = CUT_STAMPED <= Sys.Date())
+
 ability <- deployed_ability(past, as_of = CUT, calibration = calibration)
 # The store's athlete_id is integer; the resolve script's ids/ages are
 # character (it builds them from championship_results.rds's aid <-
@@ -145,30 +163,43 @@ ab_final_keys <- unique(ability[, .(event_id, athlete_id)])
 ages <- past[!is.na(age), .(age_last = max(age), age_asof = max(date)), by = .(athlete_id = as.character(athlete_id), event_id)]
 ages[, age_now := age_last + as.numeric(CUT - age_asof) / 365.25]
 
+# WHY EACH tryCatch NAMES ITS OWN STAGE. A bare `error = function(e) NULL`
+# collapsed project_field()/simulate_event()/medal_probs() throwing into the
+# SAME `skipped = TRUE` row as a genuine too-few-entrants skip, and that wrong
+# attribution then propagated into the permanent audit trail below
+# (`event_skipped_fewer_than_3_rated`) -- a real crash reported, on a public
+# artefact, as a data characteristic of the field. Caught in review, 2026-09-09.
 sim_event <- function(field_ids, ev) {
   f <- ids[event_id == ev & athlete_id %in% field_ids]
   ab_ev <- ability[event_id == ev & athlete_id %in% f$athlete_id]
-  if (nrow(ab_ev) < 3L) return(data.table(event_id = ev, skipped = TRUE, n = nrow(ab_ev)))
+  if (nrow(ab_ev) < 3L)
+    return(data.table(event_id = ev, skipped = TRUE, n = nrow(ab_ev), reason = "too_few_rated_entrants"))
   ab_ev <- deployed_field(ab_ev, aging = aging, ages = ages[event_id == ev, .(athlete_id, age_now)])
   proj <- tryCatch(project_field(ab_ev, event = ev, as_of = CUT, size = nrow(f)),
-                   error = function(e) NULL)
-  if (is.null(proj) || !nrow(proj)) return(data.table(event_id = ev, skipped = TRUE, n = nrow(ab_ev)))
-  sim <- tryCatch(simulate_event(proj, n_sims = N_SIMS, calibration = calibration, seed = SEED),
-                  error = function(e) NULL)
-  if (is.null(sim)) return(data.table(event_id = ev, skipped = TRUE, n = nrow(proj)))
-  s <- tryCatch(medal_probs(sim), error = function(e) NULL)
-  if (is.null(s) || !nrow(s)) return(data.table(event_id = ev, skipped = TRUE, n = nrow(proj)))
+                   error = function(e) conditionMessage(e))
+  if (is.character(proj) || !nrow(proj))
+    return(data.table(event_id = ev, skipped = TRUE, n = nrow(ab_ev),
+                       reason = if (is.character(proj)) paste("project_field_error:", proj) else "project_field_empty"))
+  sim <- tryCatch(simulate_event(proj, n_sims = N_SIMS, calibration = calibration, seed = SEED,
+                                 context = deployed_race_context("final")),
+                  error = function(e) conditionMessage(e))
+  if (is.character(sim))
+    return(data.table(event_id = ev, skipped = TRUE, n = nrow(proj), reason = paste("simulate_event_error:", sim)))
+  s <- tryCatch(medal_probs(sim), error = function(e) conditionMessage(e))
+  if (is.character(s) || !nrow(s))
+    return(data.table(event_id = ev, skipped = TRUE, n = nrow(proj),
+                       reason = if (is.character(s)) paste("medal_probs_error:", s) else "medal_probs_empty"))
   s[, event_id := ev]
   keep_ab <- intersect(c("athlete_id", "ability", "sigma", "ability_se", "w_total"), names(ab_ev))
   s <- merge(s, ab_ev[, ..keep_ab], by = "athlete_id", all.x = TRUE)
-  s[, skipped := FALSE][, n := nrow(proj)]
+  s[, skipped := FALSE][, n := nrow(proj)][, reason := NA_character_]
   s[]
 }
 
 res <- rbindlist(lapply(events, function(ev) sim_event(ids[event_id == ev]$athlete_id, ev)), fill = TRUE)
-skipped <- unique(res[skipped == TRUE, .(event_id, n)])
+skipped <- unique(res[skipped == TRUE, .(event_id, n, reason)])
 if (nrow(skipped)) {
-  cli::cli_alert_warning("{nrow(skipped)} event{?s} skipped for fewer than 3 rated entrants:")
+  cli::cli_alert_warning("{nrow(skipped)} event{?s} skipped:")
   print(skipped)
 }
 pred <- res[skipped == FALSE]
@@ -218,7 +249,9 @@ acct[in_card == TRUE, reason := "modelled"]
 acct[is.na(reason) & is.na(athlete_id), reason := "unresolved_name"]
 acct[is.na(reason) & !(k %in% key_raw), reason := "no_history_in_event"]
 acct[is.na(reason) & !(k %in% key_final), reason := "dropped_by_publication_guard"]
-acct[is.na(reason) & event_id %in% skipped$event_id, reason := "event_skipped_fewer_than_3_rated"]
+ev_reason <- setNames(skipped$reason, skipped$event_id)
+acct[is.na(reason) & event_id %in% names(ev_reason),
+     reason := paste0("event_skipped: ", unname(ev_reason[event_id]))]
 acct[is.na(reason), reason := "unexplained"]
 
 unmodelled <- acct[in_card == FALSE, .(event_id, event, athlete, country, athlete_id, reason)]
@@ -252,7 +285,10 @@ pred <- merge(pred, info, by = "athlete_id", all.x = TRUE)
 setnames(pred, "country", "nation")
 pred <- merge(pred, as.data.table(citius_events())[, .(event_id, discipline, sex)], by = "event_id", all.x = TRUE)
 pred[, `:=`(
-  generated_at = Sys.time(), cutoff = CUT, meet = MEET, competition_id = COMPETITION_ID,
+  # FABLE-redteam-2026-09-07 F3: cutoff is the data boundary, never a future plan.
+  generated_at = Sys.time(), cutoff = CUT_STAMPED, cutoff_requested = CUT_REQUESTED,
+  history_max_date = HISTORY_MAX_DATE,
+  meet = MEET, competition_id = COMPETITION_ID,
   # THE HONEST STAMP, per meet -- see FIELD above for why these differ between
   # Brussels and Budapest. Birmingham/Glasgow both say "official_entry_list";
   # neither DL-shaped meet can honestly claim that, and they cannot claim the
@@ -270,7 +306,7 @@ arrow::write_parquet(pred, f)
 saveRDS(pred, file.path(D, paste0(MEET, "_pretournament.rds")))
 
 cli::cli_alert_success("{format(nrow(pred), big.mark = ',')} row{?s} across {uniqueN(pred$event_id)} event{?s} -> {basename(f)}")
-cli::cli_alert_info("Config: {DEPLOYED$stamp} | cutoff {CUT} | {N_SIMS} sims.")
+cli::cli_alert_info("Config: {DEPLOYED$stamp} | cutoff {CUT_STAMPED} (requested {CUT_REQUESTED}, history to {HISTORY_MAX_DATE}) | {N_SIMS} sims.")
 
 chk <- pred[, .(gold = round(sum(p_gold, na.rm = TRUE), 3), medal = round(sum(p_medal, na.rm = TRUE), 3), n = .N), by = event_id]
 bad <- chk[abs(gold - 1) > 0.01 | abs(medal - 3) > 0.05]

@@ -41,7 +41,14 @@ suppressMessages(library(data.table))
 suppressMessages(library(httr2))
 D <- file.path(VERSE, "citiusdata", "data")
 
-GQL_URL <- "https://graphql-prod-4881.edge.aws.worldathletics.org/graphql"
+# The edge number rotates independently of the key -- 4881 503'd (retired CDN
+# edge) on 2026-09-09 while the key that had always been paired with it still
+# worked fine against 4883, extracted live from worldathletics.org's own "Road
+# to the Ultimate" page. Configurable the same way as the key so the next
+# rotation is a flag, not a code edit.
+GQL_URL <- getOption("citius.wa_graphql_url",
+                     Sys.getenv("CITIUS_WA_GRAPHQL_URL",
+                                "https://graphql-prod-4883.edge.aws.worldathletics.org/graphql"))
 PAUSE <- 1.0
 
 WA_KEY <- getOption("citius.wa_graphql_key", Sys.getenv("CITIUS_WA_GRAPHQL_KEY", ""))

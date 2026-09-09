@@ -1,0 +1,251 @@
+name: Meet forecast
+
+# Runs the athletics forecast chain on a runner instead of on one laptop.
+#
+# WHY. Until now a meet only got a card if somebody remembered to run
+# `run_meet.ps1` by hand on the right day. Four of the seven meets on the 2026
+# calendar ran without one — Lausanne, Silesia, Zurich and Brussels — and the
+# site correctly said "not forecast" for all four. The chain itself works; what
+# was missing was anywhere else to run it.
+#
+# WHAT MADE THIS POSSIBLE. `data/` is 8.2 GB and only four small files of it are
+# tracked, so a runner had nothing to run against. The inputs the chain actually
+# reads now live on the `deployed-latest` release, published by
+# scripts/publish_deployed_inputs.R, which takes its file list from _deployed.R
+# so a promotion cannot leave this workflow pointing at last month's corpus.
+#
+# SCOPE, mirroring run_meet.ps1's step lists. Two shapes are wired:
+# `birmingham2026` (rounds, entry-list PDF) and the finals-only meets
+# `budapest2026` and `brussels2026`. Dispatch-only: a schedule would fire at
+# meets that have no step list and turn a real gap into a wall of red runs, and
+# a meet's cutoff has to precede it anyway.
+#
+# Adding a meet is adding a case below and to run_meet.ps1. That is the whole
+# fix that was missing when four meets ran with no forecast: every script the
+# finals-only shape needs was written on 2026-08-31 and none of them was ever
+# named in a step list.
+#
+# PUBLISHING IS LIVE as of 2026-09-07. A successful run uploads the meet's
+# artefacts and the manifest to R2, and the site reads them within the
+# five-minute cache. The artefacts are still collected as a build artifact, so
+# a run can be inspected after the fact.
+#
+# The upload is the LAST thing the chain does and it only happens if every step
+# before it passed, so a failed run publishes nothing at all rather than half a
+# card. That is the property to preserve if this workflow is ever edited.
+
+on:
+  workflow_dispatch:
+    inputs:
+      meet_id:
+        description: 'Meet id from data/athletics_calendar.csv'
+        type: string
+        required: true
+        default: 'birmingham2026'
+      skip_entries:
+        description: 'Skip the entry-list PDF re-parse (it rarely changes)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: citius-meet-forecast
+  cancel-in-progress: false
+
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      # The scripts resolve paths as VERSE/citius and VERSE/citiusdata via
+      # here::here(), so the runner has to reproduce the workspace layout rather
+      # than a bare repo checkout.
+      - name: Check out citiusdata
+        uses: actions/checkout@v4
+        with:
+          path: citiusdata
+
+      - name: Check out citius
+        uses: actions/checkout@v4
+        with:
+          repository: peteowen1/citius
+          path: citius
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # here::here() walks up for a project root marker. Without one it would
+      # settle on whichever directory happens to look like a project — usually
+      # citiusdata itself, which would send every VERSE/citiusdata path one
+      # level too deep. The sentinel makes the root explicit.
+      - name: Mark the workspace root for here()
+        run: touch .here
+
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.5.0'
+          use-public-rspm: true
+
+      - name: Setup R dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: citius
+          extra-packages: |
+            any::devtools
+            any::here
+            any::cli
+            any::data.table
+            any::arrow
+            any::prettyunits
+            any::jsonlite
+            any::pdftools
+          needs: |
+            devtools
+        # pdftools is the one that is easy to miss and fatal: the chain's FIRST
+        # step reads the entry-list PDF with it, and it is in neither citius's
+        # DESCRIPTION nor citiusdata (which has none at all), so
+        # setup-r-dependencies would never find it. Without this line an
+        # ordinary run dies on script one with "there is no package called
+        # 'pdftools'", before anything else is exercised.
+
+      # wrangler is how export_athletics_blog.R uploads to R2, and it calls it
+      # through system2(), which fails with R's generic "error in running
+      # command" when the executable is simply not on PATH. That is what the
+      # first live-publish run died on (34117033667): every step passed, all
+      # four artefacts were written, and the chain fell over on the upload with
+      # a message that says nothing about wrangler.
+      #
+      # Pinned to v4 because the `--remote` flag the upload uses is required
+      # there and absent earlier.
+      - name: Setup Node for wrangler
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install wrangler
+        run: |
+          npm install -g wrangler@4
+          # Prove it is callable HERE rather than 8 minutes later inside R,
+          # where the error does not name it.
+          wrangler --version
+
+      - name: Download the deployed inputs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd citiusdata
+          mkdir -p data
+          # The manifest says what the set is. Listing the files here instead
+          # would drift: the calibration artefact is renamed on almost every
+          # promotion, so a hand-typed name would soon be checking for a file
+          # nobody publishes any more — a guard that passes because it is
+          # looking at the wrong thing.
+          gh release download deployed-latest --repo peteowen1/citiusdata \
+            --pattern deployed_inputs.json --dir /tmp --clobber
+          echo "Manifest:"; cat /tmp/deployed_inputs.json
+
+          FILES=$(jq -r '.files[]' /tmp/deployed_inputs.json)
+          if [ -z "$FILES" ]; then
+            echo "::error::deployed_inputs.json names no files — publish_deployed_inputs.R has not run, or ran wrong."
+            exit 1
+          fi
+
+          for f in $FILES; do
+            gh release download deployed-latest --repo peteowen1/citiusdata \
+              --pattern "$f" --dir data --clobber
+          done
+
+          echo ""
+          # Fail here, named, rather than deep inside the chain: a missing
+          # corpus or calibration surfaces as an opaque error several scripts
+          # later otherwise, after minutes of compute.
+          MISSING=0
+          for f in $FILES; do
+            if [ -f "data/$f" ]; then
+              echo "  ok  $f  ($(du -h "data/$f" | cut -f1))"
+            else
+              echo "::error::Required input data/$f was not in the deployed-latest release."
+              MISSING=1
+            fi
+          done
+          [ "$MISSING" -eq 0 ] || exit 1
+
+      - name: Run the forecast chain
+        env:
+          # Publishing is LIVE as of 2026-09-07: CLOUDFLARE_API_TOKEN and
+          # CLOUDFLARE_ACCOUNT_ID are set on this repo, so export_athletics_blog.R
+          # uploads to R2 rather than writing to blog/ and stopping. wrangler
+          # reads both from the environment.
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # The World Athletics key the Budapest fetch needs. Absent today, and
+          # the fetch step is skipped by dispatching with skip_entries, which
+          # runs the chain on the published field snapshot instead. Set the
+          # secret and dispatch WITHOUT skip_entries to forecast a current field.
+          CITIUS_WA_GRAPHQL_KEY: ${{ secrets.CITIUS_WA_GRAPHQL_KEY }}
+          MEET_ID: ${{ inputs.meet_id }}
+          SKIP_ENTRIES: ${{ inputs.skip_entries }}
+        run: |
+          set -o pipefail
+          # Mirrors run_meet.ps1's step lists. Entries are "script[:arg]": the
+          # Birmingham scripts are meet-specific and take nothing, the
+          # finals-only ones are shared and take the meet id — and default to
+          # brussels2026 if it is omitted, which would quietly forecast the
+          # wrong meet.
+          case "$MEET_ID" in
+            birmingham2026)
+              STEPS="parse_birmingham_entries.R resolve_birmingham_athletes.R build_birmingham_rounds.R predict_birmingham2026.R sanity_birmingham_card.R export_athletics_blog.R:birmingham2026"
+              ;;
+            budapest2026)
+              # Only Budapest has a fetch step: World Athletics answers its
+              # qualification endpoint for a championship but returns a server
+              # error for Diamond League ids. It needs CITIUS_WA_GRAPHQL_KEY;
+              # without that secret, dispatch with skip_entries and the chain
+              # runs on the published field instead.
+              STEPS="fetch_budapest_qualification_field.R:budapest2026 resolve_diamond_league_athletes.R:budapest2026 predict_diamond_league_final.R:budapest2026 add_nation_codes.R:budapest2026 sanity_diamond_league_card.R:budapest2026 export_athletics_blog.R:budapest2026"
+              ;;
+            brussels2026)
+              STEPS="resolve_diamond_league_athletes.R:brussels2026 predict_diamond_league_final.R:brussels2026 add_nation_codes.R:brussels2026 sanity_diamond_league_card.R:brussels2026 export_athletics_blog.R:brussels2026"
+              ;;
+            *)
+              echo "::error::No step list for '$MEET_ID'. A meet with rounds needs a Birmingham-shaped chain; a finals-only meet can usually reuse the Diamond-League one."
+              exit 1
+              ;;
+          esac
+
+          for entry in $STEPS; do
+            s="${entry%%:*}"
+            arg="${entry#*:}"
+            [ "$arg" = "$s" ] && arg=""
+            # skip_entries covers whichever step sources the field for this
+            # meet shape: the PDF parse for Birmingham, the qualification fetch
+            # for Budapest. Both are the step that needs something external.
+            case "$s" in
+              parse_birmingham_entries.R|fetch_budapest_qualification_field.R)
+                if [ "$SKIP_ENTRIES" = "true" ]; then
+                  echo "--- skipping $s (skip_entries)"
+                  continue
+                fi
+                ;;
+            esac
+            echo ""
+            echo "=== $s ${arg}"
+            # Aborts on the FIRST failing step and never reaches the publish.
+            # A partial run that uploads is worse than no run: the site would
+            # then serve a self-inconsistent set under a fresh "as at" stamp,
+            # which is the failure run_meet.ps1's header calls out.
+            if ! Rscript "citiusdata/scripts/$s" $arg 2>&1 | tee "/tmp/${s%.R}.log"; then
+              echo "::error::$s failed — stopping before anything is published."
+              exit 1
+            fi
+          done
+
+      - name: Collect the forecast artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forecast-${{ inputs.meet_id }}
+          path: |
+            citiusdata/blog/**
+            /tmp/*.log
+          if-no-files-found: warn
+          retention-days: 14

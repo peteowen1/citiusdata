@@ -64,11 +64,42 @@ $STEPS = switch ($MeetId) {
       @{ n = "build rounds";      f = "build_birmingham_rounds.R" },
       @{ n = "predict";           f = "predict_birmingham2026.R" },
       @{ n = "sanity";            f = "sanity_birmingham_card.R" },
-      @{ n = "export + publish";  f = "export_athletics_blog.R" }
+      @{ n = "export + publish";  f = "export_athletics_blog.R";    a = @($MeetId) }
+    )
+  }
+  # The finals-only shape. Every script it needs was written on 2026-08-31 and
+  # none of them was ever wired into a step list, so `run_meet.ps1 budapest2026`
+  # failed with "no step list" while a working card sat unpublished in data/.
+  # That is why four meets ran without a forecast: not a missing model, a
+  # missing table.
+  #
+  # No entry PDF and no rounds, so no parse or build-rounds step. Only Budapest
+  # has a fetch: its field comes from World Athletics' own qualification
+  # standings with ids already resolved, where Brussels had to be built from a
+  # third-party qualifier compilation because WA publishes nothing
+  # machine-readable for a Diamond League final. The two cards carry different
+  # field_type/field_source stamps for exactly that reason.
+  "budapest2026" {
+    @(
+      @{ n = "fetch field";      f = "fetch_budapest_qualification_field.R"; a = @("budapest2026"); optional = $SkipEntries },
+      @{ n = "resolve athletes"; f = "resolve_diamond_league_athletes.R";    a = @("budapest2026") },
+      @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("budapest2026") },
+      @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("budapest2026") },
+      @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("budapest2026") },
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
+    )
+  }
+  "brussels2026" {
+    @(
+      @{ n = "resolve athletes"; f = "resolve_diamond_league_athletes.R";    a = @("brussels2026") },
+      @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("brussels2026") },
+      @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("brussels2026") },
+      @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("brussels2026") },
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
     )
   }
   default {
-    Fail "No step list defined for '$MeetId' yet. Diamond League meets need their own chain (no rounds, no entry PDF) -- see ticket 12."
+    Fail "No step list defined for '$MeetId' yet. A meet with rounds needs a Birmingham-shaped chain; a finals-only meet can usually reuse the Diamond-League one above."
   }
 }
 
@@ -110,7 +141,14 @@ try {
     if (-not (Test-Path $path)) { Fail "missing script: $($s.f)" }
     $st = Get-Date
     Write-Host ("  {0,-20} running..." -f $s.n) -NoNewline
-    $out = & Rscript $path 2>&1
+    # Birmingham's scripts are meet-specific and take no arguments; the
+    # finals-only ones are shared between meets and take the meet id, so a step
+    # can carry `a`. Without this the Diamond-League scripts would silently run
+    # against their own default (brussels2026) whatever meet was asked for —
+    # a wrong card that looks like a right one.
+    $argv = @($path)
+    if ($s.a) { $argv += $s.a }
+    $out = & Rscript @argv 2>&1
     $code = $LASTEXITCODE
     $sec = [math]::Round(((Get-Date) - $st).TotalSeconds, 1)
     if ($code -ne 0) {

@@ -70,8 +70,21 @@ build <- function(src, dest, label, join_tier = FALSE, data = NULL) {
     d <- merge(d, CAT_TBL, by = "competition_id", all.x = TRUE)
     cov <- 100 * mean(!is.na(d$meet_tier))
     cli::cli_alert_info("  {label}: meet_tier attached to {round(cov, 1)}% of rows.")
-    if (cov <= 50) {
-      cli::cli_abort("{label}: meet_tier coverage {round(cov, 1)}% -- join is broken, refusing to ship it silently.")
+    # cov ALONE cannot be the guard: athletics_corpus.rds has career-route rows
+    # with no competition_id at all (measured 2026-09-09: 33.4% of rows), so its
+    # healthy ceiling is ~66.6%, not 100% -- a coverage-of-all-rows floor would
+    # either let a real partial join failure through (the old 50% did) or abort
+    # a perfectly healthy corpus build if raised to match championship_results'
+    # 100% ceiling. The invariant that actually holds regardless of how many
+    # rows carry a competition_id: of the ones that DO, the join should resolve
+    # essentially all of them. Measured 100.0% on both stores when healthy.
+    # Caught in review, 2026-09-09 -- same gap as the rescue-rebuild guard in
+    # _deployed.R, fixed there the same day.
+    has_cid <- !is.na(d$competition_id)
+    cov_joinable <- if (any(has_cid)) 100 * mean(!is.na(d$meet_tier[has_cid])) else NA_real_
+    cli::cli_alert_info("  {label}: of rows WITH a competition_id, {round(cov_joinable, 1)}% resolved.")
+    if (is.na(cov_joinable) || cov_joinable < 95) {
+      cli::cli_abort("{label}: of rows carrying a competition_id, only {round(cov_joinable, 1)}% resolved to meet_tier -- join is broken, refusing to ship it silently.")
     }
   }
 
@@ -124,16 +137,34 @@ build <- function(src, dest, label, join_tier = FALSE, data = NULL) {
   invisible()
 }
 
-# join_tier stays OFF for both athletics stores below. It was switched on
-#2026-08-29 for a meet_tier fix that was then properly tested and REJECTED
-# (.scratch/athletics-calendar/issues/03-diamond-league-tier-defect.md
-# addendum): T1 elite regressed +3.15% (p=3e-15) on full-history confirmation,
-# against DEPLOYED's feed-tier-fitted calibration. Turning join_tier back on
-# here without ALSO promoting a meet_tier-fitted calibration would silently
-# feed meet_tier labels through offsets fitted on the feed's tier -- a
-# mismatch, not a fix. The machinery is kept (tested, correct) for whenever a
-# same-source calibration is adopted; until then it must stay off. Reverted
-# 2026-08-30.
+# join_tier is ON for both athletics stores below, as of 2026-09-04.
+#
+# HISTORY, because the flag has been flipped twice and the reason matters more
+# than the value. It was switched on 2026-08-29 for a meet_tier fix that full
+# history then REJECTED (T1 elite +3.15% worse, p=3e-15) and reverted off on
+# 2026-08-30 -- correctly, because DEPLOYED's calibration was fitted on the
+# feed's `tier`, so feeding meet_tier labels through it is a mismatch, not a
+# fix. Re-run on the rebuilt catalogue 2026-09-04, the same arm reversed to
+# -2.68% BETTER on marks MAE (p=1.9e-283), gold logloss also better, medal
+# logloss a tie, and Pete promoted it.
+#
+# THE PAIRING IS THE WHOLE POINT: this flag and DEPLOYED$calibration must move
+# together. ON here requires a meet_tier-fitted calibration
+# (calibration_corpus_wac_coast_0904.rds); OFF requires a feed-tier-fitted one.
+# Either one alone silently applies offsets fitted on one label set to a
+# different label set, which no test fails and no guard catches -- it just
+# quietly predicts worse. If you revert one, revert the other in the same
+# commit.
+#
+# KNOWN OPEN RISK, recorded rather than buried: the 2026-09-04 reversal was
+# measured on a population that is NOT size-matched to the run it overturned
+# (53,311 predictions on a T1-only 394-meet pool vs 259 T1 races in a
+# T1+T2+T3 120-meet pool), so "the catalogue fixes caused the reversal" is
+# likely but UNPROVEN -- a differently-composed population is a live
+# alternative explanation. The test that would settle it (pin this meet list,
+# swap only the catalogue vintage) was recommended and deliberately skipped in
+# favour of shipping. See the 2026-09-04 addendum in
+# .scratch/athletics-calendar/issues/03-diamond-league-tier-defect.md.
 #
 # SOURCE: citius.duckdb, not readRDS(), as of 2026-08-30. The two athletics
 # RDS files remain a compat export for the 40+ scripts that still read them
@@ -214,12 +245,12 @@ build <- function(src, dest, label, join_tier = FALSE, data = NULL) {
   "athletics_corpus.rds", "athletics_corpus")
 
 build("championship_results.rds", "athletics_store", "Athletics competitions",
-      join_tier = FALSE, data = .athletics$championship_results)
+      join_tier = TRUE, data = .athletics$championship_results)
 # The UNIFIED corpus -- 4.99M rows against the competition harvest's 308k. Without
 # a store the backtest filters it in memory once per meet, 900 times, which is
 # what made the corpus arm 16x slower than the harvest arms rather than equal.
 build("athletics_corpus.rds", "athletics_corpus_store", "Athletics corpus",
-      join_tier = FALSE, data = .athletics$athletics_corpus)
+      join_tier = TRUE, data = .athletics$athletics_corpus)
 build("swimming_history_full.rds", "swimming_store", "Swimming")
 if (file.exists(file.path(OUT, "swimming_corpus.rds"))) {
   build("swimming_corpus.rds", "swimming_corpus_store", "Swimming corpus")
