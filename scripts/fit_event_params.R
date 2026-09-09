@@ -34,11 +34,30 @@ source(here::here("citiusdata", "scripts", "_deployed.R"))
 # Same table the scorecard uses; scripts/_score_weights.R.
 source(here::here("citiusdata", "scripts", "_score_weights.R"))
 OUT   <- here::here("citiusdata", "data")
-CACHE <- file.path(OUT, Sys.getenv("CITIUS_LAB_CACHE", "marks_lab_cache_2020"))
+# THE DEFAULT MUST BE THE CACHE THE SHIPPED ARTEFACT IS BUILT FROM.
+#
+# It used to default to `marks_lab_cache_2020` while the deployed
+# `event_params.rds` was fitted on `marks_lab_cache_t1t2` -- 1.7M rows and 78
+# events against 12.8M rows and 86 events. A plain re-run therefore silently
+# produced a DIFFERENT table from the validated one: 12 athletics events lost
+# their fit entirely (AT-1000Metres-M, AT-600Metres-M, AT-5KilometresRoad-M and
+# the walks among them) because the smaller cache has no rows for them. Nothing
+# failed; the artefact just quietly got worse. Done exactly that on 2026-09-09.
+#
+# The name is echoed below with its size so the run says out loud which corpus
+# it fitted on, and the stamp records it in the artefact.
+CACHE <- file.path(OUT, Sys.getenv("CITIUS_LAB_CACHE", "marks_lab_cache_t1t2"))
 SPLIT <- as.Date(Sys.getenv("CITIUS_FIT_SPLIT", "2024-01-01"))
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), sprintf(...), "\n", sep = "")
+if (!dir.exists(CACHE)) cli::cli_abort(
+  "Fit cache {.path {CACHE}} does not exist. Set {.envvar CITIUS_LAB_CACHE}.")
 
 pairs <- readRDS(file.path(CACHE, "pairs.rds"))
+# Size of the corpus this fit is about to run on, said before any of it is used:
+# the cache is the single input that most changes the answer, and swapping it is
+# invisible in every downstream artefact except the stamp.
+say("cache %s: %s rows, %d events", basename(CACHE),
+    format(nrow(pairs), big.mark = ","), data.table::uniqueN(pairs$event_id))
 # THE CACHE'S `tactical` FLAG IS THE UNGATED ONE. It was built before
 # estimate_ability() started gating the calibration's override by family, so it
 # still marks every throw and every sprint. Fitting `trim_tactical` against it
@@ -213,10 +232,41 @@ tab <- Reduce(function(a, b) merge(a, b, by = c("event_id", "family"), all = TRU
 # the caller's default in place without saying so.
 reg <- as.data.table(citius_events())[, .(event_id, family)]
 tab <- merge(reg, tab, by = c("event_id", "family"), all.x = TRUE)
-miss <- tab[is.na(context_scale)]
-if (nrow(miss)) {
-  say("%d registry events had no fit data; filling with the global values", nrow(miss))
-  for (nm in names(SPEC)) set(tab, which(is.na(tab[[nm]])), nm, SPEC[[nm]]$glob)
+# AN EVENT WITH NO FIT DATA INHERITS ITS FAMILY, NOT THE GLOBAL.
+#
+# Filling straight to the global was a real regression the moment this table was
+# promoted (2026-09-09). `half_life`'s global is the marks-lab 180 days, so
+# AT-HalfMarathonRaceWalk-M/W -- which have no rows in the fit cache -- went from
+# the `hl_family` walk value of 730 to 180, a 4x cut, while every OTHER walk event
+# in the same table fitted between 381 and 828. Nothing about those two events
+# says "forget form four times faster than your siblings"; the absence of fit data
+# says nothing at all, which is exactly when the parent estimate should be used.
+#
+# The family value is itself a fit (shrunk toward the global in proportion to its
+# own evidence, above), so it is the honest parent. The global is only correct
+# where the family has no fit either -- for a family with no fitted events there
+# is genuinely nothing better to say.
+#
+# `fitted` records which rows are real fits so a consumer never has to
+# reverse-engineer it from a value fingerprint, which is how this was found.
+fam_val <- lapply(res, function(r) stats::setNames(r$family$fam, r$family$family))
+tab[, fitted := !is.na(context_scale)]
+n_miss <- sum(!tab$fitted)
+if (n_miss) {
+  say("%d of %d registry events had no fit data; filling from their family", n_miss, nrow(tab))
+  for (nm in names(SPEC)) {
+    idx <- which(is.na(tab[[nm]]))
+    if (!length(idx)) next
+    v <- unname(fam_val[[nm]][tab$family[idx]])
+    n_fam <- sum(!is.na(v))
+    v[is.na(v)] <- SPEC[[nm]]$glob
+    set(tab, idx, nm, v)
+    say("  %-16s %d from family, %d from the global %s",
+        nm, n_fam, length(idx) - n_fam, format(SPEC[[nm]]$glob))
+  }
+  # Say WHICH events, by name: 36 of these are swim events nothing forecasts, and
+  # a bare count cannot tell you that the other 4 are live athletics events.
+  say("  unfitted events: %s", paste(tab[!(fitted)]$event_id, collapse = ", "))
 }
 # TRIM IS UNIDENTIFIABLE WHERE THE FLAG NEVER FIRES. It is only ever read when
 # `tactical` is TRUE, and the family gate means that is never true for sprints,
@@ -233,6 +283,22 @@ say("trim_tactical reset to the global %.2f for %d events in %d families the gat
 stopifnot("a parameter column is unpopulated" =
             all(vapply(names(SPEC), function(nm) all(is.finite(tab[[nm]]) | is.infinite(tab[[nm]])),
                        logical(1))))
+
+# THE FILL'S OWN EVIDENCE, in the same run that performs it. An unfitted event
+# whose family DID fit must not come out at the global -- that is the exact
+# defect above, and a fill that silently no-ops looks identical to one that works.
+chk <- tab[!(fitted) & family %in% names(fam_val$half_life)]
+if (nrow(chk)) {
+  bad <- chk[abs(half_life - SPEC$half_life$glob) < 1e-9 &
+               abs(fam_val$half_life[family] - SPEC$half_life$glob) > 1e-9]
+  if (nrow(bad)) cli::cli_abort(
+    "unfitted event{?s} {.field {bad$event_id}} kept the global half_life
+     {SPEC$half_life$glob} although their famil{?y/ies} fitted something else --
+     the family fill did not apply.")
+  say("family fill verified on %d unfitted event%s: %s", nrow(chk),
+      if (nrow(chk) == 1) "" else "s",
+      paste(sprintf("%s %.0fd", chk$event_id, chk$half_life), collapse = ", "))
+}
 attr(tab, "stamp") <- sprintf("fit_event_params %s | cache %s | split %s",
                               format(Sys.Date()), basename(CACHE), format(SPLIT))
 saveRDS(tab, file.path(OUT, "event_params.rds"))

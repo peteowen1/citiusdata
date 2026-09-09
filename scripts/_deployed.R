@@ -366,10 +366,37 @@ deployed_event_params <- function(dir = here::here("citiusdata", "data")) {
     "i" = "Build it with {.code scripts/fit_event_params.R}, or set
            {.code event_params = NULL} if the global parameters are intended."))
   ep <- data.table::as.data.table(readRDS(f))
-  need <- c("event_id", "half_life", "races_half_life", "trim_tactical", "context_scale")
+  # `family` is required because .col() below subsets it unconditionally. Left
+  # out of this list, a table without it failed deep inside estimate_ability()
+  # with "column not found: [family]" mid-prediction, rather than here with the
+  # message that names the fix.
+  need <- c("event_id", "family", "half_life", "races_half_life",
+            "trim_tactical", "context_scale")
   miss <- setdiff(need, names(ep))
   if (length(miss)) cli::cli_abort(
     "{.file {nm}} is missing column{?s}: {.field {miss}}.")
+
+  # COVERAGE, NOT PRESENCE. citius:::.event_param() resolves an absent event by
+  # matching its FAMILY against the table -- and match() takes the first row with
+  # that family, which in a one-row-per-event table is an arbitrary sibling's
+  # already-twice-shrunk value, not a family average. That is a silent, plausible
+  # wrong answer. It cannot happen while the table covers the registry, so check
+  # that here rather than relying on the fit and the registry never drifting.
+  reg <- citius::citius_events()$event_id
+  gap <- setdiff(reg, ep$event_id)
+  if (length(gap)) cli::cli_abort(c(
+    "x" = "{.file {nm}} covers {nrow(ep)} events but the registry has {length(reg)};
+           {length(gap)} missing: {.field {utils::head(gap, 8)}}.",
+    "i" = "An event absent from the table silently inherits an arbitrary sibling's
+           fitted value. Rebuild with {.code scripts/fit_event_params.R}."))
+
+  # A row that was never fitted is a legitimate state -- it now inherits its
+  # family rather than the flat global -- but it is worth naming, because 4 of
+  # these are live athletics events and reading it off a value fingerprint is how
+  # the 730 -> 180 race-walk regression was found rather than prevented.
+  if ("fitted" %in% names(ep) && any(!ep$fitted)) cli::cli_inform(
+    "{.file {nm}}: {sum(!ep$fitted)} of {nrow(ep)} events carry family-inherited
+     parameters rather than their own fit.")
   ep
 }
 
