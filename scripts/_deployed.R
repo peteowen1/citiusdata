@@ -26,7 +26,7 @@ DEPLOYED <- list(
   # stamp is the only thing a reader of a published card can use to tell which
   # model produced it. Dropping the `_0904` made the stamp name a different arm
   # from the file it actually loads.
-  stamp = "2026-09-07 wac_coast_0904_full2 ctxsd strip4fam (debias OFF, blend OFF)",
+  stamp = "2026-09-09 wac_coast_0904_full2 ctxsd strip4fam evparams5 (debias OFF, blend OFF)",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -303,30 +303,75 @@ DEPLOYED <- list(
   # docs/reviews/marks-blend-2026-09-07.md
   races_half_life = Inf,
 
-  # PER-EVENT PARAMETER TABLES: fitted, NOT promoted. `NULL` is what runs.
+  # PER-EVENT PARAMETER TABLES. PROMOTED 2026-09-09, after the medal arm.
   #
   # `scripts/fit_event_params.R` writes `data/event_params.rds`: one row per
-  # event carrying `half_life`, `races_half_life`, `trim_tactical` and
-  # `context_scale`, each fitted on the fit years then shrunk twice -- the event
-  # toward its family, the family toward the global value, each in proportion to
-  # its own evidence. Held out on 44 events against a like-for-like last-5
-  # baseline, the four together take pooled mark error from -6.28% to -7.57%.
+  # event carrying `half_life`, `races_half_life`, `trim_tactical`,
+  # `context_scale` and `peak_gamma`, each fitted on the fit years then shrunk
+  # twice -- the event toward its family, the family toward the global value,
+  # each in proportion to its own evidence.
+  #
+  # WHAT THE GATE ACTUALLY SAID. `_run_event_params_arm_chunked.ps1` ran both
+  # arms to completion over 395 meets (2026-09-09), ctrl = this config without
+  # the table, event = with it. On T1_elite, 1,760 races / 28,457 predictions:
+  #   medal Brier   -3.16%  p = 4.5e-06
+  #   medal logloss -2.34%  p = 0.000138
+  #   gold logloss  -1.66%  p = 0.041
+  #   marks MAE     -1.18%  p = 1.6e-05
+  #   favourite picked correctly 48.4% -> 49.6%
+  # Against last-5 rather than against ctrl, the same arm reads marks MAE
+  # -7.26% (p = 2.9e-75) and medal logloss -6.90% (p = 1.8e-20).
+  #
+  # THE MARKS NUMBERS ABOVE ARE POST-CORRECTION, and the correction matters:
+  # the arm as first run applied a championship offset to 92% of races that
+  # were not championships, which made marks look WORSE. Fixed in
+  # backtest_athletics.R (gated on .is_championship); placings were bit-
+  # identical either way (0.0000000000), so the medal verdict is unaffected by
+  # it. The corrected marks figures come from applying the fix analytically to
+  # the completed arms rather than re-running seven hours -- verified to
+  # reproduce a real re-run to 0.000000% across 8,142 rows.
   #
   # SETTING THIS DISABLES `hl_family` ABOVE. The table carries a half-life per
   # event, and leaving the family override on would stack two corrections that
   # were each fitted with the other absent -- the same shape as the debias and
-  # the strip double-counting on 2026-09-07. backtest_athletics.R enforces it;
-  # any other consumer must too.
+  # the strip double-counting on 2026-09-07. Enforced below in
+  # .deployed_ability_raw(), and by backtest_athletics.R; any other consumer
+  # must too.
   #
-  # Blocked on `_run_event_params_arm.ps1`. All four move `ability`, so they
-  # move finishing orders, and marks evidence cannot license that.
-  event_params = NULL
+  # AND IT WAS NOT SAFE TO PROMOTE UNTIL 2026-09-09. Emptying hl_family routes
+  # .deployed_ability_raw() to its no-map branch, which was silently omitting
+  # `adjust_race` and so would have turned the race-shock strip off for every
+  # family while the stamp still read `strip4fam`. Fixed in the same session;
+  # see that branch's own comment.
+  event_params = "event_params.rds"
 )
 Sys.setenv(CITIUS_MARKS_BLEND = as.character(DEPLOYED$marks_blend))
 
 # --- accessors ---------------------------------------------------------------
 
 deployed_calibration <- function(dir) readRDS(file.path(dir, DEPLOYED$calibration))
+
+#' The per-event parameter table DEPLOYED names, or NULL when none is set.
+#'
+#' Aborts rather than falling back if the file is named but missing: a silent
+#' NULL here would run the global parameters while every stamped artefact
+#' claimed `evparams5`, which is precisely the promoted-config-not-reaching-the-
+#' consumer failure this file exists to prevent.
+deployed_event_params <- function(dir = here::here("citiusdata", "data")) {
+  nm <- DEPLOYED$event_params
+  if (is.null(nm) || !nzchar(nm)) return(NULL)
+  f <- file.path(dir, nm)
+  if (!file.exists(f)) cli::cli_abort(c(
+    "x" = "DEPLOYED$event_params names {.file {nm}} but it is not at {.path {f}}.",
+    "i" = "Build it with {.code scripts/fit_event_params.R}, or set
+           {.code event_params = NULL} if the global parameters are intended."))
+  ep <- data.table::as.data.table(readRDS(f))
+  need <- c("event_id", "half_life", "races_half_life", "trim_tactical", "context_scale")
+  miss <- setdiff(need, names(ep))
+  if (length(miss)) cli::cli_abort(
+    "{.file {nm}} is missing column{?s}: {.field {miss}}.")
+  ep
+}
 
 deployed_aging <- function(dir) {
   f <- file.path(dir, DEPLOYED$aging)
@@ -457,12 +502,17 @@ deployed_race_context <- function(round_class = "final",
 }
 
 deployed_ability <- function(past, as_of, calibration,
-                             debias = deployed_debias_offsets()) {
-  deployed_debias(.deployed_ability_raw(past, as_of, calibration), debias)
+                             debias = deployed_debias_offsets(),
+                             event_params = deployed_event_params()) {
+  deployed_debias(.deployed_ability_raw(past, as_of, calibration, event_params), debias)
 }
 
-.deployed_ability_raw <- function(past, as_of, calibration) {
+.deployed_ability_raw <- function(past, as_of, calibration, event_params = deployed_event_params()) {
   hl_map <- DEPLOYED$hl_family
+  # THE TABLE REPLACES THE FAMILY MAP, enforced here rather than trusted to a
+  # comment. It already carries a half-life per event; leaving hl_family on top
+  # would stack two corrections each fitted with the other absent.
+  if (!is.null(event_params)) hl_map <- NULL
   if (!length(hl_map)) {
     # EVERY ADJUSTMENT THE OTHER BRANCH PASSES MUST BE PASSED HERE TOO.
     # `adjust_race` was missing from this call while the per-family branch below
@@ -477,8 +527,16 @@ deployed_ability <- function(past, as_of, calibration,
     # event_params note above says that table REPLACES the per-family map. The
     # moment event_params.rds is promoted, hl_map goes empty, this branch takes
     # over, and adjust_race would have turned itself off for every family.
-    return(estimate_ability(past, as_of = as_of, half_life = DEPLOYED$half_life,
-                            races_half_life = DEPLOYED$races_half_life,
+    .col <- function(cn, fallback) if (is.null(event_params)) fallback else
+      event_params[, c("event_id", "family", cn), with = FALSE]
+    return(estimate_ability(past, as_of = as_of,
+                            half_life = .col("half_life", DEPLOYED$half_life),
+                            races_half_life = .col("races_half_life", DEPLOYED$races_half_life),
+                            trim_tactical = .col("trim_tactical", 0.25),
+                            context_scale = .col("context_scale", 1),
+                            peak_gamma = if (is.null(event_params) ||
+                                             !"peak_gamma" %in% names(event_params)) 0 else
+                              event_params[, c("event_id", "family", "peak_gamma"), with = FALSE],
                             calibration = calibration,
                             adjust_race = isTRUE(DEPLOYED$adjust_race)))
   }
