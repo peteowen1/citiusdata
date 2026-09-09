@@ -136,6 +136,15 @@ if (miss) cli::cli_alert_warning("{miss} medallist{?s} still have no nation.")
 #   live     - in-Games re-predictions for events still in progress, conditioned
 #              on completed heats (p_reach_r2/p_reach_r3/p_final). Legitimate
 #              and more accurate, but it is NOT a forecast and is never scored.
+# Fallback usage, keyed by pattern, so `card` below can turn it into a
+# caveat the PAGE carries -- not just a console line an operator has to be
+# watching CI to see. `generated_at` alone can't say this: it is Sys.time()
+# whether the file it read was fresh or a fallback, which is exactly the
+# "snapshot silently ageing" failure this verse keeps having (see
+# export_athletics_blog.R's identical caveats = c(...) convention). Caught in
+# review, 2026-09-09.
+ARCHIVE_FALLBACK <- list()
+
 pick_newest <- function(pattern) {
   f <- list.files(OUT, pattern = pattern, full.names = TRUE)
   # FABLE-redteam-2026-09-07 F1: the 2026-09-02 cleanup sweep moved every
@@ -146,8 +155,13 @@ pick_newest <- function(pattern) {
   if (!length(f)) {
     f <- list.files(file.path(OUT, "..", "_archive"), pattern = pattern,
                     full.names = TRUE, recursive = TRUE)
-    if (length(f)) cli::cli_alert_warning(
-      "{.val {pattern}} not in {.path {OUT}}; using archived copy {.file {basename(f[which.max(file.info(f)$mtime)])}}. Restore it to data/ (see FABLE-redteam-2026-09-07 F1).")
+    if (length(f)) {
+      chosen <- f[which.max(file.info(f)$mtime)]
+      ARCHIVE_FALLBACK[[pattern]] <<- list(
+        file = basename(chosen), mtime = file.info(chosen)$mtime)
+      cli::cli_alert_warning(
+        "{.val {pattern}} not in {.path {OUT}}; using archived copy {.file {basename(chosen)}}. Restore it to data/ (see FABLE-redteam-2026-09-07 F1).")
+    }
   }
   if (!length(f)) return(NULL)
   f[which.max(file.info(f)$mtime)]
@@ -274,6 +288,20 @@ card <- list(generated_at = format(NOW, "%Y-%m-%dT%H:%M:%S%z"),
              harvest_ok = harvest_ok,
              swim_rows = swim_rows,
              results_through = as.character(max(results$date, na.rm = TRUE)))
+
+# ARCHIVE-FALLBACK CAVEATS, if any of the three pick_newest() calls above used
+# one. Written into the manifest, not just the console, so a re-run that falls
+# back stays visible on the page rather than reading as current the moment
+# generated_at stamps Sys.time() over it.
+if (length(ARCHIVE_FALLBACK)) {
+  card$source_data_archived <- TRUE
+  card$caveats <- vapply(ARCHIVE_FALLBACK, function(x)
+    sprintf("Served from an archived snapshot (%s, saved %s) -- the live file was missing when this ran.",
+            x$file, format(x$mtime, "%Y-%m-%d %H:%M")),
+    character(1), USE.NAMES = FALSE)
+} else {
+  card$source_data_archived <- FALSE
+}
 
 finals <- results[is_final == TRUE & !is.na(place) & place > 0L & !is_relay &
                     event_id %in% predicted_events]
