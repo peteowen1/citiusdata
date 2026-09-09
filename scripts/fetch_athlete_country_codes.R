@@ -59,7 +59,11 @@ suppressMessages(library(httr2))
 D <- file.path(VERSE, "citiusdata", "data")
 
 CACHE <- file.path(D, "athlete_country_codes.rds")
-GQL_URL <- "https://graphql-prod-4881.edge.aws.worldathletics.org/graphql"
+# See fetch_budapest_qualification_field.R -- the edge number rotates
+# independently of the key. 4881 503'd on 2026-09-09; 4883 is current.
+GQL_URL <- getOption("citius.wa_graphql_url",
+                     Sys.getenv("CITIUS_WA_GRAPHQL_URL",
+                                "https://graphql-prod-4883.edge.aws.worldathletics.org/graphql"))
 BATCH <- 50L
 PAUSE <- 1.5           # between batches; ~5 requests total for a full field
 MAX_CONSECUTIVE_FAIL <- 2L
