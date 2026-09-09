@@ -148,9 +148,17 @@ if (MARKS_ONLY_MODE) {
                    b_gold = numeric(0), b_medal = numeric(0))
   race_ids <- character(0)
 }
+# ORDER-SENSITIVE DIGEST. sum(utf8ToInt(...)) is order-independent and
+# anagram-blind, so a DIFFERENT race population with the same race count and the
+# same total character-code sum would pass `identical(prev$key, key)` and reuse
+# a stale checkpoint silently. Sorted so the digest is stable under a reordered
+# population, hashed so it is not fooled by a rearrangement. Fixed 2026-09-09.
 key <- list(n_races = length(race_ids), nsim = NSIM, from = as.character(FROM),
             tier = TIER, arm = ARM,
-            digest = sum(utf8ToInt(paste(race_ids, collapse = ""))))
+            digest = if (requireNamespace("digest", quietly = TRUE))
+              digest::digest(sort(race_ids))
+            else paste0("len", length(race_ids), "-",
+                        paste(utf8ToInt(paste(sort(race_ids), collapse = "")), collapse = "")))
 bs <- NULL
 if (file.exists(CKPT)) {
   prev <- tryCatch(readRDS(CKPT), error = function(e) NULL)

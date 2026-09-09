@@ -1,3 +1,31 @@
+# !! DO NOT TRUST THIS SCRIPT'S OUTPUT WITHOUT READING THIS !!
+#
+# Three defects found in review 2026-09-09, all still present in the sweep
+# methodology below. The numbers it prints LOOK like the sibling scripts'
+# ("beats last-5 on N of M events") and are not comparable to them.
+#
+# 1. TACTICAL FLAG. It read `pairs$tactical` raw. The cache it defaults to
+#    (marks_lab_cache, built 2026-09-07 13:49) predates the family gate added
+#    to estimate_ability() at 21:28 the same day, and flags 46 of 63 events
+#    tactical including sprint, hurdles, jump and throw -- families the gate
+#    explicitly excludes. PARTIALLY FIXED below by re-gating at load, the same
+#    line fit_event_params.R and marks_hier_params.R already carry.
+# 2. UNFAIR BASELINE. It scores against base.rds, which cuts an athlete's
+#    last-5 at the RACE date while the model estimates at month start -- up to
+#    ~30 days of racing the baseline gets and the model does not.
+#    build_fair_baseline.R exists precisely to produce base_m.rds, the
+#    apples-to-apples version; marks_fit.R uses it and this never switched.
+#    NOT FIXED -- switching it changes every number this script has produced.
+# 3. NO HELD-OUT SPLIT IN THE DEFAULT MODE, then an uncorrected argmax. Only
+#    WHAT=blendval splits fit from test. WHAT=both scores dozens of configs on
+#    one set and then reports best-per-event over ~24 candidates, selected and
+#    reported on identical data, with no margin against the runner-up.
+#    NOT FIXED -- that is the script's whole design.
+#
+# Use marks_fit.R / marks_scorecard.R instead, which have the fair baseline and
+# a real split. Kept rather than deleted because its sweep shape is still a
+# useful starting point, but treat every number it prints as exploratory.
+
 # MARKS OPT: sweep prediction parameters against the last-5 baseline, per event.
 #
 # Runs on the pair table built and GATE-VERIFIED by marks_pairs.R, which
@@ -20,6 +48,8 @@ CACHE <- file.path(OUT, Sys.getenv("CITIUS_LAB_CACHE", "marks_lab_cache"))
 WHAT  <- Sys.getenv("CITIUS_OPT_WHAT", "both")
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), sprintf(...), "\n", sep = "")
 pairs <- readRDS(file.path(CACHE, "pairs.rds"))
+# Defect 1 above: the cached flag may predate the family gate, so re-apply it.
+pairs[, tactical := tactical & family %in% citius:::.CITIUS_TACTICAL_FAMILIES]
 k     <- readRDS(file.path(CACHE, "keys.rds"))
 # the months actually scored (those with their own reference run)
 test  <- readRDS(file.path(CACHE, if (file.exists(file.path(CACHE, "test_scored.rds"))) "test_scored.rds" else "test.rds"))

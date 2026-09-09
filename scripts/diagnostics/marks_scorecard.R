@@ -30,6 +30,12 @@ SPLIT <- as.Date(Sys.getenv("CITIUS_FIT_SPLIT", "2024-01-01"))
 say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), sprintf(...), "\n", sep = "")
 
 pairs <- readRDS(file.path(CACHE, "pairs.rds"))
+# Re-gate the cached tactical flag rather than trusting the cache to have
+# been built after the family gate landed (2026-09-07 21:28). Correct today
+# only because this defaults to marks_lab_cache_2020, which happens to be
+# gated; a CITIUS_LAB_CACHE override pointing at an older cache would
+# silently score sprints and throws as tactical. Added 2026-09-09.
+pairs[, tactical := tactical & family %in% citius:::.CITIUS_TACTICAL_FAMILIES]
 k     <- readRDS(file.path(CACHE, "keys.rds"))
 test  <- readRDS(file.path(CACHE, "test_scored.rds"))
 bm    <- readRDS(file.path(CACHE, "base_m.rds"))[, .(athlete_id, event_id, month, base_m)]

@@ -113,7 +113,11 @@ print(cmp[n_c >= MIN_N, .(event_id, discipline, sex, family, n_c,
                           mae_c, mae_t, mae_delta, gll_c, gll_t, gll_delta,
                           mll_c, mll_t, mll_delta)])
 
-cli::cli_h3("aggregate (pooled over the same events, unweighted by n)")
+# Label corrected 2026-09-09: mean() over ROW-level data is implicitly
+# weighted by each event's row count -- a deep 100m field dominates a
+# six-athlete throw -- which is the opposite of what "unweighted by n" told
+# the reader.
+cli::cli_h3("aggregate (pooled over rows, so implicitly weighted by field size)")
 agg <- d[, .(n = .N,
             marks_mae = round(mean(mark_ape, na.rm = TRUE), 3),
             gold_logloss = round(mean(gold_ll), 4),
