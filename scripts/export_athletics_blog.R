@@ -313,7 +313,11 @@ CAVEAT_PEAK <- sprintf(
 cat(sprintf("mark calibration: typical beaten %.2f%%, good day %.2f%% (%s)\n",
             CALIB$typical_beaten_pct, CALIB$goodday_beaten_pct, CALIB$peak_label))
 
-DL_MEETS <- c("brussels2026", "budapest2026")
+# Retrospective backfill (2026-09-11): lausanne2026/silesia2026/zurich2026
+# added -- same Diamond-League finals-only shape as brussels2026/budapest2026,
+# just with a field derived from harvested results instead of a captured
+# pre-meet entry list (see predict_diamond_league_final.R's FIELD table).
+DL_MEETS <- c("brussels2026", "budapest2026", "lausanne2026", "silesia2026", "zurich2026")
 
 # Manifest blocks for the finals-only meets, filled in as each is built.
 #

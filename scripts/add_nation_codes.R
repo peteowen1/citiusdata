@@ -79,6 +79,22 @@ if (nrow(long)) {
   cli::cli_abort("{nrow(long)} row{?s} have a nation_code longer than 3 characters.")
 }
 
+# Backfill `nation` from `nation_code` for rows where the source field list
+# never carried a nation string at all (athlete_meta.parquet had no `country`
+# for that athlete) but this script's own authoritative WA lookup DID resolve
+# a code. Only fires when nation is genuinely blank -- never overwrites a real
+# name with the code. The card's own row-integrity check requires every row
+# have SOME nation text; the 3-letter code is exactly what the site's nation
+# badge displays anyway, so this is not a lesser value, just the same value
+# arriving from the more reliable of this script's two sources.
+blank_nation <- p[is.na(nation_code) == FALSE & nzchar(nation_code) &
+                    (is.na(nation) | !nzchar(nation))]
+if (nrow(blank_nation)) {
+  cli::cli_alert_info("Backfilling `nation` from `nation_code` for {nrow(blank_nation)} row{?s} with no source nation string: {paste(unique(blank_nation$athlete), collapse=', ')}")
+  p[is.na(nation_code) == FALSE & nzchar(nation_code) & (is.na(nation) | !nzchar(nation)),
+    nation := nation_code]
+}
+
 saveRDS(p, f_rds)
 arrow::write_parquet(p, file.path(D, paste0(MEET, "_pretournament.parquet")))
 cli::cli_alert_success("Patched {basename(f_rds)} and its .parquet: {nrow(p)} rows now carry nation_code.")

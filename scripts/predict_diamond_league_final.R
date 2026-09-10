@@ -73,6 +73,26 @@ FIELD <- switch(MEET,
   budapest2026 = list(
     type = "official_qualification_standings_provisional",
     source = "World Athletics championship-qualification standings (competition 7212925), fetched 2026-08-31. Official but PROVISIONAL: the world-rankings window closed 2026-09-01 and Diamond League Final winners (Sep 4-5) take auto-qualifying slots that will displace some current qualifiers."),
+  # RETROSPECTIVE BACKFILL (2026-09-11). These three meets ran with no
+  # forecast published at the time (no entry list was ever captured -- see
+  # citiusdata scripts run_meet.ps1's comment on the missing step-list
+  # table). The field here is NOT a pre-meet entry list of any kind: it is
+  # derived directly from championship_results.rds (the harvested actual
+  # results), via derive_athlete_ids_from_results.R -- so athlete_id and
+  # event_id come straight from the result rows, with no name-fuzzy-matching
+  # ambiguity at all. This is genuinely a DIFFERENT kind of provenance from
+  # the other two entries (retrospective + results-derived, not a real
+  # pre-meet field list), and is stamped distinctly rather than folded into
+  # either existing category, so the card can say so honestly.
+  lausanne2026 = list(
+    type = "retrospective_field_from_results",
+    source = "Derived from championship_results.rds (competition 7214027) after the meet, not a captured pre-meet entry list -- see derive_athlete_ids_from_results.R. Forecast still respects prediction_cutoff (2026-08-20); only the FIELD identity is post-hoc, not the ability estimates."),
+  silesia2026 = list(
+    type = "retrospective_field_from_results",
+    source = "Derived from championship_results.rds (competition 7214026) after the meet, not a captured pre-meet entry list -- see derive_athlete_ids_from_results.R. Forecast still respects prediction_cutoff (2026-08-22); only the FIELD identity is post-hoc, not the ability estimates."),
+  zurich2026 = list(
+    type = "retrospective_field_from_results",
+    source = "Derived from championship_results.rds (competition 7214028) after the meet, not a captured pre-meet entry list -- see derive_athlete_ids_from_results.R. Forecast still respects prediction_cutoff (2026-08-26); only the FIELD identity is post-hoc, not the ability estimates."),
   cli::cli_abort(c(
     "No field provenance recorded for {.val {MEET}}.",
     i = "Add an entry to FIELD saying where this meet's entry list came from -- a card must never publish without one.")))

@@ -98,6 +98,42 @@ $STEPS = switch ($MeetId) {
       @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
     )
   }
+  # Backfill (2026-09-11): lausanne2026/silesia2026/zurich2026 are the same
+  # Diamond-League finals-only shape as budapest2026/brussels2026 above --
+  # no rounds, no entry PDF -- but never got a step-list entry, so they ran
+  # without a forecast (the calendar's own harvested-results note on each
+  # row confirms results already exist; only the forecast side was never
+  # triggered). Each block is byte-identical in shape to brussels2026's,
+  # only the meet id argument changes. prediction_cutoff for all three
+  # already precedes date_start in the calendar, so running these now still
+  # produces a genuine pre-meet forecast, not a result-informed one.
+  "lausanne2026" {
+    @(
+      @{ n = "resolve athletes"; f = "resolve_diamond_league_athletes.R";    a = @("lausanne2026") },
+      @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("lausanne2026") },
+      @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("lausanne2026") },
+      @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("lausanne2026") },
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
+    )
+  }
+  "silesia2026" {
+    @(
+      @{ n = "resolve athletes"; f = "resolve_diamond_league_athletes.R";    a = @("silesia2026") },
+      @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("silesia2026") },
+      @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("silesia2026") },
+      @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("silesia2026") },
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
+    )
+  }
+  "zurich2026" {
+    @(
+      @{ n = "resolve athletes"; f = "resolve_diamond_league_athletes.R";    a = @("zurich2026") },
+      @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("zurich2026") },
+      @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("zurich2026") },
+      @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("zurich2026") },
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
+    )
+  }
   default {
     Fail "No step list defined for '$MeetId' yet. A meet with rounds needs a Birmingham-shaped chain; a finals-only meet can usually reuse the Diamond-League one above."
   }
