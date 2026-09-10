@@ -103,13 +103,30 @@ $STEPS = switch ($MeetId) {
   # no rounds, no entry PDF -- but never got a step-list entry, so they ran
   # without a forecast (the calendar's own harvested-results note on each
   # row confirms results already exist; only the forecast side was never
-  # triggered). Each block is byte-identical in shape to brussels2026's,
-  # only the meet id argument changes. prediction_cutoff for all three
-  # already precedes date_start in the calendar, so running these now still
-  # produces a genuine pre-meet forecast, not a result-informed one.
+  # triggered).
+  #
+  # NOT resolve_diamond_league_athletes.R -- these three never had a
+  # captured pre-meet entry list at all (no <meet>_entries.csv exists, and
+  # never will; that script hard-aborts without one). "resolve athletes"
+  # here is derive_athlete_ids_from_results.R instead: it reads the field
+  # directly from championship_results.rds (harvested actual results), so
+  # athlete_id/event_id are exact with no name-matching step. This IS a
+  # result-informed field (see predict_diamond_league_final.R's FIELD table,
+  # type "retrospective_field_from_results") -- prediction_cutoff still
+  # precedes date_start, so the ABILITY estimates stay pre-meet, but the
+  # FIELD identity is post-hoc. An earlier version of this comment claimed
+  # the field itself was pre-meet too; it was not, and review caught it.
+  #
+  # The third argument (competition_id) and any manual-exclusion athlete_ids
+  # are meet-specific -- see derive_athlete_ids_from_results.R's own header
+  # and each meet's <meet>_manually_excluded.csv for what was dropped and
+  # why (entrants predict_diamond_league_final.R's own accounting flagged
+  # "unexplained": has history/ability but its internal accounting didn't
+  # place them on the card, for a reason the script's own comment says to
+  # eyeball rather than treat as a hard error).
   "lausanne2026" {
     @(
-      @{ n = "resolve athletes"; f = "resolve_diamond_league_athletes.R";    a = @("lausanne2026") },
+      @{ n = "resolve athletes"; f = "derive_athlete_ids_from_results.R";    a = @("lausanne2026", "7214027", "14975233,15238906,14829123,14945013,15024114,15156595,15221550,15247725") },
       @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("lausanne2026") },
       @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("lausanne2026") },
       @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("lausanne2026") },
@@ -118,7 +135,7 @@ $STEPS = switch ($MeetId) {
   }
   "silesia2026" {
     @(
-      @{ n = "resolve athletes"; f = "resolve_diamond_league_athletes.R";    a = @("silesia2026") },
+      @{ n = "resolve athletes"; f = "derive_athlete_ids_from_results.R";    a = @("silesia2026", "7214026", "14647295,15080748,14715821") },
       @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("silesia2026") },
       @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("silesia2026") },
       @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("silesia2026") },
@@ -127,7 +144,7 @@ $STEPS = switch ($MeetId) {
   }
   "zurich2026" {
     @(
-      @{ n = "resolve athletes"; f = "resolve_diamond_league_athletes.R";    a = @("zurich2026") },
+      @{ n = "resolve athletes"; f = "derive_athlete_ids_from_results.R";    a = @("zurich2026", "7214028", "14695615,14739414") },
       @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("zurich2026") },
       @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("zurich2026") },
       @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("zurich2026") },

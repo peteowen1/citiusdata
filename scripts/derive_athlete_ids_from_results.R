@@ -72,9 +72,18 @@ out <- ids[, .(
 )]
 
 if (length(DROP)) {
-  n0 <- nrow(out)
+  dropped <- out[athlete_id %in% DROP]
   out <- out[!athlete_id %in% DROP]
-  cli::cli_alert_info("Dropped {n0 - nrow(out)} manually-excluded entrant(s): {paste(DROP, collapse=', ')}")
+  cli::cli_alert_info("Dropped {nrow(dropped)} manually-excluded entrant(s): {paste(DROP, collapse=', ')}")
+  # Audit trail: `data/` is gitignored and this is a one-off shell arg, so
+  # without a sidecar file the exclusion has no durable record anywhere a
+  # future reader could recover it -- unlike every OTHER excluded-entrant
+  # class here (no_history_in_event, unexplained), which already lands in
+  # <meet>_unmodelled_entrants.csv via predict_diamond_league_final.R's own
+  # entrant accounting. This is that same idea, one step earlier.
+  excl_path <- file.path(D, paste0(MEET, "_manually_excluded.csv"))
+  fwrite(dropped[, .(athlete_id, athlete, event_id, country)], excl_path)
+  cli::cli_alert_info("Manual exclusions recorded at {.file {excl_path}}")
 }
 
 out_path <- file.path(D, paste0(MEET, "_athlete_ids.csv"))
