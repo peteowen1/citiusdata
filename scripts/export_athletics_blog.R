@@ -119,6 +119,56 @@ KEEP <- c("event_id", "discipline", "sex", "athlete_id", "athlete", "nation",
 
 orient <- as.data.table(citius_events())[, .(event_id, orientation, family)]
 
+# --- personal / season bests ----------------------------------------------
+# athlete_pbs.parquet / athlete_sbs.parquet (assemble_athlete_profiles.R,
+# harvested from each athlete's own World Athletics profile) key on
+# (athlete_id, discipline), and `discipline` there is WA's own free-text
+# name -- confirmed to match citius_events()' discipline naming exactly
+# (both come from the same source), so no code-mapping table is needed; the
+# join is directly onto the card's own existing (athlete_id, discipline)
+# columns. Purely a display value -- these never feed the model, only shown
+# beside the predicted mark for context.
+#
+# A rare athlete with >1 row per discipline (indoor vs outdoor, or an older
+# mark re-surfaced in the source) is collapsed to the single most-recent one
+# BEFORE merging, so the join can never fan out a card row -- fan-out here
+# would silently duplicate every other column on that row too, not just add
+# an extra best-mark row.
+BESTS_PB <- file.path(D, "athlete_pbs.parquet")
+BESTS_SB <- file.path(D, "athlete_sbs.parquet")
+
+.load_bests <- function(path, prefix) {
+  if (!file.exists(path)) {
+    cli::cli_alert_warning("{basename(path)} not found -- {prefix}_mark/{prefix}_date will be NA on every row.")
+    return(data.table(athlete_id = character(0), discipline = character(0)))
+  }
+  dt <- setDT(read_parquet(path, col_select = c("athlete_id", "discipline", "date", "mark")))
+  dt[, athlete_id := as.character(athlete_id)]
+  # na.last = TRUE is load-bearing, not a style choice: setorder()'s default
+  # (na.last = FALSE) puts NA dates FIRST regardless of the -date descending
+  # modifier -- verified directly, a group of {NA, 2024-01-01, 2023-01-01}
+  # sorts NA to row 1. .SD[1L] below would then silently keep the NA-dated
+  # row and discard the real most-recent mark, with no error anywhere. Zero
+  # NA dates in either source parquet today (checked), but nothing prevents
+  # World Athletics from sending one for an older/partial profile.
+  setorder(dt, athlete_id, discipline, -date, na.last = TRUE)
+  dt <- dt[, .SD[1L], by = .(athlete_id, discipline)]
+  setnames(dt, c("date", "mark"), paste0(prefix, c("_date", "_mark")))
+  dt[]
+}
+PB_BESTS <- .load_bests(BESTS_PB, "pb")
+SB_BESTS <- .load_bests(BESTS_SB, "sb")
+cli::cli_alert_info("Bests loaded: {nrow(PB_BESTS)} PB rows, {nrow(SB_BESTS)} SB rows.")
+
+#' Attach personal-best / season-best mark + date to a card, by (athlete_id,
+#' discipline). Additive only -- never changes row count (both source tables
+#' are pre-collapsed to one row per key above) or any existing column.
+attach_bests <- function(dt) {
+  dt <- merge(dt, PB_BESTS, by = c("athlete_id", "discipline"), all.x = TRUE)
+  dt <- merge(dt, SB_BESTS, by = c("athlete_id", "discipline"), all.x = TRUE)
+  dt
+}
+
 BHAM_CARD  <- file.path(D, "birmingham2026_pretournament.rds")
 BHAM_BUILD <- wanted("birmingham2026") && file.exists(BHAM_CARD)
 if (!BHAM_BUILD) {
@@ -200,6 +250,9 @@ card[, c("pred_mark", "mark_unit") := predicted_mark(ability, orientation)]
 card[, c("orientation", "family") := NULL]
 stopifnot("every predicted mark must format" = !any(is.na(card$pred_mark)))
 cli::cli_alert_success("Predicted marks formatted for all {nrow(card)} rows.")
+
+card <- attach_bests(card)
+cli::cli_alert_info("birmingham2026: PB on {sum(!is.na(card$pb_mark))}/{nrow(card)} rows, SB on {sum(!is.na(card$sb_mark))}/{nrow(card)}.")
 
 # Ranking within event, so the page never has to sort to find a favourite.
 setorder(card, event_id, -p_gold)
@@ -364,6 +417,9 @@ for (mid in DL_MEETS) {
   dcard[, c("pred_mark", "mark_unit") := predicted_mark(ability, orientation)]
   dcard[, c("orientation", "family") := NULL]
   stopifnot("every predicted mark must format" = !any(is.na(dcard$pred_mark)))
+
+  dcard <- attach_bests(dcard)
+  cli::cli_alert_info("{mid}: PB on {sum(!is.na(dcard$pb_mark))}/{nrow(dcard)} rows, SB on {sum(!is.na(dcard$sb_mark))}/{nrow(dcard)}.")
 
   setorder(dcard, event_id, -p_gold)
   dcard[, rank_gold := seq_len(.N), by = event_id]
