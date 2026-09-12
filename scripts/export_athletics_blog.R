@@ -119,6 +119,56 @@ KEEP <- c("event_id", "discipline", "sex", "athlete_id", "athlete", "nation",
 
 orient <- as.data.table(citius_events())[, .(event_id, orientation, family)]
 
+# --- personal / season bests ----------------------------------------------
+# athlete_pbs.parquet / athlete_sbs.parquet (assemble_athlete_profiles.R,
+# harvested from each athlete's own World Athletics profile) key on
+# (athlete_id, discipline), and `discipline` there is WA's own free-text
+# name -- confirmed to match citius_events()' discipline naming exactly
+# (both come from the same source), so no code-mapping table is needed; the
+# join is directly onto the card's own existing (athlete_id, discipline)
+# columns. Purely a display value -- these never feed the model, only shown
+# beside the predicted mark for context.
+#
+# A rare athlete with >1 row per discipline (indoor vs outdoor, or an older
+# mark re-surfaced in the source) is collapsed to the single most-recent one
+# BEFORE merging, so the join can never fan out a card row -- fan-out here
+# would silently duplicate every other column on that row too, not just add
+# an extra best-mark row.
+BESTS_PB <- file.path(D, "athlete_pbs.parquet")
+BESTS_SB <- file.path(D, "athlete_sbs.parquet")
+
+.load_bests <- function(path, prefix) {
+  if (!file.exists(path)) {
+    cli::cli_alert_warning("{basename(path)} not found -- {prefix}_mark/{prefix}_date will be NA on every row.")
+    return(data.table(athlete_id = character(0), discipline = character(0)))
+  }
+  dt <- setDT(read_parquet(path, col_select = c("athlete_id", "discipline", "date", "mark")))
+  dt[, athlete_id := as.character(athlete_id)]
+  # na.last = TRUE is load-bearing, not a style choice: setorder()'s default
+  # (na.last = FALSE) puts NA dates FIRST regardless of the -date descending
+  # modifier -- verified directly, a group of {NA, 2024-01-01, 2023-01-01}
+  # sorts NA to row 1. .SD[1L] below would then silently keep the NA-dated
+  # row and discard the real most-recent mark, with no error anywhere. Zero
+  # NA dates in either source parquet today (checked), but nothing prevents
+  # World Athletics from sending one for an older/partial profile.
+  setorder(dt, athlete_id, discipline, -date, na.last = TRUE)
+  dt <- dt[, .SD[1L], by = .(athlete_id, discipline)]
+  setnames(dt, c("date", "mark"), paste0(prefix, c("_date", "_mark")))
+  dt[]
+}
+PB_BESTS <- .load_bests(BESTS_PB, "pb")
+SB_BESTS <- .load_bests(BESTS_SB, "sb")
+cli::cli_alert_info("Bests loaded: {nrow(PB_BESTS)} PB rows, {nrow(SB_BESTS)} SB rows.")
+
+#' Attach personal-best / season-best mark + date to a card, by (athlete_id,
+#' discipline). Additive only -- never changes row count (both source tables
+#' are pre-collapsed to one row per key above) or any existing column.
+attach_bests <- function(dt) {
+  dt <- merge(dt, PB_BESTS, by = c("athlete_id", "discipline"), all.x = TRUE)
+  dt <- merge(dt, SB_BESTS, by = c("athlete_id", "discipline"), all.x = TRUE)
+  dt
+}
+
 BHAM_CARD  <- file.path(D, "birmingham2026_pretournament.rds")
 BHAM_BUILD <- wanted("birmingham2026") && file.exists(BHAM_CARD)
 if (!BHAM_BUILD) {
@@ -201,6 +251,9 @@ card[, c("orientation", "family") := NULL]
 stopifnot("every predicted mark must format" = !any(is.na(card$pred_mark)))
 cli::cli_alert_success("Predicted marks formatted for all {nrow(card)} rows.")
 
+card <- attach_bests(card)
+cli::cli_alert_info("birmingham2026: PB on {sum(!is.na(card$pb_mark))}/{nrow(card)} rows, SB on {sum(!is.na(card$sb_mark))}/{nrow(card)}.")
+
 # Ranking within event, so the page never has to sort to find a favourite.
 setorder(card, event_id, -p_gold)
 card[, rank_gold := seq_len(.N), by = event_id]
@@ -265,6 +318,68 @@ artefacts <- list(
   artefacts <- list("calendar.parquet" = cal)
 }
 
+# --- actual results, for meets that have started -------------------------------
+# Independent of whether this run rebuilt a meet's PREDICTION card above:
+# results come straight from the harvested corpus (championship_results.rds),
+# keyed by wa_competition_id, and publish whenever the harvester has anything
+# for that meet. A meet mid-competition publishes a PARTIAL results file
+# (whatever rounds have actually run), which is a real and useful state, not
+# an error -- unlike the prediction cards, where a missing file is a hard
+# stop, a meet with zero harvested rows (upcoming, or not yet harvested) is
+# the normal state for most rows in `cal` on most days, so this is skipped
+# quietly per meet rather than aborting the run.
+#
+# inthegame-blog#athletics event.qmd reads <meet>-results.parquet and shows
+# the FINAL round's place/mark beside the pre-meet prediction; heats/semis are
+# published too (never know when a future page wants them) but not yet read.
+CH <- setDT(readRDS(file.path(D, "championship_results.rds")))
+RESULTS_META <- tryCatch(
+  setDT(as.data.frame(read_parquet(file.path(D, "athlete_meta.parquet"),
+                                    col_select = c("athlete_id", "country")))),
+  error = function(e) {
+    cli::cli_warn("athlete_meta.parquet unavailable -- results will publish with no nation.")
+    NULL
+  }
+)
+if (!is.null(RESULTS_META)) RESULTS_META[, athlete_id := as.character(athlete_id)]
+
+for (i in seq_len(nrow(cal))) {
+  mid <- cal$meet_id[i]
+  # Deliberately NOT gated on wanted(): results are independent of which
+  # meet's PREDICTION card this run was asked to rebuild (`SEL` above) --
+  # a run scoped to one meet's card should still refresh every other meet's
+  # results, since nothing about that scoping says "and don't touch results".
+  comp_id <- suppressWarnings(as.integer(cal$wa_competition_id[i]))
+  # `<= 0`, not just `is.na()`: World Athletics sends competitionId 0 as a
+  # sentinel on rows it cannot attribute to a competition, and that sentinel
+  # covers 2.26M rows of this exact corpus (found 2026-09-03). A stray 0 or
+  # negative value here must never join to that block.
+  if (is.na(comp_id) || comp_id <= 0L) next
+  sub <- CH[competition_id == comp_id & !is.na(event_id)]
+  if (!nrow(sub)) { cli::cli_alert_info("{mid}: no harvested results yet -- results file skipped."); next }
+
+  # Same "final" definition export_blog_data.R uses for the Commonwealth Games
+  # pages, so the two never disagree about which round was the medal race.
+  # Semifinals match "final" as a substring, which is why the semi exclusion
+  # has to come second.
+  res <- sub[, .(event_id, athlete_id = as.character(athlete_id), athlete = athlete_name,
+                 place, mark, mark_string, wind, round,
+                 is_final = grepl("final", round, ignore.case = TRUE) &
+                            !grepl("semi", round, ignore.case = TRUE))]
+  if (!is.null(RESULTS_META)) {
+    res <- merge(res, RESULTS_META, by = "athlete_id", all.x = TRUE)
+  } else {
+    res[, country := NA_character_]
+  }
+  setnames(res, "country", "nation")
+  res[, `:=`(meet_id = mid, generated_at = NOW)]
+
+  artefacts[[sprintf("%s-results.parquet", mid)]] <- res
+  n_final <- res[is_final == TRUE & !is.na(place) & place > 0, .N]
+  cli::cli_alert_success(
+    "{mid}: {nrow(res)} result row{?s} across {uniqueN(res$event_id)} event{?s} ({n_final} placed finalist{?s}).")
+}
+
 # --- Diamond League / finals-only cards ---------------------------------------
 # Birmingham's block above assumes a multi-round feed entry list: a round
 # structure csv, a nations parquet, derived heat counts. A Diamond League final
@@ -313,7 +428,11 @@ CAVEAT_PEAK <- sprintf(
 cat(sprintf("mark calibration: typical beaten %.2f%%, good day %.2f%% (%s)\n",
             CALIB$typical_beaten_pct, CALIB$goodday_beaten_pct, CALIB$peak_label))
 
-DL_MEETS <- c("brussels2026", "budapest2026")
+# Retrospective backfill (2026-09-11): lausanne2026/silesia2026/zurich2026
+# added -- same Diamond-League finals-only shape as brussels2026/budapest2026,
+# just with a field derived from harvested results instead of a captured
+# pre-meet entry list (see predict_diamond_league_final.R's FIELD table).
+DL_MEETS <- c("brussels2026", "budapest2026", "lausanne2026", "silesia2026", "zurich2026")
 
 # Manifest blocks for the finals-only meets, filled in as each is built.
 #
@@ -360,6 +479,9 @@ for (mid in DL_MEETS) {
   dcard[, c("pred_mark", "mark_unit") := predicted_mark(ability, orientation)]
   dcard[, c("orientation", "family") := NULL]
   stopifnot("every predicted mark must format" = !any(is.na(dcard$pred_mark)))
+
+  dcard <- attach_bests(dcard)
+  cli::cli_alert_info("{mid}: PB on {sum(!is.na(dcard$pb_mark))}/{nrow(dcard)} rows, SB on {sum(!is.na(dcard$sb_mark))}/{nrow(dcard)}.")
 
   setorder(dcard, event_id, -p_gold)
   dcard[, rank_gold := seq_len(.N), by = event_id]

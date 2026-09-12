@@ -97,8 +97,18 @@ say(all(!is.na(p$generated_at)), "every row carries generated_at")
 # standing, and a card claiming a settled official entry list would misrepresent
 # both to a reader.
 KNOWN_FIELD_TYPES <- c(brussels2026 = "third_party_qualifier_list_unofficial",
-                       budapest2026 = "official_qualification_standings_provisional")
-expected <- KNOWN_FIELD_TYPES[[MEET]] %||% NA_character_
+                       budapest2026 = "official_qualification_standings_provisional",
+                       # Retrospective backfill (2026-09-11) -- field derived
+                       # from harvested results, not a captured pre-meet
+                       # entry list. See predict_diamond_league_final.R's
+                       # FIELD table for the full rationale.
+                       lausanne2026 = "retrospective_field_from_results",
+                       silesia2026 = "retrospective_field_from_results",
+                       zurich2026 = "retrospective_field_from_results")
+# [[ throws "subscript out of bounds" on a missing name (crashed sanity
+# outright for lausanne2026 before it was added above); single-bracket [
+# indexing degrades to a plain NA for a genuinely unlisted meet instead.
+expected <- unname(KNOWN_FIELD_TYPES[MEET])
 say(length(unique(p$field_type)) == 1L && !is.na(expected) &&
       unique(p$field_type)[1] == expected,
     sprintf("field_type is the value this meet is entitled to ('%s'), stamped uniformly",
