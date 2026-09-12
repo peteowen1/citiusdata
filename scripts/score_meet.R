@@ -47,13 +47,28 @@ cli::cli_h1("{row$name[1]} - {row$short_name[1]}")
 cli::cli_alert_info("competition {COMP}, cutoff {format(CUTOFF)}, state {.val {row$state[1]}}")
 
 # --- results ------------------------------------------------------------------
+# CITIUS_RESULTS_CACHE scores an already-harvested results file instead of
+# calling the feed. Added 2026-09-12, when the community mirror
+# (worldathletics.nimarion.de) 500'd on every competition because the WA
+# GraphQL edge it proxies had rotated. Without this a feed outage means no
+# meet can be scored at all, even ones whose results are already on disk.
+# It says loudly what it read and how old it is: a cached score reported as a
+# live one is worse than no score.
+CACHE <- Sys.getenv("CITIUS_RESULTS_CACHE", "")
+if (nzchar(CACHE)) {
+  if (!file.exists(CACHE)) cli::cli_abort("No results cache at {.file {CACHE}}.")
+  results <- setDT(readRDS(CACHE))
+  cli::cli_alert_warning(
+    "CACHED results: {.file {basename(CACHE)}}, harvested {format(file.mtime(CACHE))}. NOT live.")
+} else {
 results <- tryCatch(setDT(athletics_harvest_competitions(COMP)),
                     error = function(e) NULL)
+}
 if (is.null(results) || !nrow(results)) {
   cli::cli_alert_warning("No results in the feed for competition {COMP} yet.")
   quit(save = "no")
 }
-saveRDS(results, file.path(OUT, paste0(MEET, "_results.rds")))
+if (!nzchar(CACHE)) saveRDS(results, file.path(OUT, paste0(MEET, "_results.rds")))
 results[, athlete_id := as.character(athlete_id)]
 cli::cli_alert_info(
   "{nrow(results)} result{?s}, {uniqueN(results$event_id)} event{?s}, {uniqueN(results$race_key)} race{?s}, {format(min(results$date, na.rm = TRUE))} to {format(max(results$date, na.rm = TRUE))}."

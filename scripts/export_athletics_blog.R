@@ -356,6 +356,37 @@ for (i in seq_len(nrow(cal))) {
   # negative value here must never join to that block.
   if (is.na(comp_id) || comp_id <= 0L) next
   sub <- CH[competition_id == comp_id & !is.na(event_id)]
+
+  # LIVE SUPPLEMENT, added 2026-09-12. A meet running TODAY is not in
+  # championship_results.rds and should not be: that file is training and
+  # scoring input, and a meet quietly appended mid-competition is how a model
+  # ends up evaluated on its own training data (the same reasoning
+  # append_meet_to_championship_results.R opens with). But the blog results
+  # table needs only nine display columns, none of them the ones that make
+  # corpus ingestion delicate -- `tier` above all, where a fabricated value
+  # silently reweights the corpus.
+  #
+  # So: when the corpus has NOTHING for this competition and a direct harvest
+  # exists, publish from the harvest. This never overrides corpus rows, only
+  # fills a hole, and it says out loud which source each meet published from --
+  # a results table whose provenance is ambiguous is worse than one that is
+  # late.
+  if (!nrow(sub)) {
+    live_f <- file.path(D, sprintf("%s_raw_results.rds", mid))
+    if (file.exists(live_f)) {
+      live <- setDT(readRDS(live_f))
+      need_live <- c("event_id", "athlete_id", "athlete_name", "place",
+                     "mark", "mark_string", "wind", "round")
+      miss <- setdiff(need_live, names(live))
+      if (length(miss)) {
+        cli::cli_warn("{mid}: live harvest is missing {.field {miss}} -- results file skipped.")
+        next
+      }
+      sub <- live[!is.na(event_id)]
+      cli::cli_alert_warning(
+        "{mid}: publishing {nrow(sub)} row{?s} from the LIVE harvest {.file {basename(live_f)}} ({format(file.mtime(live_f))}) -- not yet in the corpus.")
+    }
+  }
   if (!nrow(sub)) { cli::cli_alert_info("{mid}: no harvested results yet -- results file skipped."); next }
 
   # Same "final" definition export_blog_data.R uses for the Commonwealth Games
