@@ -107,6 +107,63 @@ finals <- results[!is.na(place) & place > 0L & !is.na(event_id) &
                     !grepl("semi", round, ignore.case = TRUE)]
 finals[, athlete_id := as.character(pred_key)]
 
+# ONE EVENT CAN HAVE SEVERAL FINALS, and only one of them is the race our card
+# predicted. The Diamond League Final runs U18 and Promotional races under the
+# SAME event_id as the Diamond Discipline: at Brussels 2026 three athletes
+# carried place == 1 in the men's 100m -- Seville 9.90, a U18 winner at 10.92
+# and a promotional winner at 10.04 -- and every one of them scored as "won the
+# men's 100m" against a card built for the Diamond Discipline field. 6 of 34
+# events affected, which is why the favourite-won denominator read 40 against 32
+# races and why three winners' ranks came back NA.
+#
+# The ranking check further down has always grouped by `race_key` and says at
+# length why it must: `place` is within race, so cross-race pairs are
+# meaningless. The same is true here and this block simply had not been told.
+#
+# WHICH race is ours is decided by FIELD OVERLAP, not by the race's name. Names
+# are meet-specific ("Diamond Discipline", "A Race", "Promotional Events") and a
+# name list would need extending for every meet format; the card, by contrast,
+# always names its own entrants. So per event we keep the final containing the
+# most predicted athletes. On a championship meet with one final per event this
+# changes nothing.
+if (nrow(finals)) {
+  finals[, .n_pred := sum(athlete_id %in% pred$athlete_id), by = race_key]
+  multi <- finals[, .(n_races = uniqueN(race_key)), by = event_id][n_races > 1L]
+  if (nrow(multi)) {
+    chosen <- finals[event_id %in% multi$event_id,
+                     .(n_pred = .n_pred[1], n = .N), by = .(event_id, race_key)]
+    setorder(chosen, event_id, -n_pred, -n)
+    keep_rk <- chosen[, .SD[1], by = event_id]
+    # A tie means overlap cannot tell the races apart, and picking the first
+    # would be a coin flip dressed as a decision -- the exact shape of the
+    # ties.method="first" league-tag bug in panna#222. Drop those events and say so.
+    tied <- chosen[keep_rk[, .(event_id, n_pred)], on = .(event_id, n_pred)][
+      , .N, by = event_id][N > 1L]
+    cli::cli_alert_info(
+      "{nrow(multi)} event{?s} ran more than one final (age-group or promotional races sharing an event_id); keeping the race with the most predicted entrants.")
+    if (nrow(tied)) {
+      cli::cli_alert_warning(
+        "{nrow(tied)} of those tie on overlap and are DROPPED rather than guessed: {.val {tied$event_id}}")
+      keep_rk <- keep_rk[!event_id %in% tied$event_id]
+    }
+    finals <- rbind(finals[!event_id %in% multi$event_id],
+                    finals[race_key %in% keep_rk$race_key])
+  }
+  finals[, .n_pred := NULL]
+  # After the pick, one RACE per event is the invariant -- counted as distinct
+  # race_keys, not as place-1 rows. Two athletes sharing place 1 inside one race
+  # is a dead heat, which is real and common enough that this repo has already
+  # been bitten by a "corrupt data" detector that binned a quarter of all jump
+  # races for exactly that; aborting on it would be the same mistake again.
+  dup <- finals[place == 1L, .(n_races = uniqueN(race_key)), by = event_id][n_races > 1L]
+  if (nrow(dup)) cli::cli_abort(c(
+    "{nrow(dup)} event{?s} still have winners from more than one race after selection: {.val {dup$event_id}}",
+    i = "Scoring these would count one race's winner against another race's card."))
+  ties <- finals[place == 1L, .N, by = .(event_id, race_key)][N > 1L]
+  if (nrow(ties)) cli::cli_alert_info(
+    "{nrow(ties)} event{?s} finished in a dead heat for the win: {.val {ties$event_id}}")
+}
+
 cli::cli_h2("Finals")
 ev <- intersect(unique(finals$event_id), unique(pred$event_id))
 if (!length(ev)) {
