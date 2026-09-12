@@ -318,6 +318,64 @@ artefacts <- list(
   artefacts <- list("calendar.parquet" = cal)
 }
 
+# --- actual results, for meets that have started -------------------------------
+# Independent of whether this run rebuilt a meet's PREDICTION card above:
+# results come straight from the harvested corpus (championship_results.rds),
+# keyed by wa_competition_id, and publish whenever the harvester has anything
+# for that meet. A meet mid-competition publishes a PARTIAL results file
+# (whatever rounds have actually run), which is a real and useful state, not
+# an error -- unlike the prediction cards, where a missing file is a hard
+# stop, a meet with zero harvested rows (upcoming, or not yet harvested) is
+# the normal state for most rows in `cal` on most days, so this is skipped
+# quietly per meet rather than aborting the run.
+#
+# inthegame-blog#athletics event.qmd reads <meet>-results.parquet and shows
+# the FINAL round's place/mark beside the pre-meet prediction; heats/semis are
+# published too (never know when a future page wants them) but not yet read.
+CH <- setDT(readRDS(file.path(D, "championship_results.rds")))
+RESULTS_META <- tryCatch(
+  setDT(as.data.frame(read_parquet(file.path(D, "athlete_meta.parquet"),
+                                    col_select = c("athlete_id", "country")))),
+  error = function(e) {
+    cli::cli_warn("athlete_meta.parquet unavailable -- results will publish with no nation.")
+    NULL
+  }
+)
+if (!is.null(RESULTS_META)) RESULTS_META[, athlete_id := as.character(athlete_id)]
+
+for (i in seq_len(nrow(cal))) {
+  mid <- cal$meet_id[i]
+  # Deliberately NOT gated on wanted(): results are independent of which
+  # meet's PREDICTION card this run was asked to rebuild (`SEL` above) --
+  # a run scoped to one meet's card should still refresh every other meet's
+  # results, since nothing about that scoping says "and don't touch results".
+  comp_id <- suppressWarnings(as.integer(cal$wa_competition_id[i]))
+  if (is.na(comp_id)) next
+  sub <- CH[competition_id == comp_id & !is.na(event_id)]
+  if (!nrow(sub)) { cli::cli_alert_info("{mid}: no harvested results yet -- results file skipped."); next }
+
+  # Same "final" definition export_blog_data.R uses for the Commonwealth Games
+  # pages, so the two never disagree about which round was the medal race.
+  # Semifinals match "final" as a substring, which is why the semi exclusion
+  # has to come second.
+  res <- sub[, .(event_id, athlete_id = as.character(athlete_id), athlete = athlete_name,
+                 place, mark, mark_string, wind, round,
+                 is_final = grepl("final", round, ignore.case = TRUE) &
+                            !grepl("semi", round, ignore.case = TRUE))]
+  if (!is.null(RESULTS_META)) {
+    res <- merge(res, RESULTS_META, by = "athlete_id", all.x = TRUE)
+  } else {
+    res[, country := NA_character_]
+  }
+  setnames(res, "country", "nation")
+  res[, `:=`(meet_id = mid, generated_at = NOW)]
+
+  artefacts[[sprintf("%s-results.parquet", mid)]] <- res
+  n_final <- res[is_final == TRUE & !is.na(place) & place > 0, .N]
+  cli::cli_alert_success(
+    "{mid}: {nrow(res)} result row{?s} across {uniqueN(res$event_id)} event{?s} ({n_final} placed finalist{?s}).")
+}
+
 # --- Diamond League / finals-only cards ---------------------------------------
 # Birmingham's block above assumes a multi-round feed entry list: a round
 # structure csv, a nations parquet, derived heat counts. A Diamond League final
