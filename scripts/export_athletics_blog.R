@@ -350,7 +350,11 @@ for (i in seq_len(nrow(cal))) {
   # a run scoped to one meet's card should still refresh every other meet's
   # results, since nothing about that scoping says "and don't touch results".
   comp_id <- suppressWarnings(as.integer(cal$wa_competition_id[i]))
-  if (is.na(comp_id)) next
+  # `<= 0`, not just `is.na()`: World Athletics sends competitionId 0 as a
+  # sentinel on rows it cannot attribute to a competition, and that sentinel
+  # covers 2.26M rows of this exact corpus (found 2026-09-03). A stray 0 or
+  # negative value here must never join to that block.
+  if (is.na(comp_id) || comp_id <= 0L) next
   sub <- CH[competition_id == comp_id & !is.na(event_id)]
   if (!nrow(sub)) { cli::cli_alert_info("{mid}: no harvested results yet -- results file skipped."); next }
 
