@@ -36,11 +36,11 @@
 # resolution problem and does not affect this table, which has exactly one row
 # per athlete the model simulated.
 #
-# WIDE, TOP-8. p_pos_1 .. p_pos_8 rather than a long row-per-position form.
+# WIDE, TOP-8. pos_1 .. pos_8 rather than a long row-per-position form.
 # Long scales with field size squared per race: the largest race in the corpus
 # is an 816-starter marathon, 816 rows wide against 665,856 long. Eight is the
 # domain's boundary, not an arbitrary cut -- athletics scores to eighth place --
-# and nothing is lost, since p(worse than 8th) is 1 - sum(p_pos_1..8).
+# and nothing is lost, since p(worse than 8th) is 1 - sum(pos_1..8).
 #
 # Usage:  Rscript citiusdata/scripts/build_forecast_store.R [meet_id ...]
 #         (no args = every meet on the calendar with a prediction cutoff in the
@@ -143,7 +143,12 @@ one_meet <- function(mid) {
     if (is.null(sim)) return(NULL)
 
     mp <- as.data.table(medal_probs(sim, top_n = K_POS))
-    pp <- as.data.table(position_probs(sim, k = K_POS))
+    # citius::position_probs() ALREADY did all of this -- capped at 8 by
+    # default, pooling the remainder, with a wide option emitting pos_1..pos_8.
+    # A duplicate was written on 2026-09-14 without grepping for the name
+    # first; it silently shadowed this one and broke test-positions.R, caught
+    # only by a later full-suite run. Use the original.
+    pp <- as.data.table(position_probs(sim, max_position = K_POS, wide = TRUE))
     r <- merge(mp, pp, by = "athlete_id")
     keep <- intersect(c("athlete_id", "ability", "sigma", "ability_se", "w_total", "n"),
                       names(ab))
@@ -177,10 +182,10 @@ dupes <- nrow(all_fc) - uniqueN(all_fc, by = PK)
 if (dupes) cli::cli_abort("{dupes} duplicate {.field {PK}} row{?s} -- the key does not hold.")
 
 # Positions are a distribution: each athlete's top-8 mass cannot exceed 1.
-pcols <- paste0("p_pos_", seq_len(K_POS))
+pcols <- paste0("pos_", seq_len(K_POS))
 mass <- rowSums(as.matrix(all_fc[, ..pcols]))
 if (any(mass > 1 + 1e-9)) cli::cli_abort("position probabilities sum above 1 for {sum(mass > 1 + 1e-9)} row{?s}.")
-stopifnot("p_pos_1 must equal p_gold" = isTRUE(all.equal(all_fc$p_pos_1, all_fc$p_gold)))
+stopifnot("pos_1 must equal p_gold" = isTRUE(all.equal(all_fc$pos_1, all_fc$p_gold)))
 
 # ONE FILE PER MEET, not one file for the run.
 #
