@@ -48,6 +48,9 @@ TO          <- as.Date(Sys.getenv("CITIUS_BF_TO", as.character(Sys.Date())))
 MAXN        <- as.integer(Sys.getenv("CITIUS_BF_MAX", "500"))
 MIN_FREE_MB <- as.integer(Sys.getenv("CITIUS_BF_MIN_FREE_MB", "3000"))
 PER_MEET_S  <- as.integer(Sys.getenv("CITIUS_BF_MEET_TIMEOUT", "300"))
+# How long to tolerate a memory dip before concluding it is not a dip.
+MEM_PATIENCE_S <- as.integer(Sys.getenv("CITIUS_BF_MEM_PATIENCE", "900"))
+MEM_RECHECK_S  <- as.integer(Sys.getenv("CITIUS_BF_MEM_RECHECK", "30"))
 PAUSE_S     <- as.numeric(Sys.getenv("CITIUS_BF_PAUSE", "1.5"))
 STAGE       <- file.path(D, "backfill")
 JOURNAL     <- file.path(D, "backfill_journal.csv")
@@ -87,10 +90,21 @@ staged_done <- sub("^comp_", "", sub("\\.rds$", "", basename(Sys.glob(file.path(
 say("already staged this/previous run: %s", format(length(staged_done), big.mark = ","))
 
 # --- discover candidates from the WA calendar --------------------------------
-say("discovering competitions %s .. %s from the WA calendar ...", FROM, TO)
+# CACHE THE DISCOVERY. Paging the calendar for 2023-2026 took 28 minutes, and
+# without this every restart pays it again -- which on the first overnight
+# attempt would have meant 28 minutes of the budget to re-derive a list that
+# had not changed. Keyed on the date range so a different range re-discovers.
+CAND_F <- file.path(STAGE, sprintf("_candidates_%s_%s.rds", FROM, TO))
 suppressMessages(devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE))
-cand <- tryCatch(as.data.table(athletics_calendar_all(start_date = FROM, end_date = TO)),
-                 error = function(e) { say("calendar discovery FAILED: %s", conditionMessage(e)); NULL })
+if (file.exists(CAND_F) && difftime(Sys.time(), file.info(CAND_F)$mtime, units = "hours") < 24) {
+  say("reusing cached discovery %s", basename(CAND_F))
+  cand <- as.data.table(readRDS(CAND_F))
+} else {
+  say("discovering competitions %s .. %s from the WA calendar ...", FROM, TO)
+  cand <- tryCatch(as.data.table(athletics_calendar_all(start_date = FROM, end_date = TO)),
+                   error = function(e) { say("calendar discovery FAILED: %s", conditionMessage(e)); NULL })
+  if (!is.null(cand) && nrow(cand)) saveRDS(cand, CAND_F)
+}
 if (is.null(cand) || !nrow(cand)) {
   say("no candidates discovered; nothing to do")
   quit(status = 0)
@@ -110,10 +124,32 @@ if (!nrow(cand)) quit(status = 0)
 ok <- 0L; failed <- 0L; empty <- 0L
 for (i in seq_len(nrow(cand))) {
   if (Sys.time() > deadline) { say("BUDGET REACHED (%.1f h) -- stopping cleanly", HOURS); break }
+  # WAIT OUT A DIP, do not end the night on one.
+  #
+  # The first overnight attempt stopped after 28 meets at 1,405 MB free, and
+  # memory was back to 5,739 MB three minutes later -- another session's job
+  # fluctuates around 6.9 GB and my floor caught a trough. Halting was right
+  # for "we are about to be OOM-killed" and completely wrong for "a neighbour
+  # spiked for a minute", which is what it actually was.
+  #
+  # So: sleep and re-check, and only give up if it stays low for the whole
+  # patience window. Still bounded -- a machine genuinely out of memory ends
+  # the run rather than spinning until morning.
   fm <- free_mb()
   if (!is.na(fm) && fm < MIN_FREE_MB) {
-    say("STOPPING: %.0f MB free, below the %d MB floor", fm, MIN_FREE_MB)
-    journal(NA, NA, "halted_low_memory", NA, 0, sprintf("%.0f MB free", fm)); break
+    waited <- 0
+    while (!is.na(fm) && fm < MIN_FREE_MB && waited < MEM_PATIENCE_S &&
+           Sys.time() < deadline) {
+      if (waited == 0) say("   low memory (%.0f MB) -- waiting for it to recover", fm)
+      Sys.sleep(MEM_RECHECK_S); waited <- waited + MEM_RECHECK_S
+      fm <- free_mb()
+    }
+    if (!is.na(fm) && fm < MIN_FREE_MB) {
+      say("STOPPING: %.0f MB free after waiting %.0fs; the machine is genuinely short",
+          fm, waited)
+      journal(NA, NA, "halted_low_memory", NA, waited, sprintf("%.0f MB free", fm)); break
+    }
+    say("   recovered to %.0f MB after %.0fs -- continuing", fm, waited)
   }
 
   cid <- cand$cid[i]; nm <- cand$name[i] %||% NA_character_
