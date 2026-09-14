@@ -68,28 +68,32 @@ cli_alert_success("Endpoint live: {.val {ep$edge}}")
 GQL <- 'query($id:Int,$day:Int){getCalendarCompetitionResults(competitionId:$id,day:$day){
  competition{name venue startDate endDate dateRange rankingCategory}
  eventTitles{eventTitle rankingCategory events{event eventId gender isRelay perResultWind withWind
+  summary{placeInRace placeInRound raceNumber mark nationality points records wind
+   competitor{id name urlSlug birthDate iaafId}}
   races{race raceId raceNumber date day wind
+   startList{order bib pb sb competitor{id name urlSlug birthDate country}}
    results{id remark mark nationality place points qualified records wind
     competitor{id name urlSlug birthDate iaafId hasProfile
      teamMembers{id name urlSlug iaafId}}}}}}}}'
 
-# TWO BRANCHES DELIBERATELY NOT TAKEN, recorded so the next person does not
-# re-introspect to find out why (checked 2026-09-14 against Budapest and
-# Brussels, both returned zero entries):
+# EVERY BRANCH IS NOW TAKEN, including two that returned zero rows on both
+# meets tested (Budapest, Brussels) on 2026-09-14.
 #
-#   race.startList{order bib pb sb competitor{...}}
-#       Lane draw, bib, and the athlete's PB/SB as at the meet. Empty for a
-#       COMPLETED meet -- it is pre-race data -- so it belongs to an
-#       entry-list harvest, not a results one. Worth having for a meet that
-#       has not run.
-#   event.summary{placeInRace placeInRound raceNumber mark ...}
-#       Carries a placeInRace/placeInRound distinction we have nowhere else,
-#       which would matter for heats. WA returns none for either meet tested.
+# An earlier version of this script skipped them on the reasoning that they
+# were empty and would need their own output tables. That is the "decide what
+# to do with it later" the capture rule exists to prevent: empty for two
+# COMPLETED meets is not empty always.
 #
-# Both are per-event or per-race ARRAYS rather than per-result fields, so they
-# would need their own output tables rather than more columns here. They are
-# not dropped on a judgement that they are useless -- they are empty, and the
-# shape they would need is a separate job.
+#   race.startList   lane order, bib, and the athlete's PB and SB as at the
+#                    meet. Pre-race data, so a finished meet has none -- but a
+#                    meet that has NOT run is exactly when we would want it,
+#                    and PB/SB at entry time is a signal we have nowhere else.
+#   event.summary    placeInRace vs placeInRound, a distinction nothing else
+#                    in our data carries and which matters for heats.
+#
+# Both are arrays at a different nesting level from results, so forcing them
+# into the per-result table would duplicate rows. They are written as their
+# OWN staged files instead -- see the writers at the bottom of this script.
 
 pull_day <- function(day) {
   r <- request(ep$url) |>
@@ -104,6 +108,55 @@ pull_day <- function(day) {
     return(NULL)
   }
   d <- resp_body_json(r)$data$getCalendarCompetitionResults
+  # The two sibling branches, stashed for the writers below. They are arrays at
+  # a different nesting level from results, so they cannot share this table
+  # without duplicating rows -- they get their own files instead of being
+  # dropped. `<<-` because this runs inside pull_day(), one scope down.
+  if (!is.null(d)) {
+    SIDE$startlist[[length(SIDE$startlist) + 1L]] <<- rbindlist(lapply(d$eventTitles, function(t)
+      rbindlist(lapply(t$events, function(e)
+        rbindlist(lapply(e$races, function(rc)
+          rbindlist(lapply(rc$startList %||% list(), function(s) data.table(
+            day = day, event_title = t$eventTitle %||% NA_character_,
+            tier = t$rankingCategory %||% NA_character_,
+            event = e$event %||% NA_character_,
+            wa_event_id = as.character(e$eventId %||% NA),
+            round = rc$race %||% NA_character_,
+            race_id = as.character(rc$raceId %||% NA),
+            race_number = as.character(rc$raceNumber %||% NA),
+            order = as.character(s$order %||% NA),
+            bib = as.character(s$bib %||% NA),
+            pb = as.character(s$pb %||% NA),
+            sb = as.character(s$sb %||% NA),
+            athlete_hash = s$competitor$id %||% NA_character_,
+            athlete_name = s$competitor$name %||% NA_character_,
+            url_slug = s$competitor$urlSlug %||% NA_character_,
+            birth_date = s$competitor$birthDate %||% NA_character_,
+            country = s$competitor$country %||% NA_character_
+          )), fill = TRUE)), fill = TRUE)), fill = TRUE)), fill = TRUE)
+
+    SIDE$summary[[length(SIDE$summary) + 1L]] <<- rbindlist(lapply(d$eventTitles, function(t)
+      rbindlist(lapply(t$events, function(e)
+        rbindlist(lapply(e$summary %||% list(), function(s) data.table(
+          day = day, event_title = t$eventTitle %||% NA_character_,
+          tier = t$rankingCategory %||% NA_character_,
+          event = e$event %||% NA_character_,
+          wa_event_id = as.character(e$eventId %||% NA),
+          place_in_race = as.character(s$placeInRace %||% NA),
+          place_in_round = as.character(s$placeInRound %||% NA),
+          race_number = as.character(s$raceNumber %||% NA),
+          mark_string = s$mark %||% NA_character_,
+          nationality = s$nationality %||% NA_character_,
+          points = as.character(s$points %||% NA),
+          records = s$records %||% NA_character_,
+          wind = as.character(s$wind %||% NA),
+          athlete_hash = s$competitor$id %||% NA_character_,
+          athlete_name = s$competitor$name %||% NA_character_,
+          url_slug = s$competitor$urlSlug %||% NA_character_,
+          birth_date = s$competitor$birthDate %||% NA_character_,
+          iaaf_id = as.character(s$competitor$iaafId %||% NA)
+        )), fill = TRUE)), fill = TRUE)), fill = TRUE)
+  }
   if (is.null(d)) return(NULL)
   rbindlist(lapply(d$eventTitles, function(t)
     rbindlist(lapply(t$events, function(e)
@@ -143,6 +196,11 @@ pull_day <- function(day) {
           race_id       = as.character(rc$raceId %||% NA),
           race_number   = as.character(rc$raceNumber %||% NA),
           date          = rc$date %||% NA_character_,
+          # The meet-day's calendar date from options.days. rc$date is NULL on
+          # some meets (all of Budapest), and this is the only other place the
+          # real date exists.
+          day_date      = mget(as.character(day), envir = DAY_DATES,
+                               ifnotfound = list(NA_character_))[[1]],
           race_wind     = as.character(rc$wind %||% NA),
           # --- result level ---
           result_id     = x$id %||% NA_character_,
@@ -183,6 +241,10 @@ pull_day <- function(day) {
         )), fill = TRUE)), fill = TRUE)), fill = TRUE)), fill = TRUE)
 }
 
+# Accumulators for the two sibling branches, filled inside pull_day().
+SIDE <- new.env(parent = emptyenv())
+SIDE$startlist <- list(); SIDE$summary <- list()
+
 cli_h2("Harvest")
 
 # ASK WHICH DAYS EXIST rather than brute-forcing a range. The API's
@@ -194,6 +256,7 @@ cli_h2("Harvest")
 #
 # Falls back to CITIUS_DAYS if the probe fails, so a schema change degrades to
 # the old behaviour rather than harvesting nothing.
+DAY_DATES <- new.env(parent = emptyenv())   # day -> "11 SEP 2026"
 DAYS <- local({
   probe <- tryCatch({
     r <- request(ep$url) |>
@@ -207,6 +270,10 @@ DAYS <- local({
   d <- suppressWarnings(as.integer(unlist(lapply(probe, function(x) x$day))))
   d <- d[is.finite(d)]
   if (length(d)) {
+    # Keep the day -> date mapping. WA returns a NULL `race.date` on some meets
+    # (Budapest: every race), so this is the only place the actual calendar
+    # date of a day is available. Without it `date` lands 100% NA downstream.
+    for (x in probe) if (!is.null(x$day)) assign(as.character(x$day), x$date %||% NA_character_, envir = DAY_DATES)
     cli_alert_info("Meet runs {length(d)} day{?s}: {.val {vapply(probe, function(x) x$date %||% '?', character(1))}}")
     sort(unique(d))
   } else {
@@ -269,4 +336,23 @@ print(res[, .N, by = round][order(-N)])
 out <- here::here("citiusdata", "data", paste0(MEET, "_raw_results.rds"))
 saveRDS(res, out)
 cli_alert_success("Wrote {.file {basename(out)}} ({nrow(res)} rows).")
+
+# THE TWO SIBLING BRANCHES, written whether or not they have rows.
+#
+# An empty file is the point, not a waste: it records that we ASKED and the
+# meet had none, which is different from never having looked. A completed meet
+# has no start list because the start list is pre-race -- writing the empty
+# file is what lets a later reader tell that apart from a harvest that simply
+# ignored the branch, which is what every version of this script before
+# 2026-09-14 did.
+for (nm in c("startlist", "summary")) {
+  tbl <- rbindlist(SIDE[[nm]], fill = TRUE)
+  f <- sub("_raw_results\\.rds$", sprintf("_raw_%s.rds", nm), out)
+  saveRDS(tbl, f)
+  if (nrow(tbl)) {
+    cli_alert_success("Wrote {.file {basename(f)}} ({nrow(tbl)} rows).")
+  } else {
+    cli_alert_info("Wrote {.file {basename(f)}} (0 rows -- WA returned none for this meet).")
+  }
+}
 cli_alert_info("Score it: {.code CITIUS_MEET={MEET} CITIUS_RESULTS_CACHE={out} Rscript citiusdata/scripts/score_meet.R}")
