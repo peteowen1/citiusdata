@@ -70,7 +70,26 @@ GQL <- 'query($id:Int,$day:Int){getCalendarCompetitionResults(competitionId:$id,
  eventTitles{eventTitle rankingCategory events{event eventId gender isRelay perResultWind withWind
   races{race raceId raceNumber date day wind
    results{id remark mark nationality place points qualified records wind
-    competitor{id name urlSlug birthDate iaafId hasProfile}}}}}}}'
+    competitor{id name urlSlug birthDate iaafId hasProfile
+     teamMembers{id name urlSlug iaafId}}}}}}}}'
+
+# TWO BRANCHES DELIBERATELY NOT TAKEN, recorded so the next person does not
+# re-introspect to find out why (checked 2026-09-14 against Budapest and
+# Brussels, both returned zero entries):
+#
+#   race.startList{order bib pb sb competitor{...}}
+#       Lane draw, bib, and the athlete's PB/SB as at the meet. Empty for a
+#       COMPLETED meet -- it is pre-race data -- so it belongs to an
+#       entry-list harvest, not a results one. Worth having for a meet that
+#       has not run.
+#   event.summary{placeInRace placeInRound raceNumber mark ...}
+#       Carries a placeInRace/placeInRound distinction we have nowhere else,
+#       which would matter for heats. WA returns none for either meet tested.
+#
+# Both are per-event or per-race ARRAYS rather than per-result fields, so they
+# would need their own output tables rather than more columns here. They are
+# not dropped on a judgement that they are useless -- they are empty, and the
+# shape they would need is a separate job.
 
 pull_day <- function(day) {
   r <- request(ep$url) |>
@@ -127,9 +146,13 @@ pull_day <- function(day) {
           race_wind     = as.character(rc$wind %||% NA),
           # --- result level ---
           result_id     = x$id %||% NA_character_,
-          # DNF/DQ/NM reason. calibrate() measures no-mark rates and has warned
-          # all session that it has none for several events; this is plausibly
-          # the missing input, so it is captured whether or not it is used yet.
+          # CORRECTION to an earlier guess of mine: `remark` is NOT the DNF/DQ
+          # reason. Measured on Budapest, which has 11 non-finishers: remark is
+          # NA on all 439 rows, while `mark_string` carries "DNF", "DQ", "NM"
+          # and "DNS" directly. So the no-mark signal calibrate() wants is in
+          # the mark, not here. Kept anyway -- it costs nothing and an empty
+          # field that is captured can be checked later, whereas one that is
+          # dropped cannot.
           remark        = x$remark %||% NA_character_,
           mark_string   = x$mark %||% NA_character_,
           nationality   = x$nationality %||% NA_character_,
@@ -145,11 +168,53 @@ pull_day <- function(day) {
           birth_date    = x$competitor$birthDate %||% NA_character_,
           # The legacy numeric id, useful for crosswalking to older sources.
           iaaf_id       = as.character(x$competitor$iaafId %||% NA),
-          has_profile   = x$competitor$hasProfile %||% NA
+          has_profile   = x$competitor$hasProfile %||% NA,
+          # RELAY COMPOSITION. 32 entries on Budapest day 1, 0 on Brussels --
+          # it populates only for relay events, which citius currently drops
+          # entirely (citius#1). Collapsed to delimited strings rather than a
+          # list-column so the table stays rectangular and survives a parquet
+          # write; splitting on "|" recovers the members. Captured now because
+          # a re-harvest to get it later is exactly the cost the capture-
+          # everything rule exists to avoid.
+          team_member_ids = paste(vapply(x$competitor$teamMembers %||% list(),
+            function(tm) as.character(tm$id %||% NA), character(1)), collapse = "|"),
+          team_member_names = paste(vapply(x$competitor$teamMembers %||% list(),
+            function(tm) as.character(tm$name %||% NA), character(1)), collapse = "|")
         )), fill = TRUE)), fill = TRUE)), fill = TRUE)), fill = TRUE)
 }
 
 cli_h2("Harvest")
+
+# ASK WHICH DAYS EXIST rather than brute-forcing a range. The API's
+# `options.days` lists them with dates -- Budapest returns exactly 3 (11, 12,
+# 13 Sep). Without this, CITIUS_DAYS defaults to 1..8 and every day past the
+# end of the meet is a wasted request; the mirror route's equivalent produced
+# "12 day-page fetches failed for competition 7212925", which reads like an
+# outage and is really just asking for days that were never going to exist.
+#
+# Falls back to CITIUS_DAYS if the probe fails, so a schema change degrades to
+# the old behaviour rather than harvesting nothing.
+DAYS <- local({
+  probe <- tryCatch({
+    r <- request(ep$url) |>
+      req_headers(accept = "*/*", `content-type` = "application/json",
+                  `x-api-key` = ep$key, `x-amz-user-agent` = "aws-amplify/3.0.7") |>
+      req_body_json(list(query = sprintf(
+        'query{getCalendarCompetitionResults(competitionId:%d,day:1){options{days{day date}}}}', COMP))) |>
+      req_timeout(60) |> req_error(is_error = function(x) FALSE) |> req_perform()
+    resp_body_json(r)$data$getCalendarCompetitionResults$options$days
+  }, error = function(e) NULL)
+  d <- suppressWarnings(as.integer(unlist(lapply(probe, function(x) x$day))))
+  d <- d[is.finite(d)]
+  if (length(d)) {
+    cli_alert_info("Meet runs {length(d)} day{?s}: {.val {vapply(probe, function(x) x$date %||% '?', character(1))}}")
+    sort(unique(d))
+  } else {
+    cli_alert_warning("Could not read {.field options.days}; falling back to {.envvar CITIUS_DAYS}.")
+    DAYS
+  }
+})
+
 res <- rbindlist(lapply(DAYS, pull_day), fill = TRUE)
 if (!nrow(res)) cli_abort("Competition {COMP} returned no results on days {.val {DAYS}}.")
 
