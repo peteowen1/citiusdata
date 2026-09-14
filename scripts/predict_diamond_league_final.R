@@ -180,6 +180,11 @@ if (!is.null(dropped) && nrow(dropped)) {
 ability <- temper_unevidenced(ability)
 ab_final_keys <- unique(ability[, .(event_id, athlete_id)])
 
+# The whole rated population, not just the entrants the card keeps -- see
+# deployed_ability_snapshot(). Written here, after both guards, so the file is
+# the table the simulation below actually consumed.
+deployed_ability_snapshot(ability, D, MEET, CUT_STAMPED)
+
 ages <- past[!is.na(age), .(age_last = max(age), age_asof = max(date)), by = .(athlete_id = as.character(athlete_id), event_id)]
 ages[, age_now := age_last + as.numeric(CUT - age_asof) / 365.25]
 

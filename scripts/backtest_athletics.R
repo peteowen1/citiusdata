@@ -83,6 +83,40 @@ if (nzchar(.ep_file)) {
   cli::cli_inform("Per-event parameters from {.path {basename(.ep_path)}} ({nrow(EVENT_PARAMS)} events); per-family half-life map DISABLED.")
 }
 MAX_PER_RUN <- .env_int("CITIUS_BT_MEETS", "25")
+
+# PREFLIGHT MEMORY GUARD.
+#
+# This script's steady-state footprint is ~8 GB regardless of which arm is on --
+# measured 2026-09-14 on a 2-meet run: 8,555 MB with no cross-event arm against
+# 8,283 MB with one, i.e. the arms add nothing and the history load is the whole
+# cost. Started with too little headroom it does not error, it is OOM-killed
+# hours in, having written only the meets its cache happened to reach. That is
+# how the 2026-09-13 overnight arm died at 50 of 394 meets, and how a run here
+# came to be competing with three other R sessions on the same machine.
+#
+# Available memory, not free memory: FreePhysicalMemory excludes the standby
+# list and reads far lower than what a process can actually get, so a guard on
+# it would refuse to start almost always.
+#
+# AND NOTE PARALLEL MODE: each PSOCK worker carries its own copy of the history,
+# so CITIUS_BT_WORKERS = n needs roughly n x this floor, not one lot of it.
+BT_MIN_FREE_MB <- .env_int("CITIUS_BT_MIN_FREE_MB", "9000")
+.sys_avail_mb <- function() {
+  if (!requireNamespace("ps", quietly = TRUE)) return(NA_real_)
+  tryCatch(ps::ps_system_memory()[["avail"]] / 1024^2, error = function(e) NA_real_)
+}
+.avail0 <- .sys_avail_mb()
+if (is.na(.avail0)) {
+  cli::cli_alert_warning(
+    "Could not read available memory ({.pkg ps} missing); preflight guard skipped.")
+} else if (.avail0 < BT_MIN_FREE_MB) {
+  cli::cli_abort(c(
+    "Only {round(.avail0)} MB available; this backtest needs about 8,000 MB and would be OOM-killed part-way.",
+    "i" = "Wait for other jobs to finish, or lower the floor with {.envvar CITIUS_BT_MIN_FREE_MB} if you accept the risk.",
+    "i" = "Cached meets already written are kept, so a stopped run resumes rather than restarts."))
+} else {
+  cli::cli_alert_info("Preflight: {round(.avail0)} MB available (floor {BT_MIN_FREE_MB} MB).")
+}
 # History depth per refit. TWELVE YEARS, and do not shorten it on the argument
 # that old marks carry negligible weight.
 #
@@ -361,6 +395,176 @@ if (COND_CONTEXT) cli::cli_alert_info(
 # per-result `tier`, which varies within a single meet and labels the Diamond
 # League "low". Off by default so it is measured as its own arm.
 USE_MEET_TIER <- nzchar(Sys.getenv("CITIUS_BT_MEET_TIER", ""))
+
+# Cross-event ability transfer (transfer_neighbour_ability()), 2026-09-13.
+# estimate_ability() groups everything by = .(athlete_id, event_id), so an
+# athlete's rating in one event never sees his marks in a neighbouring one --
+# the Ingebrigtsen Budapest 5000m miss (NEXT-STEPS.md, hypothesis-registry.md
+# "An athlete's form in a NEIGHBOURING event..."). Off by default so it is
+# measured as its own arm, same as ADJUST_RACE above.
+#
+# The transfer needs each event's FULL population of ability_raw to rank an
+# athlete's standing, which the `only=` fast path (citius/CLAUDE.md) never
+# computes -- recomputing it per meet measured at ~21s for 4 events alone,
+# 3-5 ADDED HOURS across a T1_elite run's 900+ meets. Instead the population
+# reference is built once per calendar year of `cut_date` and cached in
+# NEIGHBOUR_REF_CACHE; measured cost with that cache: ~23s per year bucket
+# (there are a few dozen at most) plus ~0.3s per meet -- called out here
+# because that y/n is exactly the kind of thing that turns a 20-minute
+# backtest into an overnight one without anything erroring.
+NEIGHBOUR_TRANSFER <- nzchar(Sys.getenv("CITIUS_BT_NEIGHBOUR_TRANSFER", ""))
+NEIGHBOUR_R2_FILE <- Sys.getenv("CITIUS_BT_NEIGHBOUR_R2", "neighbour_r2.rds")
+NEIGHBOUR_R2 <- NULL
+NEIGHBOUR_EVENTS <- character()
+NEIGHBOUR_REF_CACHE <- new.env(parent = emptyenv())
+if (NEIGHBOUR_TRANSFER) {
+  # Parenthesised: cli reads a leading-dot name as a style token (.file, .val)
+  # and aborts with "Invalid cli literal ... starts with a dot" -- the same
+  # trap the family-debias patch hit on {.fp$fit_arm} (see its comment above).
+  .nb_path <- file.path(OUT, NEIGHBOUR_R2_FILE)
+  if (!file.exists(.nb_path)) cli::cli_abort(
+    "{.envvar CITIUS_BT_NEIGHBOUR_TRANSFER} is on but {.path {(.nb_path)}} does not exist.")
+  NEIGHBOUR_R2 <- readRDS(.nb_path)
+  NEIGHBOUR_EVENTS <- unique(c(NEIGHBOUR_R2$event_id, NEIGHBOUR_R2$neighbour_event_id))
+  cli::cli_alert_info(
+    "Cross-event transfer ON: {nrow(NEIGHBOUR_R2)} measured edge{?s} across {length(NEIGHBOUR_EVENTS)} event{?s} ({.path {(.nb_path)}}).")
+}
+
+# The SECOND cross-event arm, 2026-09-14: combine_neighbour_ability().
+#
+# Not a variant of the one above, a different mechanism. transfer_neighbour_
+# ability() maps the neighbour's PERCENTILE through sqrt(r2), which is a
+# regression toward the population median and therefore can only ever drag an
+# elite athlete down -- measured on the Budapest 5000m field it made 12 of 12
+# slower and moved nobody's rank. This one keeps the athlete's own rating as the
+# baseline and adds every neighbour as an inverse-variance term, so a man whose
+# neighbour rating is both better-evidenced and genuinely faster moves UP.
+#
+# Events are given as a comma-separated list rather than read from the r2 file,
+# because this arm needs no measured-edge table: fit_neighbour_links() derives
+# the offset, correlation and tau itself from the population at each cutoff, and
+# a pair that carries no signal earns ~no weight on its own. Every event in the
+# list is both a candidate target and a candidate neighbour of the others.
+# Process RSS, not gc(). gc() reports only the R-managed heap, and the gap is
+# not small: a script that measured 477 MB by gc() was holding 1,226 MB at the
+# OS. Every memory number this arm prints is the real footprint or it is not
+# printed at all.
+.rss_mb <- function() {
+  if (!requireNamespace("ps", quietly = TRUE)) return(NA_integer_)
+  tryCatch(as.integer(ps::ps_memory_info(ps::ps_handle())[["rss"]] / 1024^2),
+           error = function(e) NA_integer_)
+}
+
+NEIGHBOUR_COMBINE <- nzchar(Sys.getenv("CITIUS_BT_NEIGHBOUR_COMBINE", ""))
+# Links are an offset, a correlation and a quantile -- population shape, which
+# moves slowly and does not need the full 12-year ability window the entrants
+# themselves are rated on. Shorter window and a capped athlete sample are what
+# keep this arm's footprint flat; both are knobs so a run that wants the exact
+# figure can pay for it.
+NEIGHBOUR_LINK_DAYS <- .env_int("CITIUS_BT_NEIGHBOUR_LINK_DAYS", "1825")
+NEIGHBOUR_LINK_ATHLETES <- .env_int("CITIUS_BT_NEIGHBOUR_LINK_ATHLETES", "25000")
+NEIGHBOUR_COMBINE_EVENTS <- trimws(strsplit(
+  Sys.getenv("CITIUS_BT_NEIGHBOUR_COMBINE_EVENTS", ""), ",")[[1]])
+NEIGHBOUR_COMBINE_EVENTS <- NEIGHBOUR_COMBINE_EVENTS[nzchar(NEIGHBOUR_COMBINE_EVENTS)]
+NEIGHBOUR_LINK_CACHE <- new.env(parent = emptyenv())
+if (NEIGHBOUR_COMBINE) {
+  if (NEIGHBOUR_TRANSFER) cli::cli_abort(c(
+    "{.envvar CITIUS_BT_NEIGHBOUR_TRANSFER} and {.envvar CITIUS_BT_NEIGHBOUR_COMBINE} are both on.",
+    "x" = "They are two different cross-event mechanisms; running both stacks one on the other.",
+    "i" = "Pick one per arm -- and give each arm its own {.envvar CITIUS_BT_CACHE}."))
+  if (length(NEIGHBOUR_COMBINE_EVENTS) < 2L) cli::cli_abort(c(
+    "{.envvar CITIUS_BT_NEIGHBOUR_COMBINE} is on but {.envvar CITIUS_BT_NEIGHBOUR_COMBINE_EVENTS} names fewer than 2 events.",
+    "i" = "Comma-separated event_ids, e.g. {.val AT-1500Metres-M,AT-5000Metres-M}."))
+  # The history `past` is read on is restricted to the events being SCORED, so
+  # an arm whose neighbours are not in that set would silently find no neighbour
+  # rows and score as a dead heat against its control -- the failure the cache
+  # fingerprint exists to prevent, arriving by a different door.
+  NEIGHBOUR_EVENTS <- unique(c(NEIGHBOUR_EVENTS, NEIGHBOUR_COMBINE_EVENTS))
+  cli::cli_alert_info(
+    "Cross-event COMBINE ON across {length(NEIGHBOUR_COMBINE_EVENTS)} event{?s}: {.val {NEIGHBOUR_COMBINE_EVENTS}}.")
+}
+
+# Links are a population quantity that moves slowly, so they are fitted once per
+# calendar year of `cut_date` on the same window and the same store `past` uses.
+# Same look-ahead trade-off build_neighbour_rank_reference()'s own docstring
+# names: a meet early in a year gets links fitted from data including later in
+# that year. It moves the OFFSET and CORRELATION between two events, never an
+# individual athlete's own form, and it is stated here rather than buried.
+.neighbour_links_for <- function(cut_date) {
+  yr <- format(as.Date(cut_date), "%Y")
+  if (is.null(NEIGHBOUR_LINK_CACHE[[yr]])) {
+    nb_hist <- if (USE_STORE) {
+      read_results_store(STORE, events = NEIGHBOUR_COMBINE_EVENTS,
+                         from = cut_date - NEIGHBOUR_LINK_DAYS, to = cut_date - 1L,
+                         columns = STORE_COLS)
+    } else {
+      clean[date < cut_date & date >= cut_date - NEIGHBOUR_LINK_DAYS &
+              event_id %in% NEIGHBOUR_COMBINE_EVENTS]
+    }
+    nb_hist <- nb_hist[!is.na(perf)]
+    # SAMPLE, AND GO DOWN estimate_ability()'s `only=` FAST PATH.
+    #
+    # The first version estimated every rated athlete in these events over the
+    # full HISTORY_DAYS window, which is the trap citius/CLAUDE.md names
+    # outright: the population priors are computed over everyone regardless, and
+    # the expensive per-athlete body is what `only=` skips. A 4-meet smoke run
+    # of this arm held 6.7 GB and had to be killed because it was competing with
+    # other work on the machine (2026-09-14).
+    #
+    # Sampling is sound here because links are POPULATION quantities -- an
+    # offset, a correlation and a quantile -- not per-athlete ones. The pairs
+    # this fits carry n ~ 1,400 at full size; a uniform sample of athletes is
+    # unbiased for all three and min_n still drops any pair that ends up too
+    # thin rather than fitting one on noise.
+    ids <- unique(as.character(nb_hist$athlete_id))
+    if (length(ids) > NEIGHBOUR_LINK_ATHLETES) {
+      set.seed(20260914L)   # same sample for treatment and control re-runs
+      ids <- sample(ids, NEIGHBOUR_LINK_ATHLETES)
+    }
+    pop <- estimate_ability(nb_hist, as_of = as.Date(cut_date) - 1L,
+                            calibration = calibration, only = ids)
+    links <- fit_neighbour_links(
+      pop, target_events = NEIGHBOUR_COMBINE_EVENTS,
+      neighbour_events = NEIGHBOUR_COMBINE_EVENTS)
+    # Free the two big transients before the meet loop allocates again. gc() is
+    # called explicitly because the next allocation is large and R will not
+    # return this memory to the OS on its own in time to matter.
+    rm(pop, nb_hist, ids); gc(verbose = FALSE)
+    # Parenthesised for the same reason the transfer arm's `{(.nb_path)}` is:
+    # cli reads a leading-dot name as a style token and aborts. Walked into it
+    # anyway on 2026-09-14, two screens below the comment that warns about it.
+    .rss_now <- .rss_mb()
+    cli::cli_alert_info(
+      "Neighbour links {yr}: {nrow(links)} pair{?s} fitted; process RSS {.val {(.rss_now)}} MB.")
+    NEIGHBOUR_LINK_CACHE[[yr]] <- links
+  }
+  NEIGHBOUR_LINK_CACHE[[yr]]
+}
+# One reference per calendar year of `cut_date`, read the SAME way `past` is
+# read a few hundred lines below (partitioned store when available, same
+# HISTORY_DAYS window -- so the population `ability_raw` is measured against
+# is on the same scale as the entrants' own, not a differently-windowed one)
+# but restricted to NEIGHBOUR_EVENTS only, never the whole corpus. Memoised in
+# NEIGHBOUR_REF_CACHE; a PSOCK worker gets its own empty cache (see
+# export_vars) and builds into it lazily, same as any other per-worker
+# memoisation here.
+.neighbour_reference_for <- function(cut_date) {
+  yr <- format(as.Date(cut_date), "%Y")
+  if (is.null(NEIGHBOUR_REF_CACHE[[yr]])) {
+    nb_hist <- if (USE_STORE) {
+      read_results_store(STORE, events = NEIGHBOUR_EVENTS,
+                         from = cut_date - HISTORY_DAYS, to = cut_date - 1L,
+                         columns = STORE_COLS)
+    } else {
+      clean[date < cut_date & date >= cut_date - HISTORY_DAYS &
+              event_id %in% NEIGHBOUR_EVENTS]
+    }
+    NEIGHBOUR_REF_CACHE[[yr]] <- build_neighbour_rank_reference(
+      nb_hist, events = NEIGHBOUR_EVENTS, as_of = as.Date(cut_date) - 1L,
+      calibration = calibration)
+  }
+  NEIGHBOUR_REF_CACHE[[yr]]
+}
 
 # THE MISSING COUNTERPARTS OF project_championship().
 #
@@ -787,7 +991,30 @@ arm_fingerprint <- list(
   # a refit instead of recomputing. Caught in review, 2026-09-09.
   event_params_md5 = if (nzchar(Sys.getenv("CITIUS_EVENT_PARAMS", ""))) md5_of(Sys.getenv("CITIUS_EVENT_PARAMS")) else NA_character_,
   sel_shrink = if (is.na(SEL_SHRINK)) "" else format(SEL_SHRINK),
-  sel_sigma = SEL_SIGMA)
+  sel_sigma = SEL_SIGMA,
+  # THE CROSS-EVENT ARMS WERE ABSENT FROM THIS LIST ENTIRELY (found 2026-09-14).
+  # backtest_cache_neighbour_treat_full and _ctrl_full, run overnight on
+  # 2026-09-13, carry BYTE-IDENTICAL `_arm.rds` stamps (md5 1477e9ae0ca4ba0a
+  # 4fd4eeeb3299ea57) -- the treatment and its own control were
+  # indistinguishable to the guard whose entire job is telling them apart. They
+  # survived only because they were pointed at different directories by hand.
+  # Same failure class as project_tier, family_debias and marks_only above, each
+  # of which is here because it once produced a dead heat.
+  #
+  # The r2 file is hashed, not named: fit scripts rewrite it in place under the
+  # same name, exactly the gap event_params_md5 exists to close.
+  neighbour_transfer = NEIGHBOUR_TRANSFER,
+  neighbour_r2_file = if (NEIGHBOUR_TRANSFER) NEIGHBOUR_R2_FILE else NA_character_,
+  neighbour_r2_md5 = if (NEIGHBOUR_TRANSFER) md5_of(NEIGHBOUR_R2_FILE) else NA_character_,
+  neighbour_combine = NEIGHBOUR_COMBINE,
+  # The event list changes which ratings may speak to which, so two combine arms
+  # over different event sets are different arms and must not share a cache.
+  neighbour_combine_events = paste(sort(NEIGHBOUR_COMBINE_EVENTS), collapse = ","),
+  # Both change the fitted links, so they change every prediction this arm
+  # makes. A run with a 5-year link window must not read back cached meets from
+  # one fitted on 12 years.
+  neighbour_link_days = if (NEIGHBOUR_COMBINE) NEIGHBOUR_LINK_DAYS else NA_integer_,
+  neighbour_link_athletes = if (NEIGHBOUR_COMBINE) NEIGHBOUR_LINK_ATHLETES else NA_integer_)
 
 # A cache that predates this check is stamped by the first run after it, which
 # is the best that can be done retrospectively -- an existing directory carries
@@ -1186,6 +1413,26 @@ run_meet <- function(i) {
                        robust_location = ROBUST_LOCATION,
                        decouple_peak = DECOUPLE_PEAK)
     }), fill = TRUE))
+  }
+
+  # Cross-event ability transfer, gated by NEIGHBOUR_TRANSFER (see the flag
+  # definition above for the cost this is designed around). Applied to
+  # WHICHEVER branch just ran, once, rather than duplicated inside each --
+  # `ability` here already carries every entrant's OWN rows in both the
+  # target and any neighbour events (the `only=` restriction above is by
+  # athlete_id, not by event, and `past` was never filtered to one event), so
+  # only the population reference needs building separately.
+  if (NEIGHBOUR_TRANSFER && nrow(ability)) {
+    ability <- tick("ability", transfer_neighbour_ability(
+      ability, neighbour_r2 = NEIGHBOUR_R2,
+      rank_reference = .neighbour_reference_for(cut_date)))
+  }
+  # The combine arm, same placement and the same reasoning about `ability`
+  # already carrying each entrant's neighbour-event rows. Mutually exclusive
+  # with the transfer arm, enforced at the flag definition rather than here.
+  if (NEIGHBOUR_COMBINE && nrow(ability)) {
+    ability <- tick("ability", combine_neighbour_ability(
+      ability, links = .neighbour_links_for(cut_date)))
   }
 
   # CHAMPIONSHIP OFFSET -- NOW GATED ON THE RACE ACTUALLY BEING A CHAMPIONSHIP.
@@ -1640,7 +1887,24 @@ if (N_WORKERS > 1L) {
                     # run_meet() reads shock_tbl and ADJUST_RACE on every worker
                     # regardless of whether the add-back is on, so both bindings
                     # must exist even when NULL -- the FAMILY_DEBIAS trap again.
-                    "shock_tbl", "ADJUST_RACE")
+                    "shock_tbl", "ADJUST_RACE",
+                    # Same FAMILY_DEBIAS trap: run_meet()'s
+                    # `if (NEIGHBOUR_TRANSFER && ...)` runs on every worker
+                    # regardless of the flag, so NEIGHBOUR_TRANSFER must exist
+                    # even FALSE. The other three are small (a handful of rows
+                    # / an empty env each) and only ever read when the flag is
+                    # TRUE, but exported unconditionally too rather than adding
+                    # a fifth instance of the conditional-export trap this file
+                    # has already hit four times.
+                    "NEIGHBOUR_TRANSFER", "NEIGHBOUR_R2", "NEIGHBOUR_EVENTS",
+                    "NEIGHBOUR_REF_CACHE", ".neighbour_reference_for",
+                    # Same reason as the transfer trio above: the
+                    # `if (NEIGHBOUR_COMBINE && ...)` branch runs on every
+                    # worker, so all four names must resolve there or parallel
+                    # mode dies on a lookup the single-process run never makes.
+                    "NEIGHBOUR_COMBINE", "NEIGHBOUR_COMBINE_EVENTS",
+                    "NEIGHBOUR_LINK_CACHE", ".neighbour_links_for",
+                    "NEIGHBOUR_LINK_DAYS", "NEIGHBOUR_LINK_ATHLETES", ".rss_mb")
   # `clean` is the in-memory fallback corpus, potentially gigabytes -- exporting
   # it would copy that to every worker. Only export it when it will actually be
   # read (no store), which is exactly the case the memory cost is unavoidable.

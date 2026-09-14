@@ -543,6 +543,42 @@ deployed_ability <- function(past, as_of, calibration,
   deployed_debias(.deployed_ability_raw(past, as_of, calibration, event_params), debias)
 }
 
+#' Persist the ability table a card run has already computed.
+#'
+#' Every prediction script calls deployed_ability() without `only=`, so it rates
+#' EVERY athlete in every carded event, then keeps five columns for the entrants
+#' of their own event and discards the rest when the function returns. The
+#' Budapest 2026 run rated tens of thousands of athlete-events and persisted 326
+#' rows. Ingebrigtsen's 1500m rating was computed on 2026-09-09 and dropped on
+#' the floor, and answering "how would the 1500m have ranked that 5000m field"
+#' then cost a four-minute re-estimate per question (2026-09-14).
+#'
+#' The table is the input the card was built from, so it carries the same
+#' provenance stamp: a snapshot whose config or cutoff cannot be read back is
+#' indistinguishable from one built under a different model.
+#'
+#' @param ability Ability table as passed to the simulator -- AFTER
+#'   drop_impossible_sigma()/temper_unevidenced(), so it is what the card used.
+#' @param dir,meet Output directory and meet_id.
+#' @param cutoff The stamped cutoff (the data boundary, not the requested date).
+#' @param stamp Configuration stamp; defaults to the deployed one.
+#' @return The path written, invisibly.
+deployed_ability_snapshot <- function(ability, dir, meet, cutoff,
+                                      stamp = DEPLOYED$stamp) {
+  ab <- data.table::copy(data.table::as.data.table(ability))
+  if (!nrow(ab)) {
+    cli::cli_alert_warning("Ability snapshot skipped: table is empty.")
+    return(invisible(NULL))
+  }
+  ab[, `:=`(meet = meet, cutoff = as.Date(cutoff), config = stamp,
+            generated_at = Sys.time())]
+  f <- file.path(dir, paste0(meet, "_ability_", format(as.Date(cutoff), "%Y%m%d"), ".parquet"))
+  arrow::write_parquet(ab, f)
+  cli::cli_alert_success(
+    "Ability snapshot: {format(nrow(ab), big.mark = ',')} athlete-event{?s} across {data.table::uniqueN(ab$event_id)} event{?s} -> {.path {basename(f)}}")
+  invisible(f)
+}
+
 .deployed_ability_raw <- function(past, as_of, calibration, event_params = deployed_event_params()) {
   hl_map <- DEPLOYED$hl_family
   # THE TABLE REPLACES THE FAMILY MAP, enforced here rather than trusted to a
