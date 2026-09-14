@@ -46,11 +46,31 @@ if (is.na(ep$status) || ep$status != 200L) {
 }
 cli_alert_success("Endpoint live: {.val {ep$edge}}")
 
+# EVERY FIELD THE SCHEMA OFFERS on this path, enumerated by introspection
+# 2026-09-14 rather than guessed. The previous query asked for five fields on
+# the result and none of the competition metadata, which is why appending a
+# meet looked blocked on the dead mirror: `tier` was assumed to be something
+# only the mirror enriched, when in fact it is `rankingCategory` and we simply
+# never asked. Verified against Brussels, already in championship_results.rds:
+# the API returns DF/GW/A/F and the stored rows carry DF 237, F 57, A 31,
+# GW 30 -- the same vocabulary.
+#
+# Per Pete's standing rule (~/.claude/CLAUDE.md, Data & Analysis): capture
+# every field the API returns and decide what is useful later, because
+# dropping one at parse time is a decision you cannot revisit without a
+# re-harvest, and re-harvesting is expensive enough that "we can get it later"
+# is false in practice.
+#
+# rankingCategory appears on BOTH competition and eventTitle. The eventTitle
+# one is the one that matters: tier varies WITHIN a meet (2025 Weltklasse
+# Zurich carries A, DF, F and GW across its own results), which is the whole
+# reason build_competition_catalogue.R exists.
 GQL <- 'query($id:Int,$day:Int){getCalendarCompetitionResults(competitionId:$id,day:$day){
- competition{name venue startDate endDate}
- eventTitles{eventTitle events{event eventId gender isRelay
-  races{race raceId raceNumber date day
-   results{competitor{id name urlSlug birthDate} mark nationality place points qualified records wind}}}}}}'
+ competition{name venue startDate endDate dateRange rankingCategory}
+ eventTitles{eventTitle rankingCategory events{event eventId gender isRelay perResultWind withWind
+  races{race raceId raceNumber date day wind
+   results{id remark mark nationality place points qualified records wind
+    competitor{id name urlSlug birthDate iaafId hasProfile}}}}}}}'
 
 pull_day <- function(day) {
   r <- request(ep$url) |>
@@ -69,28 +89,63 @@ pull_day <- function(day) {
   rbindlist(lapply(d$eventTitles, function(t)
     rbindlist(lapply(t$events, function(e)
       rbindlist(lapply(e$races, function(rc)
+        # EVERY field, at every level of the nesting, carried through. Nothing
+        # is judged here -- judging happens downstream where it can be undone.
+        # Competition-level values repeat on every row, which is redundant on
+        # disk and free in parquet, and means a single meet file is
+        # self-describing rather than needing its metadata looked up elsewhere.
         rbindlist(lapply(rc$results, function(x) data.table(
+          # --- competition level (constant per meet) ---
+          comp_name     = d$competition$name %||% NA_character_,
+          comp_venue    = d$competition$venue %||% NA_character_,
+          comp_start    = d$competition$startDate %||% NA_character_,
+          comp_end      = d$competition$endDate %||% NA_character_,
+          comp_daterange = d$competition$dateRange %||% NA_character_,
+          comp_ranking_category = d$competition$rankingCategory %||% NA_character_,
+          # --- event-title level ---
           day           = day,
           event_title   = t$eventTitle %||% NA_character_,
+          # THE TIER. Per eventTitle, not per meet, because it genuinely varies
+          # within one meet. Named `tier` to match championship_results.rds's
+          # own column so the append needs no translation.
+          tier          = t$rankingCategory %||% NA_character_,
+          # --- event level ---
           event         = e$event %||% NA_character_,
           wa_event_id   = as.character(e$eventId %||% NA),
           gender        = e$gender %||% NA_character_,
           is_relay      = e$isRelay %||% NA,
+          # Disambiguates a null wind: "not measured for this event" vs "no
+          # reading for this result". wind is the most-empty column in the
+          # corpus at 72.3% NA and these two say which kind of empty it is.
+          per_result_wind = e$perResultWind %||% NA,
+          with_wind     = e$withWind %||% NA,
+          # --- race level ---
           round         = rc$race %||% NA_character_,
           race_id       = as.character(rc$raceId %||% NA),
           race_number   = as.character(rc$raceNumber %||% NA),
           date          = rc$date %||% NA_character_,
-          athlete_hash  = x$competitor$id %||% NA_character_,
-          athlete_name  = x$competitor$name %||% NA_character_,
-          url_slug      = x$competitor$urlSlug %||% NA_character_,
-          birth_date    = x$competitor$birthDate %||% NA_character_,
+          race_wind     = as.character(rc$wind %||% NA),
+          # --- result level ---
+          result_id     = x$id %||% NA_character_,
+          # DNF/DQ/NM reason. calibrate() measures no-mark rates and has warned
+          # all session that it has none for several events; this is plausibly
+          # the missing input, so it is captured whether or not it is used yet.
+          remark        = x$remark %||% NA_character_,
           mark_string   = x$mark %||% NA_character_,
           nationality   = x$nationality %||% NA_character_,
           place_raw     = x$place %||% NA_character_,
           points        = as.character(x$points %||% NA),
           qualified     = x$qualified %||% NA,
           records       = x$records %||% NA_character_,
-          wind          = as.character(x$wind %||% NA)
+          wind          = as.character(x$wind %||% NA),
+          # --- competitor level ---
+          athlete_hash  = x$competitor$id %||% NA_character_,
+          athlete_name  = x$competitor$name %||% NA_character_,
+          url_slug      = x$competitor$urlSlug %||% NA_character_,
+          birth_date    = x$competitor$birthDate %||% NA_character_,
+          # The legacy numeric id, useful for crosswalking to older sources.
+          iaaf_id       = as.character(x$competitor$iaafId %||% NA),
+          has_profile   = x$competitor$hasProfile %||% NA
         )), fill = TRUE)), fill = TRUE)), fill = TRUE)), fill = TRUE)
 }
 
