@@ -49,6 +49,49 @@ if (!harvest_ok) {
 }
 cli::cli_alert_info("Athletics: {nrow(ath)} result{?s}, {uniqueN(ath$race_key)} race{?s}.")
 
+# --- corpus freshness --------------------------------------------------------
+# Read BEFORE anything is written, so a hard-stale corpus stops the run rather
+# than being discovered after artefacts are already on R2.
+#
+# This exists because the daily refresh had no way to fail on stale INPUT. It
+# only ever checked whether its own steps ran, so it published every morning
+# over a corpus drifting further behind -- 9 days by 2026-09-14, with August
+# holding 4,813 rows against July's 117,988.
+#
+# Two thresholds, deliberately different:
+#   * WARN (CITIUS_CORPUS_WARN_DAYS, default 10) publishes a caveat to the page.
+#     Stale-but-labelled beats silently-stale, which is the same trade
+#     harvest_ok makes above.
+#   * ABORT (CITIUS_CORPUS_MAX_DAYS, default 45) refuses to publish at all.
+#     Set well beyond the warn line on purpose: a site frozen at last week is
+#     recoverable, a site frozen at last quarter while claiming to be current
+#     is not. Raise it explicitly for a deliberate stale republish.
+CORPUS_WARN <- as.integer(Sys.getenv("CITIUS_CORPUS_WARN_DAYS", "10"))
+CORPUS_MAX  <- as.integer(Sys.getenv("CITIUS_CORPUS_MAX_DAYS", "45"))
+CORPUS_THROUGH <- NA
+CORPUS_LAG <- NA_integer_
+.corpus_f <- file.path(OUT, "athletics_corpus.parquet")
+if (file.exists(.corpus_f)) {
+  CORPUS_THROUGH <- suppressWarnings(max(
+    as.data.table(arrow::read_parquet(.corpus_f, col_select = "date"))$date, na.rm = TRUE))
+  CORPUS_LAG <- as.integer(Sys.Date() - as.Date(CORPUS_THROUGH))
+  if (is.na(CORPUS_LAG)) {
+    cli::cli_alert_warning("Corpus carries no readable date; freshness unknown.")
+  } else if (CORPUS_LAG > CORPUS_MAX) {
+    cli::cli_abort(c(
+      "Corpus is {CORPUS_LAG} days behind (limit {CORPUS_MAX}); refusing to publish.",
+      "i" = "Latest corpus date is {as.character(CORPUS_THROUGH)}.",
+      "i" = "Harvest and rebuild, or set {.envvar CITIUS_CORPUS_MAX_DAYS} higher for a deliberate stale republish."))
+  } else if (CORPUS_LAG > CORPUS_WARN) {
+    cli::cli_alert_warning(
+      "Corpus is {CORPUS_LAG} days behind (warn at {CORPUS_WARN}) -- publishing WITH a caveat.")
+  } else {
+    cli::cli_alert_success("Corpus current to {as.character(CORPUS_THROUGH)} ({CORPUS_LAG} day{?s}).")
+  }
+} else {
+  cli::cli_alert_warning("No athletics_corpus.parquet here; corpus freshness unchecked.")
+}
+
 # --- swimming results --------------------------------------------------------
 # Glasgow swimming ran 24-26 Jul and is FINISHED. This is an archive, not a
 # feed: it refreshes only when someone re-runs the CRS browser recipe.
@@ -287,7 +330,33 @@ card <- list(generated_at = format(NOW, "%Y-%m-%dT%H:%M:%S%z"),
              # current: it is Sys.time() whether the feed answered or not.
              harvest_ok = harvest_ok,
              swim_rows = swim_rows,
-             results_through = as.character(max(results$date, na.rm = TRUE)))
+             results_through = as.character(max(results$date, na.rm = TRUE)),
+             # CORPUS freshness, which harvest_ok does NOT cover.
+             #
+             # harvest_ok answers "did the Glasgow results feed respond". It
+             # says nothing about the corpus every rating and prediction on
+             # this site is estimated from -- and that is the one that had
+             # silently drifted. Audited 2026-09-14: the corpus was 9 days
+             # behind, the competition catalogue 18, and this script had run
+             # green every morning throughout, republishing with a fresh
+             # generated_at over all of it.
+             #
+             # Published as DATA rather than only warned to the console, for
+             # the same reason the archive-fallback caveats below are: a
+             # console warning is invisible the moment generated_at stamps
+             # Sys.time() over the page.
+             corpus_through = as.character(CORPUS_THROUGH),
+             corpus_lag_days = CORPUS_LAG)
+
+# STALE-CORPUS CAVEAT. Same mechanism as the archive-fallback caveats below and
+# for the same reason -- the page must say so itself, because generated_at
+# cannot. Appended rather than assigned, so it coexists with them.
+if (!is.na(CORPUS_LAG) && CORPUS_LAG > CORPUS_WARN) {
+  card$corpus_stale <- TRUE
+  card$caveats <- c(if (is.null(card$caveats)) character(0) else card$caveats, sprintf(
+    "Ratings and predictions are estimated from results up to %s, %d days before this page was built -- any more recent form is not reflected.",
+    as.character(CORPUS_THROUGH), CORPUS_LAG))
+}
 
 # ARCHIVE-FALLBACK CAVEATS, if any of the three pick_newest() calls above used
 # one. Written into the manifest, not just the console, so a re-run that falls
