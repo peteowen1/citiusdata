@@ -138,8 +138,23 @@ SKIP_CORPUS <- nzchar(Sys.getenv("CITIUS_APPEND_SKIP_CORPUS_REBUILD", ""))
   out[, perf := to_perf(mark, orientation)]
   out[, age := as.numeric(date - birthdate) / 365.25]
 
-  out[, comp_name := if (nrow(crow)) crow$name[1] else NA_character_]
-  out[, comp_start := if (nrow(crow)) as.Date(crow$date_start[1]) else as.Date(NA)]
+  # PREFER THE HARVEST'S OWN competition block over the calendar.
+  #
+  # This used to read comp_name/comp_start from athletics_calendar.csv only --
+  # which holds SEVEN hand-maintained meets. Every one of the 3,152 backfilled
+  # competitions is absent from it, so comp_start landed 100% empty on all 24
+  # meets in the validation sample and comp_name on most. The API returns both
+  # in competition{name startDate}, and the harvester now captures them.
+  #
+  # The calendar still wins where it has a row: it is hand-maintained and is
+  # the only source that can disagree with the feed on purpose.
+  cal_name  <- if (nrow(crow)) as.character(crow$name[1]) else NA_character_
+  cal_start <- if (nrow(crow)) as.Date(crow$date_start[1]) else as.Date(NA)
+  if (!"comp_name" %in% names(out)) out[, comp_name := NA_character_]
+  harvest_name  <- as.character(out$comp_name)
+  harvest_start <- if ("comp_start" %in% names(out)) .wa_date(out$comp_start) else as.Date(NA)
+  out[, comp_name := if (!is.na(cal_name)) cal_name else harvest_name]
+  out[, comp_start := if (!is.na(cal_start)) cal_start else harvest_start]
   out[, comp_tier := NA_character_]
 
   # Genuinely absent from this API path. Named here and exempted from the
