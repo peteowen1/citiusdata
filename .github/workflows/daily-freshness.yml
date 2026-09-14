@@ -1,0 +1,151 @@
+name: Daily data freshness
+
+# Makes data staleness VISIBLE. citiusdata had no scheduled data job at all
+# until now -- audited 2026-09-14, `grep -rn "schedule:\|cron:"` across this
+# repo's workflows returned nothing, while every sibling verse runs one
+# (bouncerdata three dailies, pannadata one at 05:00 UTC, torpdata weekly).
+#
+# That absence is the direct cause of the measured drift: the corpus 9 days
+# behind, the competition catalogue 18, and August 2026 carrying 4,813 corpus
+# rows against July's 117,988.
+#
+# THE FAILURE THIS IS REALLY FOR. A `citius blog refresh` scheduled task runs
+# on the laptop every morning at 07:30, calls export_blog_data.R, and exits 0.
+# It performs no harvest and no rebuild, so the site gets a fresh
+# `generated_at` over an ever-staler corpus and the green result is actively
+# misleading. This workflow is the counter-signal: it goes RED when the data is
+# old, which nothing currently does.
+#
+# WHY IT ONLY REPORTS. It deliberately does not harvest, append or rebuild.
+# append_meet_to_championship_results.R's own header gives the reason --
+# "quietly adding a meet a calibration was not fitted on is how a model ends up
+# evaluated on its own training data". Discovery is safe to schedule; mutating
+# a training input is a deliberate act and stays manual. Widening this to
+# actually fetch is a separate, considered change, and the issue it files is
+# where that decision gets made.
+#
+# COST. One corpus download (~330 MB) and a column-selected read. No compute.
+
+on:
+  schedule:
+    # 18:00 UTC = 04:00 AEST, after the US evening meets have filed results and
+    # before Pete's morning. Deliberately NOT near the 07:30 local blog refresh:
+    # this is meant to be read before that job publishes over stale data.
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+    inputs:
+      max_lag_days:
+        description: 'Days the corpus may lag before this fails'
+        type: string
+        default: '10'
+
+concurrency:
+  group: citius-daily-freshness
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  freshness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # Same two-repo layout and .here sentinel as meet-forecast.yml: the
+      # scripts resolve paths as VERSE/citius and VERSE/citiusdata through
+      # here::here(), so a bare checkout would send every path one level deep.
+      - name: Check out citiusdata
+        uses: actions/checkout@v4
+        with:
+          path: citiusdata
+
+      - name: Check out citius
+        uses: actions/checkout@v4
+        with:
+          repository: peteowen1/citius
+          path: citius
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mark the workspace root for here()
+        run: touch .here
+
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.5.0'
+          use-public-rspm: true
+
+      - name: Setup R dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: citius
+          extra-packages: |
+            any::here
+            any::cli
+            any::data.table
+            any::arrow
+
+      # Only the two files the check reads, not the whole deployed set: this
+      # job is meant to be cheap enough to run every day without thinking about
+      # it. athletics_calendar.csv is already in git (it is hand-maintained and
+      # cannot be regenerated -- see citiusdata/.gitignore's comment).
+      - name: Download the corpus and catalogue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd citiusdata
+          mkdir -p data
+          gh release download corpus-data --repo peteowen1/citiusdata \
+            --pattern athletics_corpus.parquet --dir data --clobber || \
+            echo "::warning::corpus-data release did not yield athletics_corpus.parquet"
+          gh release download catalogue-data --repo peteowen1/citiusdata \
+            --pattern competition_catalogue.parquet --dir data --clobber || \
+            echo "::warning::catalogue-data release did not yield competition_catalogue.parquet"
+          ls -la data/ | head -20
+
+      - name: Check freshness
+        id: check
+        env:
+          CITIUS_MAX_LAG_DAYS: ${{ inputs.max_lag_days || '10' }}
+        run: |
+          set -o pipefail
+          if Rscript citiusdata/scripts/check_harvest_freshness.R 2>&1 | tee /tmp/freshness.log; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "::error::Data is stale or completed meets are missing -- see the log."
+          fi
+
+      # An emailed red run is easy to scroll past; an issue persists and can be
+      # closed when the harvest actually happens. Reuses ONE issue rather than
+      # opening a new one daily, which would be its own kind of noise.
+      - name: Open or update the staleness issue
+        if: steps.check.outputs.stale == 'true' && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="Data staleness: harvest is overdue"
+          BODY="$(printf 'Automated check from \`daily-freshness.yml\`.\n\n```\n%s\n```\n\nThe fix is the manual chain: harvest the missing meets, `append_meet_to_championship_results.R`, then the six-script catalogue chain (`docs/plans/post-reharvest-runbook.md:66-72`).\n\nThis issue is reused by every run; it will keep updating until the checks pass.' "$(cat /tmp/freshness.log)")"
+          EXISTING=$(gh issue list --repo peteowen1/citiusdata --state open \
+            --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --repo peteowen1/citiusdata --body "$BODY"
+          else
+            gh issue create --repo peteowen1/citiusdata --title "$TITLE" --body "$BODY"
+          fi
+
+      - name: Collect the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: freshness-log
+          path: /tmp/freshness.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      # Last, so the log and the issue exist before the run goes red.
+      - name: Fail if stale
+        if: steps.check.outputs.stale == 'true'
+        run: exit 1
