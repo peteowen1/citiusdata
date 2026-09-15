@@ -50,8 +50,22 @@ $MeetsPerCall = 25
 # result rather than starting wide.
 $MaxCalls     = if ($env:AB_MAX_CALLS) { [int]$env:AB_MAX_CALLS } else { 4 }
 
-$CTRL_CACHE = "backtest_cache_ab${stamp}_ctrl"
-$ARM_CACHE  = "backtest_cache_ab${stamp}_nbcomb"
+# Monte Carlo sims per meet. backtest_athletics.R:23-29: every simulate_event()
+# call uses a fixed seed=11L, so the MC noise is highly CORRELATED between two
+# arms sharing an N_SIMS -- which is what makes arm-vs-arm comparison hold up at
+# a low count even though an arm-vs-last5 comparison would not. Its own guidance
+# is "screen at 2000-3000, confirm the number you're about to act on at 10000".
+# Screening is also what makes this runnable on a shared machine: 10,000 sims
+# needs ~8 GB and was killed roughly every 9 meets on 2026-09-15 by a pannaverse
+# job holding 13 GB.
+$NSims = if ($env:AB_NSIMS) { [int]$env:AB_NSIMS } else { 3000 }
+
+# The sim count is IN THE CACHE NAME. A cache built at 10,000 sims and topped up
+# at 3,000 would mix two noise levels inside one arm with nothing to show for
+# it -- the per-meet cache files carry no sim count in their own names, so
+# nothing else would catch it.
+$CTRL_CACHE = "backtest_cache_ab${stamp}_n${NSims}_ctrl"
+$ARM_CACHE  = "backtest_cache_ab${stamp}_n${NSims}_nbcomb"
 
 # Held equal across both arms. Taken from the 2026-09-14 trial's fingerprint so
 # this is a continuation of that comparison, not a new one with drifted settings.
@@ -128,6 +142,7 @@ function Run-Arm($label, $cache, [bool]$combineOn) {
     $env:CITIUS_BT_MEETS       = "$MeetsPerCall"
     $env:CITIUS_BT_CALIBRATION = $CALIB
     $env:CITIUS_BT_MIN_FREE_MB = "$FloorMB"
+    $env:CITIUS_BT_NSIMS       = "$NSims"
     if ($combineOn) {
       $env:CITIUS_BT_NEIGHBOUR_COMBINE        = "1"
       $env:CITIUS_BT_NEIGHBOUR_COMBINE_EVENTS = $EVENTS
@@ -183,6 +198,12 @@ function Run-Arm($label, $cache, [bool]$combineOn) {
 
 Say "neighbour A/B starting. control=$CTRL_CACHE arm=$ARM_CACHE"
 Say "events under test: $EVENTS"
+Say "N_SIMS=$NSims per meet, $MeetsPerCall meets per call, cap $MaxCalls calls per arm"
+if ($NSims -lt 10000) {
+  Say "SCREENING RUN: $NSims sims, not the 10,000 confirmation value. Both arms share it and"
+  Say "  the fixed seed correlates their noise, so the arm-vs-arm DIRECTION holds -- but do not"
+  Say "  quote an absolute skill number from this run without re-running at 10,000."
+}
 
 $okCtrl = Run-Arm "CONTROL"  $CTRL_CACHE $false
 $okArm  = Run-Arm "COMBINE"  $ARM_CACHE  $true

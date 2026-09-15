@@ -194,7 +194,17 @@ if (!any(auth)) {
            it is missing from the {.var keep} column list."))
 }
 all[, .auth_key := fifelse(auth, race_key, NA_character_)]
-derived <- add_race_key(all[, !".auth_key"])$race_key
+# Drop `race_key` as well as the scratch column before deriving. add_race_key()
+# warns "N rows already carry a race_key; overwriting it with a derived one"
+# whenever it sees one, which is a CORRECT and valuable guard -- but here the
+# derived key goes into `.derived` and the fcase below keeps the authoritative
+# one, so the warning describes something that does not happen. It was in the
+# rebuild log for a month and on 2026-09-15 it cost a session: the warning was
+# read as evidence the 2026-08-14 merge bug was still live, and a queued task
+# to "fix the race_key overwrite" was carried for weeks against code that was
+# already correct. A guard that cries wolf in the log of a healthy build is a
+# defect in its own right.
+derived <- add_race_key(all[, !c(".auth_key", "race_key")])$race_key
 all[, .derived := derived]
 # A row with no key of its own can only adopt one when the group it belongs to
 # holds exactly ONE authoritative race. Where the group holds several, the
@@ -294,6 +304,23 @@ if ("place" %in% names(all)) {
       "i" = "The sport's tie rate is under 1%. Do not publish a corpus in this state --
              decompose_races() would fit a shared shock across several real races."))
   }
+  # WHICH keys merge, not just how many. The rate above is one number, and
+  # "1.36%" reads as small and settled. Measured 2026-09-15, it is not evenly
+  # spread: the authoritative key is
+  # competition|wa_eventId|eventName|raceId|discriminator, and where WA returns
+  # no raceId -- or the sentinel 0 -- the key loses components and distinct
+  # races collapse onto one string. Of the 489 keys spanning more than one date,
+  # 440 (90.5%) had multiple winners against the 1.36% baseline, a 66x
+  # concentration, and only 33 of them carried all five components.
+  #
+  # Splitting by component count turns "a small average" into a named
+  # population, so a regression in KEY SHAPE is visible here rather than
+  # inferred later from a variance estimate that looks slightly off.
+  ks <- copy(pl)
+  ks[, parts := lengths(strsplit(race_key, "|", fixed = TRUE))]
+  say("  multi-winner rate by key shape (components in the key; 5 is complete):")
+  print(ks[, .(keys = .N, multi = sum(n1 > 1),
+               pct = round(100 * mean(n1 > 1), 2)), by = parts][order(parts)])
 }
 # A RACE HAPPENS ON ONE DAY. A key spanning two dates is either a mis-dated
 # result or a key collision, and both are worth knowing at build time rather
