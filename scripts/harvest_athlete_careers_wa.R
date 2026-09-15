@@ -43,7 +43,16 @@
 #     CITIUS_CAREER_FROM=2014      earliest year to request
 #     CITIUS_CAREER_HOURS=8        wall-clock budget
 #     CITIUS_CAREER_MIN_FREE_MB=800
-#     CITIUS_CAREER_PAUSE=0.05     seconds between requests
+#     CITIUS_CAREER_COHORT=elite_cohort.rds   scope to these athletes ("" = all)
+#     CITIUS_CAREER_WORKERS=6      concurrent requests
+#     CITIUS_CAREER_BATCH=40       athletes per parallel batch
+#
+# SIZE THE SWEEP, NOT JUST THE ROUTE. Measured 13.7 requests per athlete at
+# 0.84s each, so the full 483,850-athlete population is ~645 HOURS and even
+# priority 1 alone is ~645h/2.4. Scoped to the 10,783 athletes
+# backtest_athletics.R actually scores, the same 12-year window is 75,391
+# requests: 17.6 h serial, about 4.4 h at 6 workers. That is the difference
+# between a sweep that finishes overnight and one that never finishes at all.
 
 VERSE <- here::here()
 suppressMessages({library(data.table); library(httr2); library(jsonlite); library(cli)})
@@ -58,6 +67,9 @@ YFROM  <- .env_int("CITIUS_CAREER_FROM", "2014")
 HOURS  <- as.numeric(Sys.getenv("CITIUS_CAREER_HOURS", "8"))
 FLOOR  <- .env_int("CITIUS_CAREER_MIN_FREE_MB", "800")
 PAUSE  <- as.numeric(Sys.getenv("CITIUS_CAREER_PAUSE", "0.05"))
+COHORT <- Sys.getenv("CITIUS_CAREER_COHORT", "elite_cohort.rds")
+WORKERS <- .env_int("CITIUS_CAREER_WORKERS", "6")
+BATCH  <- .env_int("CITIUS_CAREER_BATCH", "40")
 JOURNAL <- file.path(CACHE, "_journal.csv")
 T0 <- Sys.time()
 say <- function(...) { cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")),
@@ -125,6 +137,21 @@ say("%s athletes: %s elite-finalists, %s thin, %s other",
     format(nrow(held), big.mark=","), format(sum(held$priority==1L), big.mark=","),
     format(sum(held$priority==2L), big.mark=","), format(sum(held$priority==3L), big.mark=","))
 
+# SCOPE TO WHO THE MODEL ACTUALLY RATES. Sweeping all 483,850 athletes is ~645
+# hours; the 10,783 in elite_cohort.rds are exactly the athletes
+# backtest_athletics.R scores, so they are where a deeper history changes a
+# forecast. Set CITIUS_CAREER_COHORT="" to sweep everyone.
+if (nzchar(COHORT)) {
+  cf <- file.path(D, COHORT)
+  if (!file.exists(cf)) cli_abort("Cohort file {.file {COHORT}} not found; set CITIUS_CAREER_COHORT=\"\" to sweep all.")
+  co <- readRDS(cf)
+  cids <- unique(as.character(if (is.data.frame(co)) co[[intersect(c("athlete_id","aid","id"), names(co))[1]]] else co))
+  before <- nrow(held)
+  held <- held[as.character(aid) %chin% cids]
+  say("cohort %s: %s of %s athletes kept", COHORT,
+      format(nrow(held), big.mark=","), format(before, big.mark=","))
+}
+
 done <- sub("\\.rds$", "", list.files(CACHE, pattern = "^[0-9]+\\.rds$"))
 todo <- held[!as.character(aid) %chin% done]
 say("%s remaining (%.0f%%); fetching up to %s this run",
@@ -136,8 +163,36 @@ if (!file.exists(JOURNAL))
   fwrite(data.table(time=character(), athlete_id=integer(), years=integer(),
                     rows=integer(), status=character()), JOURNAL)
 
+# --- fetch, in parallel batches ----------------------------------------------
+#
+# CONCURRENCY IS THE ONLY LEVER. This feed is latency bound: a serial request
+# takes ~0.84s whatever the pause, so the pause buys nothing and workers buy
+# almost linearly. Six is the same figure the mirror-based sweep settled on
+# (1 worker 0.81s/req, 6 workers 0.22s, 10 workers 0.19s) -- ten buys 0.5x more
+# for 67% more connections against someone else's API, which is not a trade
+# worth making.
+#
+# Two phases per batch so every request in a phase can go at once: first the
+# activeYears call for each athlete, then every (athlete, year) pair the first
+# phase turned up. A per-athlete serial loop cannot parallelise the year calls,
+# which are 12 of every 13.7 requests.
+mkreq <- function(query, variables) {
+  request(ep$url) |>
+    req_headers(accept = "*/*", `content-type` = "application/json",
+                `x-api-key` = ep$key, `x-amz-user-agent` = "aws-amplify/3.0.7") |>
+    req_body_raw(toJSON(list(query = query, variables = variables), auto_unbox = TRUE),
+                 type = "application/json") |>
+    req_timeout(45) |> req_error(is_error = function(r) FALSE)
+}
+parse_resp <- function(r) {
+  if (is.null(r) || inherits(r, "error")) return(NULL)
+  if (resp_status(r) != 200L) return(NULL)
+  tryCatch(fromJSON(resp_body_string(r), simplifyVector = FALSE), error = function(e) NULL)
+}
+
 ok <- 0L; empty <- 0L; failed <- 0L; n_rows <- 0L; n_req <- 0L
-for (i in seq_len(nrow(todo))) {
+batches <- split(seq_len(nrow(todo)), ceiling(seq_len(nrow(todo)) / BATCH))
+for (bi in seq_along(batches)) {
   if (as.numeric(difftime(Sys.time(), T0, units = "hours")) > HOURS) {
     say("budget of %.1f h reached", HOURS); break
   }
@@ -146,51 +201,71 @@ for (i in seq_len(nrow(todo))) {
     say("  low memory (%.0f MB) -- waiting", fm); Sys.sleep(60)
     if (free_mb() < FLOOR) { say("STOPPING: still %.0f MB", free_mb()); break }
   }
-  aid <- todo$aid[i]
-  yj <- gql(Q_YEARS, list(id = aid)); n_req <- n_req + 1L
-  yrs <- suppressWarnings(as.integer(unlist(yj$data$getSingleCompetitorResultsDate$activeYears)))
-  yrs <- sort(yrs[!is.na(yrs) & yrs >= YFROM], decreasing = TRUE)
-  if (!length(yrs)) {
-    # No active years in range IS an answer; cache it so the athlete is not
-    # retried forever. A FAILED request is different and is left uncached.
-    if (is.null(yj)) { failed <- failed + 1L
-      fwrite(data.table(time=format(Sys.time()), athlete_id=aid, years=0L, rows=0L,
-                        status="failed"), JOURNAL, append = TRUE)
-    } else { saveRDS(data.table(), file.path(CACHE, paste0(aid, ".rds"))); empty <- empty + 1L
-      fwrite(data.table(time=format(Sys.time()), athlete_id=aid, years=0L, rows=0L,
-                        status="empty"), JOURNAL, append = TRUE) }
-    Sys.sleep(PAUSE); next
-  }
-  parts <- list(); bad <- FALSE
-  for (y in yrs) {
-    rj <- gql(Q_ROWS, list(id = aid, y = y)); n_req <- n_req + 1L
-    if (is.null(rj)) { bad <- TRUE; break }
-    rows <- rj$data$getSingleCompetitorResultsDate$resultsByDate
-    if (length(rows)) {
-      dt <- rbindlist(lapply(rows, function(x)
-        as.data.table(lapply(x, function(v) if (is.null(v)) NA else v))), fill = TRUE)
-      dt[, `:=`(athlete_id = aid, year = y)]
-      parts[[length(parts) + 1L]] <- dt
+  aids <- todo$aid[batches[[bi]]]
+
+  # phase 1: active years
+  yresp <- req_perform_parallel(lapply(aids, function(a) mkreq(Q_YEARS, list(id = a))),
+                                max_active = WORKERS, on_error = "continue")
+  n_req <- n_req + length(aids)
+  yrs_by <- lapply(seq_along(aids), function(k) {
+    j <- parse_resp(yresp[[k]])
+    if (is.null(j)) return(NULL)                     # failed: leave uncached
+    y <- suppressWarnings(as.integer(unlist(j$data$getSingleCompetitorResultsDate$activeYears)))
+    sort(y[!is.na(y) & y >= YFROM], decreasing = TRUE)
+  })
+
+  # phase 2: every (athlete, year) pair from phase 1, all at once
+  pairs <- rbindlist(lapply(seq_along(aids), function(k) {
+    y <- yrs_by[[k]]
+    if (is.null(y) || !length(y)) return(NULL)
+    data.table(k = k, aid = aids[k], y = y)
+  }), fill = TRUE)
+  rows_by <- vector("list", length(aids))
+  if (nrow(pairs)) {
+    rresp <- req_perform_parallel(
+      lapply(seq_len(nrow(pairs)), function(p) mkreq(Q_ROWS, list(id = pairs$aid[p], y = pairs$y[p]))),
+      max_active = WORKERS, on_error = "continue")
+    n_req <- n_req + nrow(pairs)
+    for (p in seq_len(nrow(pairs))) {
+      j <- parse_resp(rresp[[p]])
+      k <- pairs$k[p]
+      if (is.null(j)) { rows_by[[k]] <- "FAILED"; next }
+      if (identical(rows_by[[k]], "FAILED")) next
+      rr <- j$data$getSingleCompetitorResultsDate$resultsByDate
+      if (length(rr)) {
+        dt <- rbindlist(lapply(rr, function(x)
+          as.data.table(lapply(x, function(v) if (is.null(v)) NA else v))), fill = TRUE)
+        dt[, `:=`(athlete_id = pairs$aid[p], year = pairs$y[p])]
+        rows_by[[k]] <- c(if (is.list(rows_by[[k]])) rows_by[[k]] else list(), list(dt))
+      }
     }
-    Sys.sleep(PAUSE)
   }
-  if (bad) {
-    failed <- failed + 1L
-    fwrite(data.table(time=format(Sys.time()), athlete_id=aid, years=length(yrs), rows=0L,
-                      status="failed"), JOURNAL, append = TRUE)
-    next          # NOT cached, so it is retried next run
+
+  for (k in seq_along(aids)) {
+    aid <- aids[k]; y <- yrs_by[[k]]
+    if (is.null(y)) {                                # phase-1 failure
+      failed <- failed + 1L
+      fwrite(data.table(time=format(Sys.time()), athlete_id=aid, years=0L, rows=0L,
+                        status="failed"), JOURNAL, append = TRUE); next
+    }
+    if (identical(rows_by[[k]], "FAILED")) {         # a year call failed
+      failed <- failed + 1L
+      fwrite(data.table(time=format(Sys.time()), athlete_id=aid, years=length(y), rows=0L,
+                        status="failed"), JOURNAL, append = TRUE); next
+    }
+    parts <- rows_by[[k]]
+    out <- if (is.list(parts) && length(parts)) rbindlist(parts, use.names = TRUE, fill = TRUE) else data.table()
+    saveRDS(out, file.path(CACHE, paste0(aid, ".rds")))
+    n_rows <- n_rows + nrow(out)
+    if (nrow(out)) ok <- ok + 1L else empty <- empty + 1L
+    fwrite(data.table(time=format(Sys.time()), athlete_id=aid, years=length(y),
+                      rows=nrow(out), status=if (nrow(out)) "ok" else "empty"),
+           JOURNAL, append = TRUE)
   }
-  out <- if (length(parts)) rbindlist(parts, use.names = TRUE, fill = TRUE) else data.table()
-  saveRDS(out, file.path(CACHE, paste0(aid, ".rds")))
-  n_rows <- n_rows + nrow(out)
-  if (nrow(out)) ok <- ok + 1L else empty <- empty + 1L
-  fwrite(data.table(time=format(Sys.time()), athlete_id=aid, years=length(yrs),
-                    rows=nrow(out), status=if (nrow(out)) "ok" else "empty"),
-         JOURNAL, append = TRUE)
-  if (i %% 25 == 0)
-    say("  %d/%d | %s rows | %s requests | %.2fs/req", i, nrow(todo),
-        format(n_rows, big.mark=","), format(n_req, big.mark=","),
-        as.numeric(difftime(Sys.time(), T0, units="secs"))/max(1,n_req))
+  say("  batch %d/%d | %s athletes | %s rows | %s requests | %.2fs/req",
+      bi, length(batches), format(ok + empty + failed, big.mark=","),
+      format(n_rows, big.mark=","), format(n_req, big.mark=","),
+      as.numeric(difftime(Sys.time(), T0, units="secs"))/max(1, n_req))
 }
 
 say("")
