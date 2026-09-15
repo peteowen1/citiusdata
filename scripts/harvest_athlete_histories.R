@@ -24,6 +24,12 @@
 suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table)
 source(here::here("citiusdata", "scripts", "_merge_guards.R"))
+# _env.R defines .env_int(), which this script uses for CITIUS_MAX_ATHLETES and
+# CITIUS_WORKERS. Without it the run dies with "could not find function
+# '.env_int'" AFTER printing its athlete counts, so it looks like it started
+# working. This is very probably why athletics_history sat 49 days stale on
+# 2026-09-15: nothing could refresh it.
+source(here::here("citiusdata", "scripts", "_env.R"))
 
 OUT <- here::here("citiusdata", "data")
 CACHE <- file.path(OUT, "ath_athlete_cache")
@@ -43,8 +49,30 @@ ch <- ch[!is.na(aid)]
 # Priority 1: anyone who has contested a final -- their estimate decides races.
 # Priority 2: anyone we hold few results for, since they gain the most.
 # Priority 3: everyone else.
-fin <- unique(ch[!is.na(place) & grepl("final", round, ignore.case = TRUE) &
-                   !grepl("semi", round, ignore.case = TRUE)]$aid)
+# "Contested a final" DOES NOT DISCRIMINATE. Most meets run one race per event
+# and label it "Final", so this rule matched 434,599 of 483,850 athletes (90%)
+# on 2026-09-15 -- priority 1 was almost everyone, and the promise that an
+# interrupted sweep leaves the useful half done did not hold.
+#
+# Narrow it to finals at meets the MODEL can actually see: form_ratings.R keeps
+# only T1_elite and T2_strong and inner-joins, so an athlete whose finals are
+# all T3 never reaches it. The catalogue carries meet_tier per competition.
+.cat_f <- file.path(OUT, "competition_catalogue.parquet")
+fin <- if (file.exists(.cat_f)) {
+  ct <- as.data.table(arrow::read_parquet(.cat_f))[, .(competition_id, meet_tier)]
+  ct[, competition_id := as.character(competition_id)]
+  ch[, .cid := as.character(competition_id)]
+  elite <- ct[meet_tier %chin% c("T1_elite", "T2_strong")]$competition_id
+  out <- unique(ch[!is.na(place) & .cid %chin% elite &
+                     grepl("final", round, ignore.case = TRUE) &
+                     !grepl("semi", round, ignore.case = TRUE)]$aid)
+  ch[, .cid := NULL]
+  out
+} else {
+  cli::cli_warn("No competition catalogue; falling back to any final, which barely prioritises.")
+  unique(ch[!is.na(place) & grepl("final", round, ignore.case = TRUE) &
+              !grepl("semi", round, ignore.case = TRUE)]$aid)
+}
 # athletics_athlete_results() fetches the PROFILE first when sex or birthdate is missing,
 # which doubles the request count for a sweep this size. We already hold both
 # for every one of these athletes, so passing them turns 2 requests per athlete
