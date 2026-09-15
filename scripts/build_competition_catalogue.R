@@ -437,9 +437,16 @@ cat_tbl <- ch[, .(
   # actually there. Same trap, and same fix, as report_race_view.R.
   comp_name   = { .v <- comp_name[!is.na(comp_name) & nzchar(comp_name)]
                   if (length(.v)) .v[1] else NA_character_ },
-  first_date  = min(date, na.rm = TRUE),
-  last_date   = max(date, na.rm = TRUE),
-  year        = year(min(date, na.rm = TRUE)),
+  # Same per-row-missingness trap as comp_name above, one step nastier.
+  # min()/max() on an all-NA vector return Inf/-Inf even WITH na.rm = TRUE
+  # (with only a warning), and as.Date(Inf) overflows to -5877641-06-23 -- a
+  # structurally valid Date that sorts before every real meet and silently
+  # wrecks any date-range filter downstream. 33 meets landed that way on
+  # 2026-09-15, all newly backfilled ones whose results carry no parseable
+  # date. Return NA when there is nothing to take a minimum of.
+  first_date  = { .d <- date[!is.na(date)]; if (length(.d)) min(.d) else as.Date(NA) },
+  last_date   = { .d <- date[!is.na(date)]; if (length(.d)) max(.d) else as.Date(NA) },
+  year        = { .d <- date[!is.na(date)]; if (length(.d)) year(min(.d)) else NA_integer_ },
   country     = if ("venue_country" %in% names(ch)) venue_country[1] else NA_character_,
   results     = .N,
   athletes    = uniqueN(athlete_id),
