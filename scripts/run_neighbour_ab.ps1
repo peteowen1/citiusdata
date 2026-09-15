@@ -37,8 +37,14 @@ $log   = "$data\neighbour_ab_$stamp.log"
 Set-Location $verse
 
 # --- knobs -------------------------------------------------------------------
-$FloorMB      = 9000    # must match CITIUS_BT_MIN_FREE_MB below
-$HeadroomMB   = 1000    # start only with room to spare, so we don't race the floor
+# 6,000 MB on Pete's call (2026-09-15), down from backtest_athletics.R's own
+# 9,000 default. That default was set against a 10,000-sim run; this runner
+# screens at 3,000, where the simulation matrices are ~3x smaller, so the old
+# floor was refusing starts the run did not actually need. It is still a floor,
+# not a guess: below it the run is refused rather than OOM-killed half way.
+# Raise AB_FLOOR_MB back to 9000 for a 10,000-sim confirmation run.
+$FloorMB      = if ($env:AB_FLOOR_MB) { [int]$env:AB_FLOOR_MB } else { 6000 }
+$HeadroomMB   = 500     # start only with room to spare, so we don't race the floor
 $PatienceMin  = 240     # give up waiting after this long with no window
 $PollSec      = 60
 $MeetsPerCall = 25
@@ -150,6 +156,19 @@ function Run-Arm($label, $cache, [bool]$combineOn) {
     $env:CITIUS_BT_CALIBRATION = $CALIB
     $env:CITIUS_BT_MIN_FREE_MB = "$FloorMB"
     $env:CITIUS_BT_NSIMS       = "$NSims"
+    # USE THE PARTITIONED STORE. backtest_athletics.R:153-163: when
+    # CITIUS_BT_STORE is set and HISTORY != OUTCOMES, `hist_raw` -- the ENTIRE
+    # corpus, several GB as a data.table -- is never read, because every
+    # per-meet history lookup goes through the store's partition pruning
+    # instead. That comment names it as "very plausibly the actual source of
+    # the ~5.85 GB before any meet runs" floor.
+    #
+    # Without it, five launches on 2026-09-15 were killed by the harness's
+    # low-memory watchdog before caching a single meet -- and the last of those
+    # had 7.6 GB free and no competing R job, so it was this run's own
+    # allocation tripping the watchdog, not contention. Both arms set it, so
+    # the comparison is unaffected; compare_arm_fingerprints.R confirms.
+    $env:CITIUS_BT_STORE       = "athletics_corpus_store"
     if ($combineOn) {
       $env:CITIUS_BT_NEIGHBOUR_COMBINE        = "1"
       $env:CITIUS_BT_NEIGHBOUR_COMBINE_EVENTS = $EVENTS
