@@ -191,10 +191,27 @@ for (i in seq_len(nrow(cand))) {
     }
     unlink(logf)          # keep the log only for meets that failed
   } else {
-    failed <- failed + 1L
-    journal(cid, nm, if (identical(as.integer(rc), 124L)) "timeout" else "failed", NA, secs,
-            sprintf("rc=%s", rc))
-    say("   FAILED (rc=%s, %.0fs)", rc, secs)
+    # A MEET WITH NO RESULTS IS NOT A FAILURE. harvest_wa_results.R aborts with
+    # "returned no results on days ..." when WA has nothing published for a
+    # competition -- a scheduled or cancelled fixture. Recorded as `failed`,
+    # those meets are retried on EVERY future run, forever, at ~8s each: the
+    # 2026-09-15 backfill reported 8 failures, all of this kind, and a rerun
+    # immediately reproduced all 8. Staging a zero-row marker records the
+    # question as asked and answered, so the next run skips them.
+    no_results <- file.exists(logf) &&
+      any(grepl("returned no results on days", readLines(logf, warn = FALSE), fixed = TRUE))
+    if (no_results) {
+      saveRDS(data.table(), out)      # marker: asked, and WA has nothing
+      empty <- empty + 1L
+      journal(cid, nm, "empty", 0, secs, "WA published no results")
+      say("   empty (WA has no results for this meet)")
+      unlink(logf)
+    } else {
+      failed <- failed + 1L
+      journal(cid, nm, if (identical(as.integer(rc), 124L)) "timeout" else "failed", NA, secs,
+              sprintf("rc=%s", rc))
+      say("   FAILED (rc=%s, %.0fs)", rc, secs)
+    }
   }
   Sys.sleep(PAUSE_S)
 }
