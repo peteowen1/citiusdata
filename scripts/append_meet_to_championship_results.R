@@ -163,13 +163,34 @@ SKIP_CORPUS <- nzchar(Sys.getenv("CITIUS_APPEND_SKIP_CORPUS_REBUILD", ""))
   #
   # The calendar still wins where it has a row: it is hand-maintained and is
   # the only source that can disagree with the feed on purpose.
+  # A Date's STORAGE type has to be forced, not assumed. fread() returns a date
+  # column as IDate (class IDate+Date, storage INTEGER), and as.Date() on an
+  # IDate keeps that integer storage. Only the handful of meets with a calendar
+  # row take that path, so one meet produced comp_start as Date/integer while
+  # every other meet produced Date/double -- and rbindlist() resolves that
+  # conflict by coercing the whole column to CHARACTER.
+  #
+  # The result is the nastiest shape in this repo: `class` stays "Date", so
+  # is.na() returns FALSE on every row and every NA-coverage gate reads the
+  # column as 100% populated -- better than before the append, not worse. But
+  # the values print as NA and arithmetic on them throws "non-numeric argument
+  # to binary operator". On 2026-09-15 ONE meet (7212925) turned all 4,748,486
+  # rows of comp_start into strings, which is what aborted the backtest: it
+  # takes comp_start as cut_date and filters history strictly before it.
+  # Coverage gates cannot see a type change. Assert types as well.
+  .date_dbl <- function(x) structure(as.numeric(as.Date(x)), class = "Date")
   cal_name  <- if (nrow(crow)) as.character(crow$name[1]) else NA_character_
-  cal_start <- if (nrow(crow)) as.Date(crow$date_start[1]) else as.Date(NA)
+  cal_start <- if (nrow(crow)) .date_dbl(crow$date_start[1]) else as.Date(NA)
   if (!"comp_name" %in% names(out)) out[, comp_name := NA_character_]
   harvest_name  <- as.character(out$comp_name)
-  harvest_start <- if ("comp_start" %in% names(out)) .wa_date(out$comp_start) else as.Date(NA)
+  harvest_start <- if ("comp_start" %in% names(out)) .date_dbl(.wa_date(out$comp_start)) else as.Date(NA)
   out[, comp_name := if (!is.na(cal_name)) cal_name else harvest_name]
   out[, comp_start := if (!is.na(cal_start)) cal_start else harvest_start]
+  # Belt and braces: whatever route produced it, this column leaves the mapper
+  # as Date/double or not at all. Cheaper than discovering the mismatch 4.7M
+  # rows later.
+  if (!is.double(out$comp_start))
+    cli::cli_abort("comp_start left the mapper as {typeof(out$comp_start)}, not double.")
   out[, comp_tier := NA_character_]
 
   # Genuinely absent from this API path. Named here and exempted from the

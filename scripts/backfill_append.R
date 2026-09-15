@@ -88,6 +88,33 @@ cmp <- data.table(column = need, new = round(cov_new[need], 3), existing = round
 say("column coverage, new batch vs what is already stored:")
 print(cmp)
 
+# TYPES, NOT JUST COVERAGE. The gate below counts NAs, and an NA count cannot
+# see a storage-type change -- on 2026-09-15 one meet handed back comp_start as
+# Date/integer (fread returns IDate) while every other meet gave Date/double,
+# rbindlist coerced the column to CHARACTER, and because class stayed "Date"
+# is.na() returned FALSE on all 4,748,486 rows. The coverage gate therefore read
+# comp_start as 100% populated -- an IMPROVEMENT -- while the values printed as
+# NA and arithmetic on them threw "non-numeric argument to binary operator",
+# which aborted the backtest. Compare class AND typeof against what is already
+# stored, before the rbind that would silently reconcile them.
+tcmp <- data.table(
+  column = need,
+  stored = vapply(need, function(k) sprintf("%s/%s", paste(class(ch[[k]]), collapse="+"),
+                                            typeof(ch[[k]])), character(1)),
+  incoming = vapply(need, function(k) if (k %in% names(new))
+    sprintf("%s/%s", paste(class(new[[k]]), collapse="+"), typeof(new[[k]])) else "<absent>",
+    character(1)))
+tbad <- tcmp[stored != incoming & incoming != "<absent>"]
+if (nrow(tbad)) {
+  print(tbad)
+  cli_abort(c(
+    "{nrow(tbad)} column{?s} arrive with a different class/storage than the stored table.",
+    x = "{.field {tbad$column}}",
+    i = "rbind would silently reconcile these -- a Date/integer meeting a Date/double
+         becomes a character column that still reports class Date, so is.na() and every
+         coverage check keep passing. Fix the mapper, do not widen this gate."))
+}
+
 exempt <- c("comp_name", "comp_tier", "discipline_code", "value_raw", "birthdate_year_only")
 # A column empty across the WHOLE batch, that the existing corpus populates
 # well, is a mapping bug rather than a property of these meets.
