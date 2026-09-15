@@ -97,6 +97,21 @@ SKIP_CORPUS <- nzchar(Sys.getenv("CITIUS_APPEND_SKIP_CORPUS_REBUILD", ""))
   if ("day_date" %in% names(out)) out[is.na(date), date := .wa_date(day_date)]
   if (nrow(crow)) out[is.na(date) & !is.na(day),
                       date := as.Date(crow$date_start[1]) + (as.integer(day) - 1L)]
+  # ...and finally the HARVEST's own comp_start, which for a backfilled meet is
+  # the only source there is. `crow` comes from athletics_calendar.csv, which
+  # holds 7 rows, so the calendar fallback above cannot fire for the 3,152 meets
+  # the 2026-09-15 backfill staged. 33 of them (1,153 rows) landed with no date
+  # at all, which is not a cosmetic gap: backtest_athletics.R takes each meet's
+  # date as `cut_date`, and an NA cut_date aborted the whole run on the first
+  # meet with "non-numeric argument to binary operator". The API had the dates
+  # the entire time -- comp_start was populated on all 33.
+  if ("comp_start" %in% names(out)) {
+    out[, .hstart := .wa_date(comp_start)]
+    out[is.na(date) & !is.na(.hstart) & !is.na(day),
+        date := .hstart + (as.integer(day) - 1L)]
+    out[is.na(date) & !is.na(.hstart), date := .hstart]
+    out[, .hstart := NULL]
+  }
   out[, birthdate := .wa_date(birth_date)]
   out[, athlete_id := as.character(athlete_id)]
   out[, sport := "Athletics"]
