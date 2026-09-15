@@ -72,18 +72,40 @@ journal <- function(cid, name, status, rows, secs, note = "") {
          JOURNAL, append = file.exists(JOURNAL))
 }
 
+# Loaded HERE, not further down beside the calendar call: the DuckDB lookup
+# immediately below needs with_citius_db_connection(), and if the package were
+# still unloaded that call would fail, fall through to the .rds fallback, and
+# the whole point of the lookup -- avoiding a 2 GB spike -- would be silently
+# undone while the run still looked healthy.
+suppressMessages(devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE))
+
 # --- what we already have ----------------------------------------------------
-say("loading championship_results.rds to see what is already held ...")
-# Pull the ids and DROP the table immediately. Holding 4.5M rows for the rest
-# of the night would sit against the memory floor below and halt the run on
-# the parent's own footprint -- which is exactly what the first smoke test did.
-have <- local({
-  ch <- readRDS(file.path(D, "championship_results.rds"))
-  ids <- unique(as.character(ch$competition_id))
-  rm(ch); gc(verbose = FALSE)
-  ids
-})
-say("already hold %s competitions (table released, %.0f MB free)",
+#
+# ASK DUCKDB, DO NOT LOAD THE TABLE. All we need is a list of ~17,000 ids, and
+# reading championship_results.rds to get them costs a ~2 GB spike on a job
+# whose real work is a few hundred MB. That spike is what kept tripping the
+# harness's low-memory watchdog: a 2025 harvest was killed at meet 319 of 2,000
+# on 2026-09-15 despite each meet costing almost nothing. Dropping the table
+# immediately afterwards (which the previous version did, correctly) does not
+# help, because the peak is what gets the process killed, not the steady state.
+#
+# Falls back to the .rds if DuckDB is unavailable, so this cannot become a new
+# way for an unattended run to fail.
+say("reading held competition ids ...")
+have <- tryCatch(
+  as.character(with_citius_db_connection(function(cn) DBI::dbGetQuery(cn,
+    "SELECT DISTINCT competition_id FROM championship_results"),
+    read_only = TRUE)$competition_id),
+  error = function(e) {
+    say("DuckDB unavailable (%s); falling back to the .rds", conditionMessage(e))
+    local({
+      ch <- readRDS(file.path(D, "championship_results.rds"))
+      ids <- unique(as.character(ch$competition_id))
+      rm(ch); gc(verbose = FALSE)
+      ids
+    })
+  })
+say("already hold %s competitions (%.0f MB free)",
     format(length(have), big.mark = ","), free_mb())
 
 staged_done <- sub("^comp_", "", sub("\\.rds$", "", basename(Sys.glob(file.path(STAGE, "comp_*.rds")))))
@@ -95,7 +117,6 @@ say("already staged this/previous run: %s", format(length(staged_done), big.mark
 # attempt would have meant 28 minutes of the budget to re-derive a list that
 # had not changed. Keyed on the date range so a different range re-discovers.
 CAND_F <- file.path(STAGE, sprintf("_candidates_%s_%s.rds", FROM, TO))
-suppressMessages(devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE))
 if (file.exists(CAND_F) && difftime(Sys.time(), file.info(CAND_F)$mtime, units = "hours") < 24) {
   say("reusing cached discovery %s", basename(CAND_F))
   cand <- as.data.table(readRDS(CAND_F))
