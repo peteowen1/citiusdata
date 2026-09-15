@@ -82,8 +82,18 @@ if (!nzchar(GQL_URL) || !nzchar(WA_KEY)) {
       "Endpoint discovery returned HTTP {.ep$status}.",
       i = "Run {.file discover_wa_endpoint.R} on its own to see why."))
   }
-  if (!nzchar(GQL_URL)) GQL_URL <- .ep$url
-  if (!nzchar(WA_KEY))  WA_KEY  <- .ep$key
+  # The pair is ATOMIC -- take both discovered values, never one of each. Full
+  # reasoning in fetch_budapest_qualification_field.R: a fresh edge with a stale
+  # key returns a 503 that reads exactly like a retired edge, and filling in only
+  # the missing half is how CI produced that pairing.
+  if (nzchar(GQL_URL) != nzchar(WA_KEY)) {
+    cli::cli_alert_warning(c(
+      "Only one half of the WA endpoint pair was configured; ignoring it and using
+       the discovered pair. Set BOTH {.envvar CITIUS_WA_GRAPHQL_URL} and
+       {.envvar CITIUS_WA_GRAPHQL_KEY} to override deliberately."))
+  }
+  GQL_URL <- .ep$url
+  WA_KEY  <- .ep$key
   cli::cli_alert_success("Endpoint discovered: {.val {.ep$edge}}")
 }
 

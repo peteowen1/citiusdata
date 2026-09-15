@@ -73,8 +73,26 @@ if (!nzchar(GQL_URL) || !nzchar(WA_KEY)) {
       "Endpoint discovery returned HTTP {.ep$status}.",
       i = "Run {.file discover_wa_endpoint.R} on its own to see why."))
   }
-  if (!nzchar(GQL_URL)) GQL_URL <- .ep$url
-  if (!nzchar(WA_KEY))  WA_KEY  <- .ep$key
+  # THE PAIR IS ATOMIC -- take BOTH discovered values, never one of each.
+  # The bundle carries several `da2-` keys and only the one sitting in the same
+  # chunk as this hostname works, so a fresh edge with a stale key fails with
+  # CloudFront's 503 "Lambda function is invalid" -- indistinguishable from a
+  # retired edge, and it cost an hour on 2026-09-12 before nearly being written
+  # up as "WA now blocks non-browser clients".
+  #
+  # Filling in only the missing half is what produced exactly that pairing in
+  # CI: meet-forecast.yml sets CITIUS_WA_GRAPHQL_KEY (a secret stored
+  # 2026-09-09, the day edge 4881 was retired) and does NOT set
+  # CITIUS_WA_GRAPHQL_URL, so the URL was discovered fresh while the dead key
+  # was kept. A half-configured override is not an override; it is a broken pair.
+  if (nzchar(GQL_URL) != nzchar(WA_KEY)) {
+    cli::cli_alert_warning(c(
+      "Only one half of the WA endpoint pair was configured; ignoring it and using
+       the discovered pair. Set BOTH {.envvar CITIUS_WA_GRAPHQL_URL} and
+       {.envvar CITIUS_WA_GRAPHQL_KEY} to override deliberately."))
+  }
+  GQL_URL <- .ep$url
+  WA_KEY  <- .ep$key
   cli::cli_alert_success("Endpoint discovered: {.val {.ep$edge}}")
 }
 
