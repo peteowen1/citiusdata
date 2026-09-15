@@ -64,8 +64,15 @@ $NSims = if ($env:AB_NSIMS) { [int]$env:AB_NSIMS } else { 3000 }
 # at 3,000 would mix two noise levels inside one arm with nothing to show for
 # it -- the per-meet cache files carry no sim count in their own names, so
 # nothing else would catch it.
-$CTRL_CACHE = "backtest_cache_ab${stamp}_n${NSims}_ctrl"
-$ARM_CACHE  = "backtest_cache_ab${stamp}_n${NSims}_nbcomb"
+# AB_TAG distinguishes runs whose PANEL differs, not just their settings. The
+# _arm.rds fingerprint records resolved settings, so it cannot tell two runs
+# apart when the difference is which meets were selected -- and on 2026-09-15 a
+# capped run silently scored only 2016-2019 meets. Tag a run whenever the meet
+# selection changes, or its cache will look interchangeable with one that
+# measured a different era.
+$Tag = if ($env:AB_TAG) { "_" + $env:AB_TAG } else { "" }
+$CTRL_CACHE = "backtest_cache_ab${stamp}_n${NSims}${Tag}_ctrl"
+$ARM_CACHE  = "backtest_cache_ab${stamp}_n${NSims}${Tag}_nbcomb"
 
 # Held equal across both arms. Taken from the 2026-09-14 trial's fingerprint so
 # this is a continuation of that comparison, not a new one with drifted settings.

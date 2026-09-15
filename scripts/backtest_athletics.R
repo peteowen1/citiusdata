@@ -1196,6 +1196,24 @@ NOFAM$rows <- 0L; NOFAM$meets <- 0L; NOFAM$events <- character()
 
 n <- min(nrow(todo), MAX_PER_RUN)
 
+# SPREAD THE CAPPED SELECTION ACROSS TIME. `pool` is sampled evenly across the
+# calendar (line ~1123) but then `setorder(pool, comp_start)` leaves it in
+# ascending date order, and `todo` inherits that. The run loop below is
+# `seq_len(n)`, so a run that does NOT complete the whole pool scores the OLDEST
+# meets in it -- with a cap, processing order IS selection.
+#
+# Measured 2026-09-15: a 100-meet cap on a 900-meet pool scored 2016-01-29 to
+# 2019-03-19 ONLY -- 81% of it 2016-2018, nothing at all from 2023 onward -- and
+# reported it as a backtest of the corpus. This is the same symptom
+# DECISIONS.md:890 recorded on 2026-09-02 ("landed entirely on 2016-2018 meets
+# despite the underlying T1+T2 pool spanning 2016-2026") and concluded was "in
+# per-meet scoring, not pool selection". It is neither: it is date-ordered
+# processing plus a cap.
+#
+# Deterministic, so both arms of an A/B still walk the same meets in the same
+# order from the same cache state.
+if (nrow(todo) > n) todo <- todo[round(seq(1, .N, length.out = n))]
+
 # Embarrassingly parallel across meets: every iteration reads its own history
 # window, refits, simulates and would write its own cache file -- no meet
 # depends on another, and the eventual scoring step rebuilds everything from
