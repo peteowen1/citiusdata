@@ -22,7 +22,7 @@
 # fitted on is how a model ends up evaluated on its own training data. This is
 # for getting recent form into a FORECAST.
 #
-# meet_tier is assigned from the feed's per-race `tier` using the documented WAC
+# meet_tier is assigned from the feed's per-race `race_code` using the documented WAC
 # mapping (OW/DF/GW/GL -> T1_elite, A/B/C/D -> T2_strong, E/F -> T3_development),
 # because the catalogue only covers COMPLETED-and-harvested meets and will not
 # carry a meet this fresh. Every DF meet already in the catalogue is T1_elite,
@@ -64,7 +64,7 @@ say("%s rows, %d events, %d athletes, %s to %s", format(nrow(r), big.mark = ",")
     uniqueN(r$event_id), uniqueN(r$athlete_id),
     format(min(as.Date(r$date), na.rm = TRUE)), format(max(as.Date(r$date), na.rm = TRUE)))
 
-# --- meet_tier from the feed's tier, per the WAC mapping ---------------------
+# --- meet_tier from the feed's race_code, per the WAC mapping ----------------
 wac <- function(t) {
   t <- toupper(trimws(as.character(t)))
   data.table::fcase(t %in% c("OW", "DF", "GW", "GL"), "T1_elite",
@@ -72,7 +72,7 @@ wac <- function(t) {
                     t %in% c("E", "F"),               "T3_development",
                     default = NA_character_)
 }
-r[, meet_tier := wac(tier)]
+r[, meet_tier := wac(race_code)]
 say("meet_tier assigned: %s", paste(sprintf("%s=%d", names(table(r$meet_tier, useNA = "ifany")),
                                              as.integer(table(r$meet_tier, useNA = "ifany"))), collapse = ", "))
 

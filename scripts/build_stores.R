@@ -21,7 +21,7 @@ library(data.table)
 OUT <- here::here("citiusdata", "data")
 
 # The catalogue's meet_tier is per-COMPETITION and anchor-guarded (see
-# build_competition_catalogue.R), unlike the feed's `tier`, which is
+# build_competition_catalogue.R), unlike the feed's `race_code`, which is
 # per-RESULT and non-monotonic once fitted (mid corrects harder than low --
 # .scratch/athletics-calendar/issues/03-diamond-league-tier-defect.md). Loaded
 # once here; only athletics stores join it (join_tier = TRUE below).
@@ -106,7 +106,7 @@ build <- function(src, dest, label, join_tier = FALSE, data = NULL) {
   # promotion. It is low-cardinality (~200 codes) and the rows are already
   # sorted by event and date, so dictionary encoding keeps the cost small.
   keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "round",
-            "tier", "meet_tier", "competition_id", "comp_start", "place", "race_key",
+            "race_code", "meet_tier", "competition_id", "comp_start", "place", "race_key",
             "sex", "discipline", "wind", "indoor", "comp_name", "venue_country")
   present <- intersect(keep, names(d))
   dropped <- setdiff(names(d), present)

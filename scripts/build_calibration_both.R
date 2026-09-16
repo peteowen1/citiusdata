@@ -50,9 +50,9 @@ clean <- flag_implausible(x)
 cal <- calibrate(clean, min_races = 30L, context_per_event = TRUE)
 
 say("tier offsets, fitted on meet_tier:")
-print(as.data.table(cal$tier))
+print(as.data.table(cal$race_code))
 say("(compare calibration_corpus_csigma.rds, fitted on the feed tier)")
-old <- tryCatch(as.data.table(readRDS(file.path(OUT, "calibration_corpus_csigma.rds"))$tier),
+old <- tryCatch(as.data.table(readRDS(file.path(OUT, "calibration_corpus_csigma.rds"))$race_code),
                 error = function(e) NULL)
 if (!is.null(old)) print(old)
 

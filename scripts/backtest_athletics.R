@@ -873,7 +873,7 @@ outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
 # 2026-09-04 WAC promotion actually reaches the model). Narrowing it away would
 # silently drop the arm back to the feed's `tier` and report a dead heat --
 # the same trap the `wind` and `indoor` notes above describe.
-keep_cols <- c("athlete_id", "event_id", "date", "perf", "age", "round", "tier",
+keep_cols <- c("athlete_id", "event_id", "date", "perf", "age", "round", "race_code",
                "meet_tier", "competition_id", "comp_start", "place", "race_key",
                "wind", "momentum", "indoor", "venue_country")
 if (!is.null(clean)) clean <- clean[, intersect(keep_cols, names(clean)), with = FALSE]
@@ -1546,9 +1546,9 @@ run_meet <- function(i) {
     # 4,273 scored races disagree with themselves on tier (none currently mix OW
     # with non-OW, so no verdict actually flips today), and 449 races carry no
     # tier at all. Said out loud rather than left to a silent modal pick.
-    .tier_race <- .mode1(field$tier)
+    .tier_race <- .mode1(field$race_code)
     if (CHAMP_OK && is.na(.tier_race)) local_champ_na <- local_champ_na + 1L
-    if (CHAMP_OK && data.table::uniqueN(field$tier, na.rm = TRUE) > 1L)
+    if (CHAMP_OK && data.table::uniqueN(field$race_code, na.rm = TRUE) > 1L)
       local_champ_mixed <- local_champ_mixed + 1L
     if (CHAMP_OK && isTRUE(citius:::.is_championship(.tier_race))) {
       entrants <- project_championship(entrants, calibration)
@@ -1640,7 +1640,7 @@ run_meet <- function(i) {
       entrants[, ability := ability + cw * (prior_mu - ability)]
     }
     if (!is.na(TIER_SHRINK)) {
-      entrants <- project_tier(entrants, .mode1(field$tier), calibration,
+      entrants <- project_tier(entrants, .mode1(field$race_code), calibration,
                                shrink = TIER_SHRINK)
     }
     if (!is.na(ROUND_SHRINK)) {
@@ -2052,12 +2052,12 @@ if (nzchar(SHOCK_FILE)) {
   if (SHOCK$n == 0L) cli::cli_abort(c(
     "x" = "The shock add-back was configured but applied to ZERO races.",
     "i" = "Every prediction is unshifted, so this arm is identical to its control
-           and would score as a clean null. Check the tier/round/family keys in
+           and would score as a clean null. Check the race_code/round/family keys in
            {.file {SHOCK_FILE}} against what the scored races actually carry."))
   cli::cli_alert_success("Shock add-back applied to {SHOCK$n} race{?s}.")
   if (SHOCK$fallback > 0L) cli::cli_alert_warning(
     "{SHOCK$fallback} of those {round(100*SHOCK$fallback/SHOCK$n)}% used the
-     family-agnostic fallback cell (exact tier x round x family cell missing) --
+     family-agnostic fallback cell (exact race_code x round x family cell missing) --
      another family's expected shock, not this race's own.")
 }
 # CHAMPIONSHIP OFFSET COVERAGE. Reported every run, because a gate that fires on
@@ -2071,7 +2071,7 @@ if (CHAMP_OK) {
     "!" = "calibration$championship is present but the offset was applied to ZERO races.",
     "i" = "Expected on a population with no OW-tier meets (Diamond League, national
            championships), and wrong if this run was meant to include Olympics or
-           World Championships. Check what {.code tier} the scored races carry."))
+           World Championships. Check what {.code race_code} the scored races carry."))
 } else {
   cli::cli_alert_warning(
     "No calibration$championship table; championship races were NOT offset.")

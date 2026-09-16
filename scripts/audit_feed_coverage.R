@@ -78,7 +78,7 @@ cli::cli_h2("1. Field coverage — what the feed offers vs what we keep")
 # Fields we read but rename; everything else unlisted is genuinely dropped.
 captured <- c(
   eventId = "race_key", discipline = "discipline", sex = "sex_code",
-  isTechnical = "is_technical", category = "tier",
+  isTechnical = "is_technical", category = "race_code",
   raceId = "race_key", raceNumber = "race_key", race = "round", date = "date",
   place = "place", mark = "mark_string", wind = "wind",
   performanceValue = "value_raw", country = "(unused)", athletes = "athlete_id",

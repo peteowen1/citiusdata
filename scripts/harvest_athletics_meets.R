@@ -101,7 +101,7 @@ if (nrow(todo_c)) {
     } else {
       if (nrow(r)) {
         r[, `:=`(comp_name = todo_c$name[i], comp_start = todo_c$start[i],
-                 comp_tier = todo_c$tier[i])]
+                 comp_tier = todo_c$race_code[i])]
       }
       saveRDS(r, file.path(COMP_CACHE, paste0(cid, ".rds")))
     }

@@ -490,7 +490,7 @@ events[, `:=`(predicted = event_id %in% predicted_events, generated_at = NOW)]
 # wire for a page that reads one athlete at a time.
 HIST_COLS <- c("athlete_id", "athlete_name", "date", "event_id", "discipline",
                "sex_code", "round", "mark_string", "mark", "perf", "place",
-               "wind", "tier", "venue_city", "age", "comp_name")
+               "wind", "race_code", "venue_city", "age", "comp_name")
 who <- unique(c(as.character(results$athlete_id), as.character(pred$athlete_id)))
 who <- who[!is.na(who)]
 # DELIBERATELY championship_results, NOT the corpus -- do not "align" this with

@@ -46,7 +46,7 @@ cat(sprintf("%s: %s results | %s meets | %s races\n", IN,
 # memory optimisation; anything added to it has to be checked against what
 # calibrate() reads.
 keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "sex",
-          "round", "tier", "race_key", "competition_id", "discipline",
+          "round", "race_code", "race_key", "competition_id", "discipline",
           "orientation", "is_technical", "nomark_observable", "source", "wind")
 x <- x[, intersect(keep, names(x)), with = FALSE]
 cat(sprintf("narrowed to %d columns (%s)\n", ncol(x),
@@ -80,8 +80,8 @@ cat(sprintf("converged     : %s\n", cal$converged))
 
 cat("\n--- round ---\nbaseline:\n"); print(old$round)
 cat("corpus:\n"); print(cal$round)
-cat("\n--- tier ---\nbaseline:\n"); print(old$tier)
-cat("corpus:\n"); print(cal$tier)
+cat("\n--- tier ---\nbaseline:\n"); print(old$race_code)
+cat("corpus:\n"); print(cal$race_code)
 
 e1 <- as.data.table(old$events)[, .(event_id, s1 = sigma_within, c1 = condition_sd,
                                     f1 = foul_rate, n1 = n_races)]

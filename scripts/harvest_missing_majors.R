@@ -114,7 +114,7 @@ want <- cc[grepl(MAJOR, name, ignore.case = TRUE, perl = TRUE) &
 miss <- want[!competition_id %in% have]
 cli::cli_h2("Majors in the feed: {nrow(want)} | already harvested: {sum(want$competition_id %in% have)} | missing: {nrow(miss)}")
 print(miss[order(start), .(competition_id, name = substr(name, 1, 48),
-                           start = substr(start, 1, 10), tier)])
+                           start = substr(start, 1, 10), race_code)])
 if (!nrow(miss)) { cli::cli_alert_success("Nothing missing."); quit(save = "no") }
 
 got <- list()

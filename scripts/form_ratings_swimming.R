@@ -289,7 +289,7 @@ stopifnot("swimming event registry is empty" = nrow(reg) > 0)
 cat0 <- setDT(read_parquet(file.path(OUT, "swim_competition_catalogue.parquet")))
 stopifnot("swim_competition_catalogue.parquet loaded 0 rows" = nrow(cat0) > 0)
 cat0[, competition_id := as.character(competition_id)]
-cat0 <- cat0[, .(competition_id, tier)]
+cat0 <- cat0[, .(competition_id, race_code)]
 stopifnot("competition_id must be unique in the catalogue" =
             !anyDuplicated(cat0$competition_id))
 
@@ -341,12 +341,12 @@ if (nrow(d) < n0)
 # row regardless of match (only 64 of 24,524 competitions carry a tier; an
 # inner join would drop 99.7% of the corpus, which is wrong -- tier affects
 # the METRIC WEIGHT below, never inclusion in rating).
-if ("tier" %chin% names(d)) d[, tier := NULL]
+if ("race_code" %chin% names(d)) d[, race_code := NULL]
 n0 <- nrow(d)
 d <- merge(d, cat0, by = "competition_id", all.x = TRUE)
 stopifnot("the tier left-join changed the row count" = nrow(d) == n0)
 cat(sprintf("[%s] tier coverage: %.2f%% of rows carry T1_elite (left join, not filtered)\n",
-            TAG, 100 * mean(!is.na(d$tier) & d$tier == "T1_elite")))
+            TAG, 100 * mean(!is.na(d$race_code) & d$race_code == "T1_elite")))
 
 # `date` has a small NA rate (0.5% corpus-wide); fall back to the
 # competition's start date rather than dropping those rows outright.
@@ -650,15 +650,15 @@ if (uniqueN(d$block_key) != length(starts))
 
 Vath <- d$athlete_id; Vperf <- d$perf; Vplace <- d$place; Vrc <- d$rc
 Vev <- d$event_id; Vdate <- d$date; Vfam <- d$family
-Vtier <- d$tier; Vbk <- d$block_key; Vrk <- d$race_key
+Vtier <- d$race_code; Vbk <- d$block_key; Vrk <- d$race_key
 Vdaten <- as.numeric(d$date); Vyr <- year(d$date)
 
 # --- metric weight per row ---------------------------------------------------
-d[, w_tier := fifelse(!is.na(tier) & tier == "T1_elite", W_T1_ELITE, W_DEFAULT)]
+d[, w_tier := fifelse(!is.na(race_code) & race_code == "T1_elite", W_T1_ELITE, W_DEFAULT)]
 d[, w_rnd  := fifelse(rc == "final", 1, W_RND)]
 d[, wt := w_tier * w_rnd]
 wtab <- d[, .(races = uniqueN(block_key), rows = .N, weight = wt[1]),
-          by = .(tier = fifelse(is.na(tier), "(untiered)", tier), rc)][order(-weight, -races)]
+          by = .(race_code = fifelse(is.na(race_code), "(untiered)", race_code), rc)][order(-weight, -races)]
 cat(sprintf("[%s] METRIC WEIGHTS -- every combination present, %d rows:\n", TAG, nrow(wtab)))
 print(wtab)
 stopifnot("every row must carry a finite, positive weight" = all(is.finite(d$wt) & d$wt > 0),
@@ -688,7 +688,7 @@ for (r_ in seq_along(starts)) {
   if (i2 - i1 + 1L < 3L) next
   ii <- i1:i2
   z <- list(athlete_id = Vath[ii], perf = Vperf[ii], place = Vplace[ii], rc = Vrc[ii],
-            event_id = Vev[i1], family = Vfam[i1], tier = Vtier[i1],
+            event_id = Vev[i1], family = Vfam[i1], race_code = Vtier[i1],
             block_key = Vbk[i1], wt = Vwt[i1])
   dt0n <- min(Vdaten[ii]); yr <- Vyr[i1]
   a <- z$athlete_id; ev <- z$event_id; kk <- key(a, ev)
@@ -832,7 +832,7 @@ for (r_ in seq_along(starts)) {
   kap_e <- KAPPAv[[ev]]; if (is.null(kap_e) || !is.finite(kap_e)) kap_e <- KAPPA
   kv <- pmax(k0e * kap_e / (n_eff + kap_e), kfl_e)
   kt1_e <- KT1v[[ev]]; if (is.null(kt1_e) || !is.finite(kt1_e)) kt1_e <- KT1
-  if (kt1_e != 1 && !is.na(z$tier) && z$tier == "T1_elite") kv <- pmin(kv * kt1_e, 0.9)
+  if (kt1_e != 1 && !is.na(z$race_code) && z$race_code == "T1_elite") kv <- pmin(kv * kt1_e, 0.9)
   cen_e <- CENSv[[ev]]; if (is.null(cen_e) || !is.finite(cen_e)) cen_e <- CENS
   if (cen_e < 1 || CENSWIN < 1) {
     fac <- rep(1, length(a))

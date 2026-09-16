@@ -118,7 +118,7 @@ pull_day <- function(day) {
         rbindlist(lapply(e$races, function(rc)
           rbindlist(lapply(rc$startList %||% list(), function(s) data.table(
             day = day, event_title = t$eventTitle %||% NA_character_,
-            tier = t$rankingCategory %||% NA_character_,
+            race_code = t$rankingCategory %||% NA_character_,
             event = e$event %||% NA_character_,
             wa_event_id = as.character(e$eventId %||% NA),
             round = rc$race %||% NA_character_,
@@ -139,7 +139,7 @@ pull_day <- function(day) {
       rbindlist(lapply(t$events, function(e)
         rbindlist(lapply(e$summary %||% list(), function(s) data.table(
           day = day, event_title = t$eventTitle %||% NA_character_,
-          tier = t$rankingCategory %||% NA_character_,
+          race_code = t$rankingCategory %||% NA_character_,
           event = e$event %||% NA_character_,
           wa_event_id = as.character(e$eventId %||% NA),
           place_in_race = as.character(s$placeInRace %||% NA),
@@ -180,7 +180,7 @@ pull_day <- function(day) {
           # THE TIER. Per eventTitle, not per meet, because it genuinely varies
           # within one meet. Named `tier` to match championship_results.rds's
           # own column so the append needs no translation.
-          tier          = t$rankingCategory %||% NA_character_,
+          race_code          = t$rankingCategory %||% NA_character_,
           # --- event level ---
           event         = e$event %||% NA_character_,
           wa_event_id   = as.character(e$eventId %||% NA),

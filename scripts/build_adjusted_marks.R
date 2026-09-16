@@ -42,7 +42,7 @@ reg <- as.data.table(citius::citius_events())[, .(event_id, discipline, sex, fam
 c0 <- setDT(read_parquet(file.path(D, "athletics_corpus.parquet"),
                          col_select = c("athlete_id","event_id","race_key","mark","perf",
                                         "date","wind","legal","indoor","scoreable",
-                                        "venue_city","venue_stadium","tier","place","comp_name")))
+                                        "venue_city","venue_stadium","race_code","place","comp_name")))
 c0[, athlete_id := as.character(athlete_id)]
 
 # BACKFILL THE VENUE WITHIN A RACE. Everyone in a race is at the same venue by
@@ -170,14 +170,14 @@ cat(sprintf("venue effects estimated up to %s (%s marks)\n",
             format(nrow(v), big.mark = ",")))
 v[, y := perf - wind_adj - indoor_adj]                     # wind and surface first
 v[, y := y - mean(y), by = .(athlete_id, event_id)]        # then ability
-v[is.na(tier) | !nzchar(tier), tier := "unknown"]
+v[is.na(race_code) | !nzchar(race_code), race_code := "unknown"]
 # then meet occasion - but LEAVE THE VENUE ITSELF OUT of the tier mean. A plain
 # `y - mean(y), by = .(tier, family)` lets a venue that dominates a tier demean
 # away its own effect: Zurich is 50-56% of every family's Diamond League Final
 # rows, so roughly half its true venue effect was being absorbed into the
 # "occasion" term before venue_adj was ever estimated. Measured, not hypothetical.
-v[, `:=`(t_sum = sum(y), t_n = .N), by = .(tier, family)]
-v[, `:=`(vt_sum = sum(y), vt_n = .N), by = .(tier, family, venue_city)]
+v[, `:=`(t_sum = sum(y), t_n = .N), by = .(race_code, family)]
+v[, `:=`(vt_sum = sum(y), vt_n = .N), by = .(race_code, family, venue_city)]
 v[, others_n := t_n - vt_n]
 # with too few other venues in the tier the leave-one-out mean is noisier than
 # the plain one, so fall back rather than trade bias for variance

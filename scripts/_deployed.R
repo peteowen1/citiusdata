@@ -556,11 +556,11 @@ deployed_history <- function(dir, events, from, to) {
       cli::cli_abort(c(
         "Rescue rebuild needs {.file competition_catalogue.parquet} and it is missing.",
         i = "DEPLOYED$calibration is fitted on the catalogue's meet_tier; without
-             it this store can only carry the feed's tier, which is the wrong
+             it this store can only carry the feed's race_code, which is the wrong
              label set for those offsets."))
     }
     keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "round",
-              "tier", "meet_tier", "competition_id", "comp_start", "place",
+              "race_code", "meet_tier", "competition_id", "comp_start", "place",
               "race_key", "sex", "discipline", "wind", "indoor", "comp_name")
     d <- d[, intersect(keep, names(d)), with = FALSE]
     data.table::setorderv(d, intersect(c("event_id", "date"), names(d)))

@@ -208,10 +208,10 @@ cli::cli_alert_success(
 # One row per race. Does not exist anywhere else: race_key is a column on the
 # result tables, never a table of its own.
 corp <- as.data.table(read_parquet(file.path(D, "athletics_corpus.parquet"),
-  col_select = c("race_key", "competition_id", "event_id", "date", "round", "tier")))
+  col_select = c("race_key", "competition_id", "event_id", "date", "round", "race_code")))
 races <- corp[!is.na(race_key), .(competition_id = first(competition_id),
                                    event_id = first(event_id), date = first(date),
-                                   round = first(round), tier = first(tier),
+                                   round = first(round), race_code = first(race_code),
                                    n_starters = .N), by = race_key]
 f_races <- file.path(OUT, "races.parquet")
 write_parquet(races, f_races)

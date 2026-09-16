@@ -23,7 +23,7 @@ say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), ..., 
 
 x <- as.data.table(read_parquet(file.path(D, "athletics_corpus.parquet"),
       col_select = c("athlete_id","event_id","date","perf","wind","indoor",
-                     "venue_city","round","tier","race_key","age","sex")))
+                     "venue_city","round","race_code","race_key","age","sex")))
 x <- x[!is.na(perf) & !is.na(event_id) & !is.na(date) & !is.na(athlete_id)]
 setorder(x, athlete_id, event_id, date)
 reg <- as.data.table(citius_events())[, .(event_id, family)]
@@ -31,12 +31,12 @@ x <- merge(x, reg, by = "event_id", all.x = TRUE)
 setorder(x, athlete_id, event_id, date)
 
 cal <- readRDS(file.path(D, "calibration_corpus_athfoul.rds"))
-x[, rc := .round_class(round)][, tc := .tier_class(tier)]
+x[, rc := .round_class(round)][, tc := .tier_class(race_code)]
 
 # --- context offsets, as the model applies them ------------------------------
 # cal$round / cal$tier are DATA.TABLES (round_class|offset|sd|n|precision),
 # not named vectors -- indexing them by name silently yields a list.
-ro <- as.data.table(cal$round); to <- as.data.table(cal$tier)
+ro <- as.data.table(cal$round); to <- as.data.table(cal$race_code)
 x[, r_off := ro$offset[match(rc, ro$round_class)]]
 x[, t_off := to$offset[match(tc, to$tier_class)]]
 x[!is.finite(r_off), r_off := 0][!is.finite(t_off), t_off := 0]

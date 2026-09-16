@@ -57,11 +57,11 @@ stopifnot("catalogue looks truncated - expected the full augmented table" =
 # The code lives per RESULT, so read it from the corpus rather than trusting a
 # summary column that may predate the augment steps.
 c0 <- setDT(read_parquet(file.path(D, "athletics_corpus.parquet"),
-                         col_select = c("competition_id","tier","scoreable","perf","date")))
+                         col_select = c("competition_id","race_code","scoreable","perf","date")))
 c0[, competition_id := as.character(competition_id)]
 c0 <- c0[scoreable == TRUE & is.finite(perf)]
 FLOOR_CODES <- c("OW", "GW", "DF", "GL", "A")
-codes <- c0[tier %chin% FLOOR_CODES,
+codes <- c0[race_code %chin% FLOOR_CODES,
             .(coded_results = .N, last_coded = max(date)), by = competition_id]
 stopifnot("no competition carries a top WA code - the corpus join is wrong" =
             nrow(codes) > 100)

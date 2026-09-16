@@ -148,7 +148,7 @@ if (file.exists(f_ent) && file.exists(f_hist)) {
   # Anything measured on an artefact written before 2026-08-14 describes the
   # reduced model, not DEPLOYED.
   MODEL_COLS <- c("athlete_id", "event_id", "date", "perf", "age", "round",
-                  "tier", "competition_id", "comp_start", "place", "race_key",
+                  "race_code", "competition_id", "comp_start", "place", "race_key",
                   "wind", "indoor", "venue_country")
   hist_at <- at[!is.na(perf) & !is.na(person_id)]
   hist_at[, athlete_id := as.character(person_id)]

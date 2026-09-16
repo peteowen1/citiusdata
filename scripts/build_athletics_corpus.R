@@ -76,7 +76,7 @@ say("career sweep:        %s rows | %s athletes | %s..%s",
 # ../../docs/incidents/corpus-race-key-merged-heats-2026-08-14.md). The career
 # route has none, and gets NA.
 keep <- c("source", "athlete_id", "event_id", "discipline", "date",
-          "competition_id", "comp_name", "round", "tier", "race_key",
+          "competition_id", "comp_name", "round", "race_code", "race_key",
           "value_raw", "mark_string", "mark", "place", "is_technical",
           "wind", "indoor", "legal", "venue_country", "venue_city",
           "venue_stadium", "age", "sex", "orientation", "perf")
@@ -84,7 +84,7 @@ na_for <- list(source = NA_character_, athlete_id = NA_character_,
                event_id = NA_character_, discipline = NA_character_,
                date = as.Date(NA), competition_id = NA_character_,
                comp_name = NA_character_, round = NA_character_,
-               tier = NA_character_, race_key = NA_character_,
+               race_code = NA_character_, race_key = NA_character_,
                value_raw = NA_real_,
                mark_string = NA_character_, mark = NA_real_, place = NA_integer_,
                is_technical = NA, wind = NA_real_, indoor = NA, legal = NA,
@@ -138,7 +138,7 @@ all[, mark_r := round(mark, 4)]
 # carries the round label, the venue and the no-mark; the career route carries
 # neither reliably. Sorting only by source would keep whichever sorted first and
 # discard the round label the context offsets depend on.
-all[, richness := (!is.na(round)) + (!is.na(place)) + (!is.na(tier)) +
+all[, richness := (!is.na(round)) + (!is.na(place)) + (!is.na(race_code)) +
                   (!is.na(venue_city)) + (source == "competition") +
                   # a row carrying the real race key outranks one without it:
                   # the key cannot be reconstructed from the columns it loses to

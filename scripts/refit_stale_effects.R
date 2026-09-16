@@ -22,7 +22,7 @@ say <- function(...) cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")), ..., 
 
 cols <- c("athlete_id", "event_id", "date", "perf", "mark", "wind", "indoor",
           "venue_country", "venue_city", "venue_stadium", "comp_name",
-          "round", "tier", "race_key", "competition_id", "age", "sex")
+          "round", "race_code", "race_key", "competition_id", "age", "sex")
 say("reading corpus ...")
 x <- as.data.table(read_parquet(file.path(D, "athletics_corpus.parquet"),
                                 col_select = all_of(cols)))

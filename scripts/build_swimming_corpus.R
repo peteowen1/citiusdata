@@ -77,7 +77,7 @@ keep <- c("source", "athlete_id", "athlete_name", "event_id", "discipline",
           # competition NAME turned Swim England's 17,317 ranked meets into
           # pseudo-competitions and the backtest reported 5,508 "competitions
           # with finals" against a true 43.
-          "competition_id", "comp_start", "tier",
+          "competition_id", "comp_start", "race_code",
           "course", "is_best", "race_key")
 # Fill missing columns with a TYPED NA. A bare NA is logical, and if every
 # source lacks a column the result is a logical column that then refuses a
@@ -88,7 +88,7 @@ na_for <- list(source = NA_character_, athlete_id = NA_character_,
                mark = NA_real_, mark_string = NA_character_, place = NA_integer_,
                round = NA_character_, comp_name = NA_character_,
                competition_id = NA_character_, comp_start = as.Date(NA),
-               tier = NA_character_, course = NA_character_,
+               race_code = NA_character_, course = NA_character_,
                is_best = NA, race_key = NA_character_)
 all <- rbindlist(lapply(parts, function(p) {
   for (m in setdiff(keep, names(p))) p[[m]] <- na_for[[m]]

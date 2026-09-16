@@ -48,7 +48,7 @@ say("calibration %s: %s races with a shrunk effect, %s athlete-events", CAL,
 # --- 1. the excess per race --------------------------------------------------
 reg <- as.data.table(citius_events())[, .(event_id, family)]
 rr[, round_class := .round_class(round)]
-rr[, tier_class := .tier_class(tier)]
+rr[, tier_class := .tier_class(race_code)]
 rr <- merge(rr, reg, by = "event_id")
 cell_ev  <- rr[, .(n_cell = .N, e_ev = mean(c_r)), by = .(event_id, tier_class, round_class)]
 cell_fam <- rr[, .(n_fcell = .N, e_fam = mean(c_r)), by = .(family, tier_class, round_class)]

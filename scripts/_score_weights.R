@@ -148,28 +148,37 @@ wac_score_weights <- function() {
   wac_weights_from_target(if (nzchar(zt)) as.numeric(zt) else 1.0)
 }
 
-# Cached race_key -> WAC class, returned as `race_tier`.
+# Cached race_key -> WAC class, returned as `race_code`.
 #
-# THE COLUMN IS RENAMED ON READ, ON PURPOSE. The corpus stores it as `tier`, and
-# a bare `tier` is ambiguous in this codebase because two unrelated
-# classifications share the word:
+# NAMING UPDATED 2026-09-16 (was `race_tier`): the canonical scheme in
+# docs/reference/tier-terminology.md reserves `race_tier` for the BUCKETED
+# 3-class R1/R2/R3 derivative (was `tier_class`), and uses `race_code` for
+# the raw WA per-race code this function returns -- this script had already
+# solved the exact disambiguation problem the terminology doc addresses, but
+# under a name that collided with the doc's later, wider decision. Renamed
+# here rather than left as a second, conflicting "race_tier".
+#
+# THE COLUMN IS RENAMED ON READ, ON PURPOSE. The corpus stores the raw code
+# as `tier` (not yet renamed at the source -- see the terminology doc for
+# why that's deferred), and a bare `tier` is ambiguous in this codebase
+# because two unrelated classifications share the word:
 #
 #   meet_tier   the CATALOGUE's rating of a MEETING: T1_elite, T2_strong,
 #               T3_development. What the lab's test set is filtered on.
-#   race_tier   the World Athletics category of a RACE: OW, GL, GW, DF, A-F.
+#   race_code   the World Athletics category of a RACE: OW, GL, GW, DF, A-F.
 #               What the scoring weights use.
 #
 # They cross: a T1_elite meeting contains races of several WAC classes. Weltklasse
-# Zurich's Diamond League disciplines are race_tier GW while its supporting
-# programme is race_tier F, and both sit inside meet_tier T1_elite. Ninety of the
-# 849 held-out races in the "elite" test set are race_tier F for exactly that
+# Zurich's Diamond League disciplines are race_code GW while its supporting
+# programme is race_code F, and both sit inside meet_tier T1_elite. Ninety of the
+# 849 held-out races in the "elite" test set are race_code F for exactly that
 # reason.
 #
 # The stored column keeps its name -- renaming it would invalidate a 7.5M-row
 # parquet store and every cached artefact -- so the disambiguation happens here,
 # at the one place every scorer reads it.
-.race_tier_lookup <- function(out_dir) {
-  f <- file.path(out_dir, "race_tier.rds")
+.race_code_lookup <- function(out_dir) {
+  f <- file.path(out_dir, "race_code.rds")
   src <- file.path(out_dir, "championship_results.rds")
   # FINGERPRINTED, because this cache had no invalidation at all. It is built
   # once from championship_results.rds and then returned forever: every scorer
@@ -195,10 +204,10 @@ wac_score_weights <- function() {
     fp <- attr(got, "src_fp")
     if (!is.null(fp) && isTRUE(all.equal(fp, want))) return(got)
     cli::cli_alert_info(
-      "race_tier.rds is stale against championship_results.rds ({if (is.null(fp)) 'no fingerprint' else 'fingerprint differs'}); rebuilding.")
+      "race_code.rds is stale against championship_results.rds ({if (is.null(fp)) 'no fingerprint' else 'fingerprint differs'}); rebuilding.")
   }
   ch <- data.table::setDT(readRDS(src))
-  lk <- unique(ch[, .(race_key, race_tier = tier)], by = "race_key")
+  lk <- unique(ch[, .(race_key, race_code = race_code)], by = "race_key")
   rm(ch); invisible(gc())
   attr(lk, "src_fp") <- want
   saveRDS(lk, f)
@@ -211,15 +220,15 @@ wac_score_weights <- function() {
 # unweighted one with nothing to say which had happened.
 attach_score_weight <- function(d, out_dir, quiet = FALSE) {
   w <- wac_score_weights()
-  # Accept a legacy `tier` column but work in `race_tier` from here on, so no
+  # Accept a legacy `tier` column but work in `race_code` from here on, so no
   # caller downstream has to guess which classification it is holding.
-  if ("tier" %in% names(d) && !"race_tier" %in% names(d))
-    data.table::setnames(d, "tier", "race_tier")
-  if (!"race_tier" %in% names(d)) {
-    d <- merge(d, .race_tier_lookup(out_dir), by = "race_key", all.x = TRUE)
+  if ("tier" %in% names(d) && !"race_code" %in% names(d))
+    data.table::setnames(d, "tier", "race_code")
+  if (!"race_code" %in% names(d)) {
+    d <- merge(d, .race_code_lookup(out_dir), by = "race_key", all.x = TRUE)
   }
-  d[is.na(race_tier), race_tier := "unknown"]
-  j <- match(d$race_tier, names(w))
+  d[is.na(race_code), race_code := "unknown"]
+  j <- match(d$race_code, names(w))
   d[, sw := data.table::fifelse(is.na(j), 1, unname(w[j]))]
   # NORMALISED TO MEAN 1, which matters more than it looks.
   #
@@ -238,7 +247,7 @@ attach_score_weight <- function(d, out_dir, quiet = FALSE) {
   if (is.finite(mw) && mw > 0) d[, sw := sw / mw]
   if (!quiet) {
     s <- d[, .(races = data.table::uniqueN(race_key), weight = data.table::first(sw)),
-           by = race_tier]
+           by = race_code]
     data.table::setorder(s, -weight, -races)
     cat("scoring weights in force:\n")
     print(s)

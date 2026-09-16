@@ -19,8 +19,8 @@
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages({library(data.table); library(arrow)})
 
-.tier_class <- function(tier) {
-  t <- toupper(trimws(as.character(tier)))
+.tier_class <- function(race_code) {
+  t <- toupper(trimws(as.character(race_code)))
   known <- c("OW", "GW", "GL", "A", "B", "C", "D", "DF", "E", "F")
   out <- rep("mid", length(t))
   out[t %in% c("DF", "GW", "OW", "GL", "A")] <- "top"
@@ -47,7 +47,7 @@ say("calibration %s: %s races with a shrunk effect, %s athlete-events", CAL,
 # --- 1. the excess per race --------------------------------------------------
 reg <- as.data.table(citius_events())[, .(event_id, family)]
 rr[, round_class := .round_class(round)]
-rr[, tier_class := .tier_class(tier)]
+rr[, tier_class := .tier_class(race_code)]
 rr <- merge(rr, reg, by = "event_id")
 cell_ev  <- rr[, .(n_cell = .N, e_ev = mean(c_r)), by = .(event_id, tier_class, round_class)]
 cell_fam <- rr[, .(n_fcell = .N, e_fam = mean(c_r)), by = .(family, tier_class, round_class)]

@@ -460,8 +460,8 @@ cat_tbl <- ch[, .(
   # them. A brief "fix" adding short codes here was reverted as inert.
   finals      = uniqueN(race_key[grepl("final", round, ignore.case = TRUE) &
                                    !grepl("semi", round, ignore.case = TRUE)]),
-  tier_codes  = paste(sort(unique(na.omit(tier))), collapse = "/"),
-  n_tier      = uniqueN(na.omit(tier))
+  tier_codes  = paste(sort(unique(na.omit(race_code))), collapse = "/"),
+  n_tier      = uniqueN(na.omit(race_code))
 ), by = competition_id]
 cat_tbl <- merge(cat_tbl, meet_strength, by = "competition_id", all.x = TRUE)
 cat_tbl[, meet_type := cat_of(comp_name)]
@@ -667,7 +667,7 @@ ok7 <- anchor("no Diamond League entry is a road race",
                       ignore.case = TRUE, perl = TRUE))))
 if (!all(ok1, ok2, ok3, ok4, ok5, ok6, ok7, ok8, ok9, ok10, ok11)) {
   cat("
-An anchor failed. The tier metric is measuring something other than
+An anchor failed. The race_code metric is measuring something other than
 ")
   cat("meet quality -- fix the metric, do not special-case the exception.
 ")

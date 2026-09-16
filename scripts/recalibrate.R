@@ -45,8 +45,8 @@ cat("v1:\n"); print(cal1$round)
 cat("v2:\n"); print(cal2$round)
 
 cat("\n--- tier ---\n")
-cat("v1:\n"); print(cal1$tier)
-cat("v2:\n"); print(cal2$tier)
+cat("v1:\n"); print(cal1$race_code)
+cat("v2:\n"); print(cal2$race_code)
 
 # The headline test. Pooled heats should have deflated condition_sd and inflated
 # sigma_within; separating them should reverse both.
