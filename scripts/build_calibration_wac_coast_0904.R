@@ -36,7 +36,7 @@ say("calibrating base on meet_tier ...")
 clean <- flag_implausible(x)
 cal <- calibrate(clean, min_races = 30L)
 say(sprintf("base calibrate() done at +%.1f min", as.numeric(difftime(Sys.time(), t0, units = "mins"))))
-print(as.data.table(cal$race_code))
+print(as.data.table(cal$tier))
 
 say("fitting athlete coasting traits ...")
 ct <- fit_coasting_trait(clean, min_heats = 2L, shrink_k = 5.0)

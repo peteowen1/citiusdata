@@ -80,8 +80,8 @@ cat(sprintf("converged     : %s\n", cal$converged))
 
 cat("\n--- round ---\nbaseline:\n"); print(old$round)
 cat("corpus:\n"); print(cal$round)
-cat("\n--- tier ---\nbaseline:\n"); print(old$race_code)
-cat("corpus:\n"); print(cal$race_code)
+cat("\n--- tier ---\nbaseline:\n"); print(old$tier)
+cat("corpus:\n"); print(cal$tier)
 
 e1 <- as.data.table(old$events)[, .(event_id, s1 = sigma_within, c1 = condition_sd,
                                     f1 = foul_rate, n1 = n_races)]

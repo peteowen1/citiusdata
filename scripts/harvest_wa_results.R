@@ -178,7 +178,7 @@ pull_day <- function(day) {
           day           = day,
           event_title   = t$eventTitle %||% NA_character_,
           # THE TIER. Per eventTitle, not per meet, because it genuinely varies
-          # within one meet. Named `tier` to match championship_results.rds's
+          # within one meet. Named `race_code` to match championship_results.rds's
           # own column so the append needs no translation.
           race_code          = t$rankingCategory %||% NA_character_,
           # --- event level ---

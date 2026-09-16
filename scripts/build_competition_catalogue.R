@@ -667,7 +667,7 @@ ok7 <- anchor("no Diamond League entry is a road race",
                       ignore.case = TRUE, perl = TRUE))))
 if (!all(ok1, ok2, ok3, ok4, ok5, ok6, ok7, ok8, ok9, ok10, ok11)) {
   cat("
-An anchor failed. The race_code metric is measuring something other than
+An anchor failed. The meet_tier/meet_strength metric is measuring something other than
 ")
   cat("meet quality -- fix the metric, do not special-case the exception.
 ")

@@ -158,10 +158,11 @@ wac_score_weights <- function() {
 # under a name that collided with the doc's later, wider decision. Renamed
 # here rather than left as a second, conflicting "race_tier".
 #
-# THE COLUMN IS RENAMED ON READ, ON PURPOSE. The corpus stores the raw code
-# as `tier` (not yet renamed at the source -- see the terminology doc for
-# why that's deferred), and a bare `tier` is ambiguous in this codebase
-# because two unrelated classifications share the word:
+# THE COLUMN IS DISAMBIGUATED HERE, ON PURPOSE. championship_results.rds now
+# stores the raw code as `race_code` at the source too (migrated 2026-09-16),
+# but a bare `tier` is still ambiguous anywhere it survives in older cached
+# artefacts or caller-supplied tables, because two unrelated classifications
+# share the word:
 #
 #   meet_tier   the CATALOGUE's rating of a MEETING: T1_elite, T2_strong,
 #               T3_development. What the lab's test set is filtered on.
@@ -174,9 +175,10 @@ wac_score_weights <- function() {
 # 849 held-out races in the "elite" test set are race_code F for exactly that
 # reason.
 #
-# The stored column keeps its name -- renaming it would invalidate a 7.5M-row
-# parquet store and every cached artefact -- so the disambiguation happens here,
-# at the one place every scorer reads it.
+# Older cached artefacts (calibration objects, pre-migration RDS/parquet
+# copies) may still carry the pre-rename `tier` name -- the disambiguation
+# happens here, at the one place every scorer reads it, so no caller has to
+# know which vintage it's holding.
 .race_code_lookup <- function(out_dir) {
   f <- file.path(out_dir, "race_code.rds")
   src <- file.path(out_dir, "championship_results.rds")

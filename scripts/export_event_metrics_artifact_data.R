@@ -169,7 +169,7 @@ say("wrote event_metrics_artifact.json")
 
 # also write population metadata for the artifact header
 meta <- list(arm = "backtest_combined_full.rds", holdout = format(HOLDOUT),
-            race_code = "T1_elite", races = uniqueN(d$race_id), rows = nrow(d),
+            tier = "T1_elite", races = uniqueN(d$race_id), rows = nrow(d),
             date_span = c(format(min(d$date)), format(max(d$date))),
             generated_at = format(Sys.time()))
 write_json(meta, file.path(OUT, "event_metrics_artifact_meta.json"), auto_unbox = TRUE, digits = 6)

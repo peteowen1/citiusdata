@@ -36,7 +36,7 @@ x[, rc := .round_class(round)][, tc := .tier_class(race_code)]
 # --- context offsets, as the model applies them ------------------------------
 # cal$round / cal$tier are DATA.TABLES (round_class|offset|sd|n|precision),
 # not named vectors -- indexing them by name silently yields a list.
-ro <- as.data.table(cal$round); to <- as.data.table(cal$race_code)
+ro <- as.data.table(cal$round); to <- as.data.table(cal$tier)
 x[, r_off := ro$offset[match(rc, ro$round_class)]]
 x[, t_off := to$offset[match(tc, to$tier_class)]]
 x[!is.finite(r_off), r_off := 0][!is.finite(t_off), t_off := 0]
