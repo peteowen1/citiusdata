@@ -32,7 +32,16 @@ library(data.table)
 OUT <- here::here("citiusdata", "data")
 
 ch <- tryCatch(
-  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  # `columns=` is load-bearing: without it this is SELECT * (33 cols x 5M
+  # rows). This is the full set the script touches, including via the
+  # `fin_rows`/`ath_q` subsets. venue_country is read behind an
+  # `if ("venue_country" %in% names(ch))` guard below, so omitting it would
+  # yield a silently-NA country column rather than an error -- every other
+  # column here fails loudly if dropped.
+  with_citius_db_connection(function(conn) load_championship_results(
+    conn, columns = c("competition_id", "comp_name", "date", "venue_country",
+                      "athlete_id", "event_id", "race_key", "round",
+                      "race_code", "perf")), read_only = TRUE),
   error = function(e) {
     cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
     NULL
