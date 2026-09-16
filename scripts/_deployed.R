@@ -343,7 +343,47 @@ DEPLOYED <- list(
   # `adjust_race` and so would have turned the race-shock strip off for every
   # family while the stamp still read `strip4fam`. Fixed in the same session;
   # see that branch's own comment.
-  event_params = "event_params.rds"
+  event_params = "event_params.rds",
+
+  # CROSS-EVENT NEIGHBOUR COMBINE. PROMOTED 2026-09-16, Pete's call despite a
+  # null result -- read this before trusting or extending it.
+  #
+  # combine_neighbour_ability() (citius/R/neighbour_combine.R) lets an
+  # athlete's OTHER middle/long-distance events inform their rating in this
+  # one: Ingebrigtsen was rated 2nd-worst of 844 Budapest finalists because
+  # his own 5000m history was three tactical championship finals, while three
+  # fast Diamond League 1500ms the same month were invisible to that card.
+  #
+  # MEASURED ON THE PROPERLY-POWERED TEST, 2026-09-16: 1,766 R1 races (races
+  # whose OWN tier code is elite, not their meet's -- see
+  # docs/reference/modelling-traps.md, "R1 vs M1"), 201 T1_elite meets,
+  # 376,674 pairwise comparisons for concordance.
+  #   gold Brier    +0.04%  p=0.54  (wrong direction)
+  #   medal Brier   +0.00%  p=0.96  (exactly flat)
+  #   marks, target -0.84%  p=0.13
+  #   concordance   +0.08pp p=0.10  (closest to significant all session)
+  # NOTHING CLEARS SIGNIFICANCE. The marks gain also SHRANK every time the
+  # sample got bigger (meet-tier n=166: -2.2% -> race-tier n=269: -1.6% ->
+  # this run n=1,808: -0.84%) -- the signature of a real-zero effect
+  # regressing as noise washes out, not a real effect becoming clearer with
+  # more power.
+  #
+  # SHIPPED ANYWAY. It targets a real, named defect and passes do-no-harm: no
+  # metric moved significantly in either direction, on any of the three cuts
+  # tried (meet-tier T1, small race-tier, this properly-powered race-tier
+  # run). It is NOT validated to help; it is validated not to measurably
+  # hurt. The population-average correlation this uses treats every athlete
+  # as an equally-plausible cross-event double, which is very plausibly why
+  # it is a wash rather than a win -- revisit by restricting the neighbour
+  # term to athletes who have genuinely raced both events recently, per
+  # docs/reference/modelling-traps.md, before trusting this further.
+  neighbour_combine = list(
+    enabled = TRUE,
+    events = c("AT-800Metres-M", "AT-1500Metres-M", "AT-3000Metres-M",
+               "AT-5000Metres-M", "AT-10000Metres-M"),
+    link_days = 1825L,
+    link_athletes = 25000L
+  )
 )
 Sys.setenv(CITIUS_MARKS_BLEND = as.character(DEPLOYED$marks_blend))
 
@@ -414,7 +454,18 @@ deployed_aging <- function(dir) {
 #' and it is the only route fast enough to use during a live meet.
 #'
 #' TODO(pete): decide the missing-store behaviour -- see the note below.
+#'
+#' Unions in `DEPLOYED$neighbour_combine$events` whenever that mechanism is
+#' on, regardless of what the caller asked for. `combine_neighbour_ability()`
+#' needs an athlete's rating in every neighbour event, not just the one being
+#' carded -- backtest_athletics.R does the same widening per-meet
+#' (`NEIGHBOUR_EVENTS <- unique(c(...))`). Centralised here rather than in
+#' every predict_*.R script, per this file's own header rule: no shipping
+#' script names a model input directly.
 deployed_history <- function(dir, events, from, to) {
+  if (isTRUE(DEPLOYED$neighbour_combine$enabled)) {
+    events <- unique(c(events, DEPLOYED$neighbour_combine$events))
+  }
   store <- file.path(dir, DEPLOYED$history_store)
   if (dir.exists(store)) {
     return(read_results_store(store, events = events, from = from, to = to))
@@ -540,7 +591,49 @@ deployed_race_context <- function(round_class = "final",
 deployed_ability <- function(past, as_of, calibration,
                              debias = deployed_debias_offsets(),
                              event_params = deployed_event_params()) {
-  deployed_debias(.deployed_ability_raw(past, as_of, calibration, event_params), debias)
+  ab <- .deployed_ability_raw(past, as_of, calibration, event_params)
+  if (isTRUE(DEPLOYED$neighbour_combine$enabled)) {
+    links <- deployed_neighbour_links(as_of, calibration)
+    if (!is.null(links) && nrow(links)) ab <- combine_neighbour_ability(ab, links)
+  }
+  deployed_debias(ab, debias)
+}
+
+# One set of links per calendar year of `as_of`, not per call -- an offset,
+# a correlation and a quantile are population quantities that move slowly.
+# Mirrors backtest_athletics.R's `.neighbour_links_for()`.
+.NEIGHBOUR_LINK_CACHE <- new.env(parent = emptyenv())
+
+#' Fit (and cache) the cross-event links `DEPLOYED$neighbour_combine` names
+#'
+#' Same sampling as the backtest arm that measured this: a uniform sample of
+#' up to `link_athletes` athletes and `estimate_ability(..., only = ids)`,
+#' which is citius/CLAUDE.md's fast path -- population priors are computed
+#' over everyone regardless, `only=` skips the expensive per-athlete body for
+#' the rest. `NULL` if the mechanism is off, so callers can `if (!is.null())`
+#' without checking the flag twice.
+deployed_neighbour_links <- function(as_of, calibration,
+                                     dir = here::here("citiusdata", "data")) {
+  cfg <- DEPLOYED$neighbour_combine
+  if (!isTRUE(cfg$enabled)) return(NULL)
+  key <- format(as.Date(as_of), "%Y")
+  cached <- mget(key, envir = .NEIGHBOUR_LINK_CACHE, ifnotfound = list(NULL))[[1]]
+  if (!is.null(cached)) return(cached)
+  nb_hist <- deployed_history(dir, events = cfg$events,
+                              from = as.Date(as_of) - cfg$link_days,
+                              to = as.Date(as_of) - 1L)
+  nb_hist <- nb_hist[!is.na(perf)]
+  ids <- unique(as.character(nb_hist$athlete_id))
+  if (length(ids) > cfg$link_athletes) {
+    set.seed(20260914L)   # same sample as the backtest arm that measured this
+    ids <- sample(ids, cfg$link_athletes)
+  }
+  pop <- estimate_ability(nb_hist, as_of = as.Date(as_of) - 1L,
+                          calibration = calibration, only = ids)
+  links <- fit_neighbour_links(pop, target_events = cfg$events,
+                               neighbour_events = cfg$events)
+  assign(key, links, envir = .NEIGHBOUR_LINK_CACHE)
+  links
 }
 
 #' Persist the ability table a card run has already computed.
