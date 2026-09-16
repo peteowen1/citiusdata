@@ -455,17 +455,26 @@ deployed_aging <- function(dir) {
 #'
 #' TODO(pete): decide the missing-store behaviour -- see the note below.
 #'
-#' Unions in `DEPLOYED$neighbour_combine$events` whenever that mechanism is
-#' on, regardless of what the caller asked for. `combine_neighbour_ability()`
-#' needs an athlete's rating in every neighbour event, not just the one being
-#' carded -- backtest_athletics.R does the same widening per-meet
-#' (`NEIGHBOUR_EVENTS <- unique(c(...))`). Centralised here rather than in
-#' every predict_*.R script, per this file's own header rule: no shipping
-#' script names a model input directly.
+#' DELIBERATELY DOES NOT widen `events` for `DEPLOYED$neighbour_combine`.
+#' Reviewed 2026-09-16 (silent-failure-hunter): an earlier version of this
+#' function unconditionally unioned in the 5 neighbour events for every one
+#' of this function's ~30 callers, on the claim that it "mirrors
+#' backtest_athletics.R's per-meet widening" -- checked directly and that
+#' claim was WRONG. The backtest's per-meet read (`meet_events <-
+#' unique(block$event_id)`, backtest_athletics.R:1258) is NEVER unioned with
+#' `NEIGHBOUR_COMBINE_EVENTS`; only the once-a-year population-reference
+#' builder that FITS the links does that widening (`.neighbour_links_for()`,
+#' via the separate `NEIGHBOUR_EVENTS` global). So the validated arm only
+#' ever gave an athlete's own OTHER-event history to `combine_neighbour_ability()`
+#' when that athlete's CURRENT meet happened to also contest a neighbour
+#' event on its own card -- which is common for a multi-day championships
+#' (Ingebrigtsen's Budapest 1500m and 5000m were both on that programme) but
+#' NOT for a standalone Diamond League leg. Widening here would have shipped
+#' a materially richer information flow than the one the do-no-harm result
+#' was measured on. `deployed_neighbour_links()` still gets the full 5-event
+#' population it needs for FITTING the links, because it requests
+#' `cfg$events` explicitly -- it never relied on this widening.
 deployed_history <- function(dir, events, from, to) {
-  if (isTRUE(DEPLOYED$neighbour_combine$enabled)) {
-    events <- unique(c(events, DEPLOYED$neighbour_combine$events))
-  }
   store <- file.path(dir, DEPLOYED$history_store)
   if (dir.exists(store)) {
     return(read_results_store(store, events = events, from = from, to = to))
@@ -594,14 +603,41 @@ deployed_ability <- function(past, as_of, calibration,
   ab <- .deployed_ability_raw(past, as_of, calibration, event_params)
   if (isTRUE(DEPLOYED$neighbour_combine$enabled)) {
     links <- deployed_neighbour_links(as_of, calibration)
-    if (!is.null(links) && nrow(links)) ab <- combine_neighbour_ability(ab, links)
+    if (!is.null(links) && nrow(links)) {
+      before <- data.table::copy(ab$ability_raw)
+      ab <- combine_neighbour_ability(ab, links)
+      # LOGGED, not silent. Reviewed 2026-09-16: a genuinely broken instance
+      # (empty history, every pair failing fit_neighbour_links()'s min_n) is
+      # otherwise statistically indistinguishable from a healthy run, because
+      # this mechanism's own validated effect is near-zero either way -- so
+      # "nothing visibly happened" is the expected good outcome AND the
+      # silent-failure symptom. Same shape as deployed_debias()'s own
+      # "shifted N of M rows" line just below.
+      n_hit <- sum(!is.na(before) & !is.na(ab$ability_raw) &
+                     abs(before - ab$ability_raw) > 1e-12)
+      cli::cli_alert_info(
+        "neighbour_combine ({nrow(links)} link{?s}): adjusted {n_hit} of {nrow(ab)} ability rows.")
+    } else {
+      cli::cli_alert_info("neighbour_combine: 0 usable links this call; no rows adjusted.")
+    }
   }
   deployed_debias(ab, debias)
 }
 
-# One set of links per calendar year of `as_of`, not per call -- an offset,
-# a correlation and a quantile are population quantities that move slowly.
-# Mirrors backtest_athletics.R's `.neighbour_links_for()`.
+# One set of links per calendar year of `as_of` PER (calibration, config),
+# not per call -- an offset, a correlation and a quantile are population
+# quantities that move slowly, but they are fitted FROM a specific
+# calibration and event set and must not leak across a different one.
+#
+# KEYED ON MORE THAN THE YEAR, fixed 2026-09-16 (silent-failure-hunter): the
+# first version keyed only on `format(as_of, "%Y")`, so two calls in the same
+# R session for the same year but DIFFERENT calibrations -- e.g. a
+# diagnostic comparing a candidate calibration against the deployed one --
+# would have silently served the FIRST call's links, fitted under the wrong
+# calibration, to the second. No caller in this repo triggers it today (every
+# existing call site sources one calibration per process), but the function's
+# own signature takes `calibration` as a real argument, so the cache must
+# honour it rather than assume it never varies.
 .NEIGHBOUR_LINK_CACHE <- new.env(parent = emptyenv())
 
 #' Fit (and cache) the cross-event links `DEPLOYED$neighbour_combine` names
@@ -612,11 +648,18 @@ deployed_ability <- function(past, as_of, calibration,
 #' over everyone regardless, `only=` skips the expensive per-athlete body for
 #' the rest. `NULL` if the mechanism is off, so callers can `if (!is.null())`
 #' without checking the flag twice.
+#'
+#' Reads `cfg$events` directly via `deployed_history()`, not through a
+#' widened caller request -- this is the ONE place the neighbour events'
+#' history genuinely needs a full-population read, matching how
+#' backtest_athletics.R's `.neighbour_links_for()` reads `NEIGHBOUR_EVENTS`
+#' straight from the store rather than via any per-meet widening.
 deployed_neighbour_links <- function(as_of, calibration,
                                      dir = here::here("citiusdata", "data")) {
   cfg <- DEPLOYED$neighbour_combine
   if (!isTRUE(cfg$enabled)) return(NULL)
-  key <- format(as.Date(as_of), "%Y")
+  key <- digest::digest(list(year = format(as.Date(as_of), "%Y"),
+                             calibration = calibration, cfg = cfg))
   cached <- mget(key, envir = .NEIGHBOUR_LINK_CACHE, ifnotfound = list(NULL))[[1]]
   if (!is.null(cached)) return(cached)
   nb_hist <- deployed_history(dir, events = cfg$events,
@@ -632,6 +675,8 @@ deployed_neighbour_links <- function(as_of, calibration,
                           calibration = calibration, only = ids)
   links <- fit_neighbour_links(pop, target_events = cfg$events,
                                neighbour_events = cfg$events)
+  cli::cli_alert_info(
+    "neighbour_combine links {format(as.Date(as_of), '%Y')}: {nrow(links)} pair{?s} fitted across {length(ids)} athlete{?s}.")
   assign(key, links, envir = .NEIGHBOUR_LINK_CACHE)
   links
 }
