@@ -37,7 +37,11 @@ if (length(unique(vint)) > 1L) {
 }
 
 ch <- tryCatch(
-  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  # `columns=` is load-bearing: without it this is SELECT * (33 cols x 5M
+  # rows). Add any column you start reading off `ch`.
+  with_citius_db_connection(function(conn) load_championship_results(
+    conn, columns = c("race_key", "athlete_id", "mark", "place",
+                      "event_id", "date", "competition_id")), read_only = TRUE),
   error = function(e) {
     cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
     NULL

@@ -75,7 +75,11 @@ md <- report("p_medal", "hit_medal", "medal")
 # significant shift in MAE means the arm changed something it should not have.
 cat("\n=== MARKS (must stay flat) ===\n")
 champs <- tryCatch(
-  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  # Only the three columns the marks block below reads. Without `columns=`
+  # this is SELECT * -- 33 columns x 5M rows for three of them. Add to this
+  # list if you start reading another column from `champs`.
+  with_citius_db_connection(function(conn) load_championship_results(
+    conn, columns = c("race_key", "athlete_id", "mark")), read_only = TRUE),
   error = function(e) {
     cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
     NULL

@@ -22,7 +22,11 @@ line <- function(fmt, ...) cat(sprintf(paste0("  ", fmt, "\n"), ...))
 # ---------------------------------------------------------------- athletics --
 hdr("ATHLETICS")
 ch <- tryCatch(
-  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  # `columns=` is load-bearing: without it this is SELECT * (33 cols x 5M
+  # rows). Add any column you start reading off `ch`.
+  with_citius_db_connection(function(conn) load_championship_results(
+    conn, columns = c("competition_id", "athlete_id", "date", "race_key",
+                      "round", "event_id", "place")), read_only = TRUE),
   error = function(e) {
     cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
     NULL
