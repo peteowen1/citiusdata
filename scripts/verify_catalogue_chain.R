@@ -27,7 +27,22 @@ if (!is.na(bkf) && file.exists(bkf)) {
   cat(sprintf("backup   : %s rows x %d cols  (%s)\n",
               format(nrow(bk), big.mark = ","), ncol(bk), basename(bkf)))
 
+  # DELIBERATE RENAMES, not losses. 2026-09-16: `class` -> `meet_type` and
+  # `strength` -> `meet_strength`, part of the race_/meet_ prefix scheme in
+  # docs/reference/tier-terminology.md. Without this map the guard correctly
+  # (but unhelpfully) fails the first chain run after any rename. Each entry
+  # is old = new, and the NEW name must actually be present -- a rename that
+  # dropped the column instead of renaming it still fails, which is the
+  # behaviour worth keeping.
+  RENAMED <- c(class = "meet_type", strength = "meet_strength")
   lost_cols <- setdiff(names(bk), names(cur))
+  renamed_ok <- intersect(lost_cols, names(RENAMED))
+  renamed_ok <- renamed_ok[unname(RENAMED[renamed_ok]) %in% names(cur)]
+  if (length(renamed_ok)) {
+    cat("renamed (not lost):",
+        paste(sprintf("%s -> %s", renamed_ok, unname(RENAMED[renamed_ok])), collapse = ", "), "\n")
+    lost_cols <- setdiff(lost_cols, renamed_ok)
+  }
   if (length(lost_cols))
     fail <- c(fail, sprintf("%d column(s) lost vs the backup: %s",
                             length(lost_cols), paste(lost_cols, collapse = ", ")))

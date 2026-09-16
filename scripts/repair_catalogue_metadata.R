@@ -1,9 +1,9 @@
 # Repair catalogue rows whose metadata was blanked by the augment scripts.
 #
 # WHAT HAPPENED. augment_catalogue_road_half_majors.R had a "self-repair" block
-# that deleted rows and re-added them from three columns (competition_id, class,
-# meet_tier), nulling comp_name, year, results, athletes, events, strength. It
-# scoped the delete to class %chin% c("road_label", "world_other") - but it does
+# that deleted rows and re-added them from three columns (competition_id, meet_type,
+# meet_tier), nulling comp_name, year, results, athletes, events, meet_strength. It
+# scoped the delete to meet_type %chin% c("road_label", "world_other") - but it does
 # not own `world_other`, which build_competition_catalogue.R assigns. Measured on
 # the live file: world_other rows went 29 -> 37 and 16 of them lost every field
 # except the three. Separately, both augment scripts never copied the matched
@@ -26,14 +26,14 @@ stopifnot("catalogue missing" = file.exists(CAT),
 
 cur <- setDT(read_parquet(CAT)); cur[, competition_id := as.character(competition_id)]
 bak <- setDT(read_parquet(BAK)); bak[, competition_id := as.character(competition_id)]
-meta <- setdiff(names(cur), c("competition_id", "class", "meet_tier"))
+meta <- setdiff(names(cur), c("competition_id", "meet_type", "meet_tier"))
 cat(sprintf("catalogue rows %s | backup rows %s | metadata columns: %s\n",
             format(nrow(cur), big.mark = ","), format(nrow(bak), big.mark = ","),
             paste(meta, collapse = ", ")))
 
 blank <- function(dt) rowSums(!is.na(dt[, ..meta])) == 0L
 cat(sprintf("\nBEFORE: %d rows carry no metadata at all\n", sum(blank(cur))))
-print(cur[blank(cur), .N, by = .(class, meet_tier)][order(-N)])
+print(cur[blank(cur), .N, by = .(meet_type, meet_tier)][order(-N)])
 
 # --- pass 1: restore from the backup ------------------------------------------
 restored <- 0L

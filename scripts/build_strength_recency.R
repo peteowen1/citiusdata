@@ -1,6 +1,6 @@
-# Alternative meet-strength basis: CURRENT FORM instead of career best.
+# Alternative meet-meet_strength basis: CURRENT FORM instead of career best.
 #
-# WHY. The deployed `strength` scores each finalist by `a_q = max(pctl)` --
+# WHY. The deployed `meet_strength` scores each finalist by `a_q = max(pctl)` --
 # the best they have ever been in that event, over their whole career. Two
 # problems with that as a measure of "how strong was this field":
 #
@@ -97,19 +97,19 @@ out <- merge(out, road_only, by = "competition_id", all.x = TRUE)
 out[races_won_r < MIN_EVENTS & !(!is.na(all_road) & all_road), strength_r := NA_real_]
 out[, all_road := NULL]
 
-cat(sprintf("\ncompetitions with a recency strength: %s\n", format(nrow(out), big.mark = ",")))
+cat(sprintf("\ncompetitions with a recency meet_strength: %s\n", format(nrow(out), big.mark = ",")))
 write_parquet(out, file.path(OUT, "strength_recency.parquet"))
 cat("wrote strength_recency.parquet\n")
 
 # How different is it from the deployed metric?
 ct <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
-cmp <- merge(ct[, .(competition_id, comp_name, class, meet_tier, strength)],
+cmp <- merge(ct[, .(competition_id, comp_name, meet_type, meet_tier, meet_strength)],
              out, by = "competition_id")
-both <- cmp[!is.na(strength) & !is.na(strength_r)]
+both <- cmp[!is.na(meet_strength) & !is.na(strength_r)]
 cat(sprintf("\ncomparable on %s meets | correlation %.3f | median |diff| %.1f\n",
             format(nrow(both), big.mark = ","),
-            cor(both$strength, both$strength_r), median(abs(both$strength - both$strength_r))))
+            cor(both$meet_strength, both$strength_r), median(abs(both$meet_strength - both$strength_r))))
 cat("\nbiggest disagreements (deployed high, recency low = stale-reputation fields):\n")
-print(both[order(strength - strength_r)][.N:(.N-9)][, .(comp_name, class, strength, strength_r)])
+print(both[order(meet_strength - strength_r)][.N:(.N-9)][, .(comp_name, meet_type, meet_strength, strength_r)])
 cat("\nbiggest the other way (recency high, deployed low):\n")
-print(both[order(strength_r - strength)][.N:(.N-9)][, .(comp_name, class, strength, strength_r)])
+print(both[order(strength_r - meet_strength)][.N:(.N-9)][, .(comp_name, meet_type, meet_strength, strength_r)])

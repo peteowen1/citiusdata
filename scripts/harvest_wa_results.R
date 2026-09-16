@@ -173,7 +173,7 @@ pull_day <- function(day) {
           comp_start    = d$competition$startDate %||% NA_character_,
           comp_end      = d$competition$endDate %||% NA_character_,
           comp_daterange = d$competition$dateRange %||% NA_character_,
-          comp_ranking_category = d$competition$rankingCategory %||% NA_character_,
+          meet_code = d$competition$rankingCategory %||% NA_character_,
           # --- event-title level ---
           day           = day,
           event_title   = t$eventTitle %||% NA_character_,

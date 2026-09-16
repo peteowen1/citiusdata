@@ -5,7 +5,7 @@ OUT <- here::here("citiusdata", "data")
 # Same population as the meet registry: competitions already in the
 # (trimmed) meet-level export.
 ct <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
-keep_ids <- ct[!(is.na(strength) & class == "unclassified")]$competition_id
+keep_ids <- ct[!(is.na(meet_strength) & meet_type == "unclassified")]$competition_id
 cat(sprintf("meets in scope: %s\n", format(length(keep_ids), big.mark=",")))
 
 ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))

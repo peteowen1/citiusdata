@@ -21,7 +21,7 @@
 #
 # THIS SCRIPT DOES NOT HAND-LIST MEETS. It reruns build_competition_catalogue.R's
 # own two decision rules -- name classification (cat_of(), reproduced below with
-# two scale fixes explained inline) and measured field strength -- against the
+# two scale fixes explained inline) and measured field meet_strength -- against the
 # population the missing 78% belongs to, so the same auditable logic that
 # already tiers the 7,054 known competitions extends to the rest. Full
 # diagnosis, dry-run numbers and the road-racing decision are written up in
@@ -42,7 +42,7 @@
 #     build_competition_catalogue.R's grepl("final", round) finds the literal
 #     word and matches ZERO of the 680,712 uncatalogued rows (confirmed).
 #     Reused unmodified, every competition this script tries to add would
-#     compute strength = NA regardless of how strong the field really was.
+#     compute meet_strength = NA regardless of how strong the field really was.
 #     is_final_round() below recognises both vocabularies.
 #     NOT FIXED HERE: form_ratings.R's own round classifier has the identical
 #     blind spot (grepl("heat|round 1|qual", round) never matches "H1".."H8"),
@@ -61,18 +61,18 @@
 #     and every team_champs hit inspected was a club/invitational cup
 #     ("Xmas-Cup", "SK Cosma Summer Cup"). Same failure shape as the Diamond
 #     League city-substring bug already fixed once in
-#     build_competition_catalogue.R ("36% of the class was noise"). TIGHTENED
+#     build_competition_catalogue.R ("36% of the meet_type was noise"). TIGHTENED
 #     below (continental_tour 2,293 -> 35, team_champs 251 -> 65); every
 #     displaced competition falls to unclassified, the safe default (never T1,
-#     capped at T2 only by measured strength). build_competition_catalogue.R
+#     capped at T2 only by measured meet_strength). build_competition_catalogue.R
 #     itself is left untouched -- this is a local, documented deviation, not a
 #     silent fork.
 #
 # ROAD RACING: deliberately not reopened. docs/incidents/
-# road-coverage-and-the-strength-metric-2026-08-15.md measured that admitting
+# road-coverage-and-the-meet_strength-metric-2026-08-15.md measured that admitting
 # mass-participation road racing into the form model's ordering corpus cost
 # concordance even after the SEQ_MAXPLACE=12 cap, and held rather than shipped.
-# Under the UNMODIFIED strength methodology used here, essentially no road_race
+# Under the UNMODIFIED meet_strength methodology used here, essentially no road_race
 # competition clears the >=4-scored-finalists / >=5-scored-events bars from
 # career-route PARTIAL field sampling, so this script adds ~0 road_race
 # competitions to T1/T2 -- verified below by an anchor. The residual 10km-road
@@ -106,7 +106,7 @@ cat(sprintf("competition names available: %s\n", format(nrow(nm), big.mark = ","
 #
 # The lookup was only ever consulted for competitions MISSING from the
 # catalogue. A competition already present but unnamed kept its blank, and
-# `class` is regex-matched on the name, so a blank name means `unclassified`,
+# `meet_type` is regex-matched on the name, so a blank name means `unclassified`,
 # which means never T1 and never T2 by knowledge.
 #
 # That stayed invisible while the base builder happened to name most things.
@@ -125,7 +125,7 @@ cat(sprintf("competition names available: %s\n", format(nrow(nm), big.mark = ","
 # newly-named row and re-applies the KNOWN_T1/KNOWN_T3 tier rules, one-way.
 # What it was still missing: the BY_STRENGTH path (road_race) -- confirmed
 # on Boston Marathon 2026 (competition_id 7235561), which `.reclass`
-# correctly reclassified unclassified -> road_race with strength 98.0
+# correctly reclassified unclassified -> road_race with meet_strength 98.0
 # already sitting in cat0 (computed by build_competition_catalogue.R's own
 # road-race fix before this script ever runs), but left at meet_tier
 # T2_strong because nothing checked BY_STRENGTH's threshold for it. Fixed
@@ -196,39 +196,39 @@ NEVER_ELITE <- paste0(
   "Stabhochsprung|Kugelsto|m.odzie|youth|junior|U1[0-9]|U2[0-3]|",
   "Silesian Meeting|pre-programme|pre-event")
 RULES <- list(
-  list(class = "age_group",      pat = "U13|U14|U15|U16|U17|U18|U20|U23|Junior|Youth|Schools|Cadet|Minime"),
-  list(class = "ncaa_lower", pat = paste0(
+  list(meet_type = "age_group",      pat = "U13|U14|U15|U16|U17|U18|U20|U23|Junior|Youth|Schools|Cadet|Minime"),
+  list(meet_type = "ncaa_lower", pat = paste0(
     "Division II|Division III|Div. II|Div. III|NAIA|NJCAA|Conference USA|",
     "Big Ten|SEC Outdoor|SEC Indoor|Pac-12|ACC Outdoor|ACC Indoor|",
     "Inter-University|Intervarsity|Students Open")),
-  list(class = "ncaa", pat = paste0(
+  list(meet_type = "ncaa", pat = paste0(
     "NCAA|Division I|Div. I|Collegiate|University Championships|",
     "Southeastern Conference|Atlantic Coast Conference|Big Twelve|Big 12|",
     "Pacific-12|Mountain West|American Athletic Conference|Ivy League|",
     "Patriot League|Sun Belt Conference|Missouri Valley Conference")),
-  list(class = "olympics",       pat = "Olympic Games|XXX+ Olympic"),
-  list(class = "world_champs",   pat = "World Athletics Championships|IAAF World Championships(?! in Athletics.*Indoor)|World Championships in Athletics"),
-  list(class = "world_indoor",   pat = "World (Athletics )?Indoor Championships|IAAF World Indoor"),
+  list(meet_type = "olympics",       pat = "Olympic Games|XXX+ Olympic"),
+  list(meet_type = "world_champs",   pat = "World Athletics Championships|IAAF World Championships(?! in Athletics.*Indoor)|World Championships in Athletics"),
+  list(meet_type = "world_indoor",   pat = "World (Athletics )?Indoor Championships|IAAF World Indoor"),
   # "World ... Championships" is a global title; "World ... Tour" is a circuit,
-  # and tiering a tour meeting as a world championship is what the strength
+  # and tiering a tour meeting as a world championship is what the meet_strength
   # anchor caught: World Race Walking Tour 2023 and 2025 came through here at
-  # strength 25.4 and 32.5 against a T1 floor of 40. The Team Championships is
+  # meet_strength 25.4 and 32.5 against a T1 floor of 40. The Team Championships is
   # the real title event and still matches. Tours are left to the ordinary
   # classifier, which puts them where a circuit meeting belongs.
-  list(class = "world_other",    pat = "World Athletics (Relays|Cross Country|Race Walking|Road Running)|World Half Marathon|World Cross Country|World Race Walking|World Mountain",
+  list(meet_type = "world_other",    pat = "World Athletics (Relays|Cross Country|Race Walking|Road Running)|World Half Marathon|World Cross Country|World Race Walking|World Mountain",
        exclude = "\\bTour\\b"),
-  list(class = "commonwealth",   pat = "Commonwealth Games"),
+  list(meet_type = "commonwealth",   pat = "Commonwealth Games"),
   # MUST precede asian_games -- the bare "Asian Games" also matches
   # "South East Asian Games" and "South Asian Games".
-  list(class = "regional_games", pat = "South\\s*-?\\s*East Asian Games|Southeast Asian Games|South Asian Games"),
-  list(class = "asian_games",    pat = "Asian Games"),
-  list(class = "panam_games",    pat = "Pan American Games"),
-  list(class = "african_games",  pat = "African Games|All-Africa Games"),
-  list(class = "european_games", pat = "European Games"),
-  list(class = "european_champs", pat = paste0(
+  list(meet_type = "regional_games", pat = "South\\s*-?\\s*East Asian Games|Southeast Asian Games|South Asian Games"),
+  list(meet_type = "asian_games",    pat = "Asian Games"),
+  list(meet_type = "panam_games",    pat = "Pan American Games"),
+  list(meet_type = "african_games",  pat = "African Games|All-Africa Games"),
+  list(meet_type = "european_games", pat = "European Games"),
+  list(meet_type = "european_champs", pat = paste0(
     "European Athletics Championships$|European Athletics Championships |",
     "European Athletics Indoor Championships|European Championships$")),
-  list(class = "continental",    pat = paste0(
+  list(meet_type = "continental",    pat = paste0(
     "European Athletics Championships|European Athletics Indoor Championships|",
     "African (Athletics )?Championships|Asian (Athletics )?Championships|",
     "Asian Indoor Athletics Championships|",
@@ -240,7 +240,7 @@ RULES <- list(
   # form (135 meets, 8,869 athletes); a `\b` then broke 48 compound-word races
   # (Halbmarathon, Halvmaraton, Mezzamaratona, pulmaraton). The bare stem has
   # zero false positives across 2,888 names checked.
-  list(class = "road_race", pat = paste0(
+  list(meet_type = "road_race", pat = paste0(
     "Marat|\\b10 ?[Kk]m?\\b|\\b5 ?[Kk]m?\\b|",
     "Road Running|Road Race|Elite 10K|10K Elite|Great North Run|",
     "City Run|Corrida")),
@@ -249,18 +249,18 @@ RULES <- list(
   # unclassified because no rule named them. `world_other` rather than
   # `european_champs`: the latter is in form_ratings.R's MAJ panel, and adding
   # cross country there would move a fixed reference metric.
-  list(class = "world_other", pat = "European Cross Country Championships"),
-  list(class = "world_other", pat = "World Athletics Final|Continental Cup|IAAF Grand Prix Final"),
-  list(class = "indoor_tour", pat = "World Indoor Tour|Indoor Tour Gold|Millrose|Mill\u00earose"),
+  list(meet_type = "world_other", pat = "European Cross Country Championships"),
+  list(meet_type = "world_other", pat = "World Athletics Final|Continental Cup|IAAF Grand Prix Final"),
+  list(meet_type = "indoor_tour", pat = "World Indoor Tour|Indoor Tour Gold|Millrose|Mill\u00earose"),
   # Kept in lockstep with build_competition_catalogue.R -- see that file for
-  # why the Central American exclusion changes class only, not tier.
-  list(class = "regional_games", pat = paste0(
+  # why the Central American exclusion changes meet_type only, not tier.
+  list(meet_type = "regional_games", pat = paste0(
     "Mediterranean Games|Islamic Solidarity|",
     "Universiade|World University|Southeast Asian Games|Bolivarian|",
     "Central American(?! Race Walking| Cross Country)|",
     "South American Games|GCC Games|Military Games|",
     "Military World|Gulf Games|Pacific Games|Maccabiah")),
-  list(class = "diamond_league",
+  list(meet_type = "diamond_league",
        pat = paste0("Weltklasse Z|Athletissima|Prefontaine Classic|Herculis|",
                     "Golden Gala|Bislett Games|Memorial Van Damme|",
                     "Anniversary Games|London Athletics Meet|Meeting de Paris|",
@@ -278,7 +278,7 @@ RULES <- list(
                     "Crystal Palace|Aviva London Grand Prix|",
                     "Müller Grand Prix|Muller Grand Prix|",
                     "Ooredoo Doha|Seashore Group Doha|Doha Meeting")),
-  list(class = "club_meet", pat = paste0(
+  list(meet_type = "club_meet", pat = paste0(
     "pre-programme|pre-event|Bislett Spring|Bislett Open|Bislett 600|",
     "Bislettmila|karusell|Distanseserie|Distance challenge|",
     "Lambertseter|Sommerstevne|Nasjonalt|KM Oslo|Street Tour|",
@@ -293,7 +293,7 @@ RULES <- list(
   # drifting apart has already caused two separate bugs. The only
   # intentional difference is the bare "|Meeting" alternative, dropped here
   # as scale fix #3 and retained there.
-  list(class = "continental_tour", pat = paste0(
+  list(meet_type = "continental_tour", pat = paste0(
     "Continental Tour|Golden Spike|Kusoci|Szewi|Rieti|Zag|Hanzekovic|",
     "Padova|Turku|Motonet|Racers Grand Prix|",
     "FBK Games|Copernicus Cup|Gyulai|Istvan Memorial|Istv.n Memorial|",
@@ -303,7 +303,7 @@ RULES <- list(
     "Cyprus International|Meeting Metz|Metz Moselle|Hauts-de-France|",
     "Mondeville|Tampere Indoor|Ciutat de Barcelona|Canarias Athletics|",
     "Meeting Internacional")),
-  list(class = "national_champs", pat = paste0(
+  list(meet_type = "national_champs", pat = paste0(
     "National Championships|Championships of|",
     "(USA|US|American|British|Jamaican|Kenyan|Australian|Japanese|Chinese|",
     "German|French|Italian|Spanish|Polish|South African|Canadian|Indian|",
@@ -313,7 +313,7 @@ RULES <- list(
     "Slovenian|Croatian)",
     "\\s+(Indoor|Outdoor|Winter|Combined Events|Throws|Race Walking)?\\s*",
     "Championships")),
-  list(class = "team_champs_lower", pat = paste0(
+  list(meet_type = "team_champs_lower", pat = paste0(
     "Second Division|Third Division|Second League|First League|1st League|",
     "2nd League|3rd League|Race Walking Cup|Throwing Cup")),
   # TIGHTENED (scale fix #3): bare "Cup$" dropped, "World Cup" added explicitly
@@ -321,16 +321,16 @@ RULES <- list(
   # still matches. 251 raw hits -> 65; every displaced name inspected was a
   # club/invitational cup ("Xmas-Cup", "University Park Sykes & Sabock
   # Challenge Cup"), not a team championship.
-  list(class = "team_champs",    pat = "Team Championships|European Athletics Team|Super League|First Division|World Cup")
+  list(meet_type = "team_champs",    pat = "Team Championships|European Athletics Team|Super League|First Division|World Cup")
 )
 cat_of <- function(x) {
   out <- rep(NA_character_, length(x))
   excluded <- grepl(NOT_THE_EVENT, x, ignore.case = TRUE, perl = TRUE)
   for (r in RULES) {
-    senior <- r$class %in% c("olympics","world_champs","world_indoor","world_other",
+    senior <- r$meet_type %in% c("olympics","world_champs","world_indoor","world_other",
                              "commonwealth","continental","regional_games",
                              "asian_games","african_games","panam_games","european_games")
-    elite <- r$class %in% c("olympics","world_champs","world_indoor","commonwealth",
+    elite <- r$meet_type %in% c("olympics","world_champs","world_indoor","commonwealth",
                             "continental","diamond_league")
     never <- grepl(NEVER_ELITE, x, ignore.case = TRUE, perl = TRUE)
     # a rule may carry its own exclusion, for the case where a pattern is right
@@ -340,20 +340,20 @@ cat_of <- function(x) {
       grepl(r$exclude, x, ignore.case = TRUE, perl = TRUE) else FALSE
     hit <- is.na(out) & grepl(r$pat, x, ignore.case = TRUE, perl = TRUE) &
       !(senior & excluded) & !(elite & never) & !own_ex
-    out[hit] <- r$class
+    out[hit] <- r$meet_type
   }
   out[is.na(out)] <- "unclassified"
   out
 }
-# RECLASSIFY WHAT THE BACKFILL JUST NAMED. `class` is regex-matched on the meet
+# RECLASSIFY WHAT THE BACKFILL JUST NAMED. `meet_type` is regex-matched on the meet
 # name in the BASE builder, which ran before those names existed, so a
 # competition named here still carries `unclassified` from a blank it no longer
-# has. Naming it and leaving the class alone fixes the display and none of the
+# has. Naming it and leaving the meet_type alone fixes the display and none of the
 # tiering, which is the part that decides whether the model sees the meet at all.
 #
 # Only ever upward, and only from `unclassified`: a meet the base builder
 # positively identified keeps its identification.
-.reclass <- cat0[class == "unclassified" & !is.na(comp_name) & nzchar(comp_name)]
+.reclass <- cat0[meet_type == "unclassified" & !is.na(comp_name) & nzchar(comp_name)]
 if (nrow(.reclass)) {
   .newclass <- cat_of(.reclass$comp_name)
   .moved <- .newclass != "unclassified"
@@ -362,10 +362,10 @@ reclassified %s of %s previously-unclassified named meets
 ",
               format(sum(.moved), big.mark = ","), format(nrow(.reclass), big.mark = ",")))
   if (any(.moved)) {
-    print(data.table(class = .newclass[.moved])[, .N, by = class][order(-N)][seq_len(min(8L, .N))])
+    print(data.table(meet_type = .newclass[.moved])[, .N, by = meet_type][order(-N)][seq_len(min(8L, .N))])
     .ids <- .reclass$competition_id[.moved]
     cat0[competition_id %chin% .ids,
-         class := .newclass[.moved][match(competition_id, .ids)]]
+         meet_type := .newclass[.moved][match(competition_id, .ids)]]
     # and re-apply the knowledge tiers for them, one-way
     # K1 must match build_competition_catalogue.R's own KNOWN_T1 exactly --
     # was previously missing diamond_league, world_other and indoor_tour
@@ -378,14 +378,14 @@ reclassified %s of %s previously-unclassified named meets
             "diamond_league","world_other","indoor_tour")
     K3 <- c("age_group","club_meet","ncaa_lower","team_champs_lower")
     .n1 <- cat0[meet_tier == "T1_elite", .N]
-    cat0[competition_id %chin% .ids & class %chin% K1, meet_tier := "T1_elite"]
+    cat0[competition_id %chin% .ids & meet_type %chin% K1, meet_tier := "T1_elite"]
     # DEMOTE FROM WHEREVER IT SITS, not just from T1. The base builder puts a
-    # KNOWN_T3 class at T3 outright, so once we learn a meet IS age-group or a
+    # KNOWN_T3 meet_type at T3 outright, so once we learn a meet IS age-group or a
     # lower NCAA division, T3 is what its tier means - leaving it at T2 states
     # two contradictory things at once, and augment_catalogue_wa_codes.R asserts
     # against exactly that ("a named development meet was lifted"). Its anchor
     # caught this and stopped the chain, which is the anchor working.
-    cat0[competition_id %chin% .ids & class %chin% K3 &
+    cat0[competition_id %chin% .ids & meet_type %chin% K3 &
          meet_tier != "T3_development", meet_tier := "T3_development"]
     cat(sprintf("T1 after reclassification: %s (was %s)
 ",
@@ -397,14 +397,14 @@ reclassified %s of %s previously-unclassified named meets
 # TIER CONSISTENCY PASS, unconditional -- not gated on .ids/.moved above.
 #
 # The .reclass block only re-applies tier rules to rows it moved out of
-# "unclassified" IN THIS RUN. A meet whose class was already fixed by an
-# EARLIER run -- before that run's tier logic knew about its class -- never
+# "unclassified" IN THIS RUN. A meet whose meet_type was already fixed by an
+# EARLIER run -- before that run's tier logic knew about its meet_type -- never
 # re-enters that path, because it is no longer "unclassified". The tier
 # then stays wrong permanently, however many times this script runs.
 #
 # Found twice, the same shape both times, 2026-09-03:
-#   - road_race: Boston Marathon 2026 sat at T2_strong with strength 98
-#     because the BY_STRENGTH rule didn't exist when its class was set.
+#   - road_race: Boston Marathon 2026 sat at T2_strong with meet_strength 98
+#     because the BY_STRENGTH rule didn't exist when its meet_type was set.
 #     136 road races were affected.
 #   - KNOWN_T1 classes: 97 meets (56 diamond_league at T2, 19 world_other
 #     at T3, 10 world_other at T2, 8 indoor_tour at T2, 4 diamond_league
@@ -424,7 +424,7 @@ reclassified %s of %s previously-unclassified named meets
 # printed "no disagreements" on 2026-09-03 while 407 meets disagreed: 78,034
 # athletes and 12,630 finals, including the Greek, Irish, Belgian, Canadian,
 # Swiss, Dutch and Brazilian national championships sitting in T3, which the
-# builder's `class %in% KNOWN_T2 -> "T2_strong"` makes unreachable.
+# builder's `meet_type %in% KNOWN_T2 -> "T2_strong"` makes unreachable.
 #
 # The tell that it was a guard hole rather than a data quirk: KNOWN_T1 had 0
 # violations and KNOWN_T3 had 0. Only the uncovered band was dirty.
@@ -432,19 +432,19 @@ reclassified %s of %s previously-unclassified named meets
          "continental_tour","regional_games",
          "asian_games","african_games","panam_games","european_games")
 .K3 <- c("age_group","club_meet","ncaa_lower","team_champs_lower")
-.want_tier <- function(class, strength) data.table::fcase(
-  class %chin% .K1, "T1_elite",
-  class %chin% .K2, "T2_strong",
-  class %chin% .K3, "T3_development",
-  class == "road_race" & !is.na(strength) & strength >= 75, "T1_elite",
-  class == "road_race" & !is.na(strength) & strength >= 50, "T2_strong",
-  class == "road_race", "T3_development",
+.want_tier <- function(meet_type, meet_strength) data.table::fcase(
+  meet_type %chin% .K1, "T1_elite",
+  meet_type %chin% .K2, "T2_strong",
+  meet_type %chin% .K3, "T3_development",
+  meet_type == "road_race" & !is.na(meet_strength) & meet_strength >= 75, "T1_elite",
+  meet_type == "road_race" & !is.na(meet_strength) & meet_strength >= 50, "T2_strong",
+  meet_type == "road_race", "T3_development",
   default = NA_character_)   # NA = this pass has no opinion, leave as-is
-cat0[, .should := .want_tier(class, strength)]
+cat0[, .should := .want_tier(meet_type, meet_strength)]
 .fix <- cat0[!is.na(.should) & .should != meet_tier]
 if (nrow(.fix)) {
-  cat(sprintf("\ntier consistency: %s row(s) disagreed with their class's own rule\n", nrow(.fix)))
-  print(.fix[, .N, by = .(class, from = meet_tier, to = .should)][order(-N)])
+  cat(sprintf("\ntier consistency: %s row(s) disagreed with their meet_type's own rule\n", nrow(.fix)))
+  print(.fix[, .N, by = .(meet_type, from = meet_tier, to = .should)][order(-N)])
   cat0[!is.na(.should) & .should != meet_tier, meet_tier := .should]
 } else {
   cat("\ntier consistency: no disagreements\n")
@@ -476,11 +476,11 @@ if (n_no_name > 0L) {
                comp_name = NA_character_))
 }
 
-miss_nm[, class := cat_of(comp_name)]
+miss_nm[, meet_type := cat_of(comp_name)]
 cat("\nname-based classification of the missing competitions:\n")
-print(miss_nm[, .N, by = class][order(-N)])
+print(miss_nm[, .N, by = meet_type][order(-N)])
 
-# ---- measured field strength, over the FULL corpus (both routes, catalogued
+# ---- measured field meet_strength, over the FULL corpus (both routes, catalogued
 #      and uncatalogued alike) so percentiles are computed on the richest
 #      denominator available. Verbatim methodology from
 #      build_competition_catalogue.R except is_final_round() (scale fix #2). -
@@ -510,7 +510,7 @@ fin_rows <- corp[is_final_round(round)]
 
 # ROAD FIX (mirrors build_competition_catalogue.R, applied 2026-09-02, scale
 # fix #3 for this reproduction): a road "final" is the whole mass field, not
-# a curated entry list -- Boston Marathon scored strength 2.7 from 1,547
+# a curated entry list -- Boston Marathon scored meet_strength 2.7 from 1,547
 # cohort-matched finishers before this fix. Restrict to each race's own top
 # 10 by mark first.
 road_events <- as.data.table(citius_events())[family == "road", event_id]
@@ -524,17 +524,17 @@ ev_q <- ev_q[n_ath >= 4]
 ev_q[, n_meets := .N, by = .(event_id, era)]
 ev_q <- ev_q[n_meets >= 3]
 ev_q[, ev_pct := 100 * frank(q, ties.method = "average") / .N, by = .(event_id, era)]
-strength <- ev_q[, .(strength = round(mean(ev_pct), 1), races_won = .N), by = competition_id]
+meet_strength <- ev_q[, .(meet_strength = round(mean(ev_pct), 1), races_won = .N), by = competition_id]
 MIN_EVENTS_FOR_STRENGTH <- 5L
 # Same road-only exemption as build_competition_catalogue.R: a road meet is
 # structurally capped at the Marathon-M/-W pair, never a thin slice of a
 # larger possible programme, so the "too few of many events" floor doesn't
 # apply -- the top-10 restriction above already guards the noise case.
 road_only <- ev_q[, .(all_road = all(event_id %in% road_events)), by = competition_id]
-strength <- merge(strength, road_only, by = "competition_id", all.x = TRUE)
-exempt <- !is.na(strength$all_road) & strength$all_road
-strength[races_won < MIN_EVENTS_FOR_STRENGTH & !exempt, strength := NA_real_]
-strength[, all_road := NULL]
+meet_strength <- merge(meet_strength, road_only, by = "competition_id", all.x = TRUE)
+exempt <- !is.na(meet_strength$all_road) & meet_strength$all_road
+meet_strength[races_won < MIN_EVENTS_FOR_STRENGTH & !exempt, meet_strength := NA_real_]
+meet_strength[, all_road := NULL]
 rm(fin_rows, ev_q, ath_q); invisible(gc())
 
 # ---- per-competition summary, MISSING COMPETITIONS ONLY (never touches the
@@ -547,8 +547,8 @@ summ <- miss_corp[, .(
   # `finals` WAS MISSING FROM THIS SUMMARY ENTIRELY (fixed 2026-09-03), so
   # every competition this script adds -- ~25,000 of the catalogue's 32,089
   # -- carried finals = NA by construction. It showed up as 2,635 meets
-  # holding a real strength score next to an empty finals count, which is
-  # self-contradictory: strength is computed FROM final rows, so a scored
+  # holding a real meet_strength score next to an empty finals count, which is
+  # self-contradictory: meet_strength is computed FROM final rows, so a scored
   # meet has finals by definition.
   #
   # Uses is_final_round(), not a literal grepl("final"): the career route
@@ -560,7 +560,7 @@ summ <- miss_corp[, .(
   finals = uniqueN(race_key[is_final_round(round)])
 ), by = competition_id]
 cat_tbl <- merge(miss_nm, summ, by = "competition_id", all.x = TRUE)
-cat_tbl <- merge(cat_tbl, strength, by = "competition_id", all.x = TRUE)
+cat_tbl <- merge(cat_tbl, meet_strength, by = "competition_id", all.x = TRUE)
 
 # ---- meet_tier: identical rule to build_competition_catalogue.R ------------
 KNOWN_T1 <- c("olympics", "world_champs", "commonwealth", "world_indoor",
@@ -571,26 +571,26 @@ KNOWN_T2 <- c("continental", "national_champs", "ncaa", "team_champs",
 KNOWN_T3 <- c("age_group", "club_meet", "ncaa_lower", "team_champs_lower")
 BY_STRENGTH <- c("road_race")
 cat_tbl[, meet_tier := fcase(
-  class %in% KNOWN_T1, "T1_elite",
-  class %in% KNOWN_T2, "T2_strong",
-  class %in% KNOWN_T3, "T3_development",
-  class %in% BY_STRENGTH & !is.na(strength) & strength >= 75, "T1_elite",
-  class %in% BY_STRENGTH & !is.na(strength) & strength >= 50, "T2_strong",
-  class %in% BY_STRENGTH, "T3_development",
+  meet_type %in% KNOWN_T1, "T1_elite",
+  meet_type %in% KNOWN_T2, "T2_strong",
+  meet_type %in% KNOWN_T3, "T3_development",
+  meet_type %in% BY_STRENGTH & !is.na(meet_strength) & meet_strength >= 75, "T1_elite",
+  meet_type %in% BY_STRENGTH & !is.na(meet_strength) & meet_strength >= 50, "T2_strong",
+  meet_type %in% BY_STRENGTH, "T3_development",
   default = NA_character_)]
-uq <- stats::quantile(cat_tbl[is.na(meet_tier)]$strength, 0.55, na.rm = TRUE)
+uq <- stats::quantile(cat_tbl[is.na(meet_tier)]$meet_strength, 0.55, na.rm = TRUE)
 cat_tbl[is.na(meet_tier), meet_tier := fcase(
-  is.na(strength), "T3_development",
-  strength >= uq[[1]], "T2_strong",
+  is.na(meet_strength), "T3_development",
+  meet_strength >= uq[[1]], "T2_strong",
   default = "T3_development")]
-cat(sprintf("\nunclassified additions capped at T2, split at strength %.1f\n", uq[[1]]))
+cat(sprintf("\nunclassified additions capped at T2, split at meet_strength %.1f\n", uq[[1]]))
 
 cat("\ntier distribution of the additions:\n")
 print(cat_tbl[, .N, by = meet_tier][order(-N)])
-cat("\nT1 additions by class:\n")
-print(cat_tbl[meet_tier == "T1_elite", .N, by = class])
-cat("\nT2 additions by class:\n")
-print(cat_tbl[meet_tier == "T2_strong", .N, by = class])
+cat("\nT1 additions by meet_type:\n")
+print(cat_tbl[meet_tier == "T1_elite", .N, by = meet_type])
+cat("\nT2 additions by meet_type:\n")
+print(cat_tbl[meet_tier == "T2_strong", .N, by = meet_type])
 
 # ---- ANCHOR CHECKS -----------------------------------------------------------
 # Same discipline as build_competition_catalogue.R and the two road scripts:
@@ -610,35 +610,35 @@ ok2 <- anchor("no added id is already in the catalogue",
               !any(cat_tbl$competition_id %chin% cat0$competition_id))
 ok3 <- anchor("every added row carries a meet_tier",
               !any(is.na(cat_tbl$meet_tier)))
-# road_race REMOVED from this exclusion 2026-09-02: the strength metric it's
+# road_race REMOVED from this exclusion 2026-09-02: the meet_strength metric it's
 # judged on is now the fixed one (top-10-by-mark, not whole-mass-field
 # average -- see the road-fix note below ok8), so a road_race T1 addition is
 # no longer definitionally wrong the way unclassified/club_meet/age_group
 # reaching T1 still would be.
 ok4 <- anchor("no T1 addition is unclassified, club_meet or age_group",
-              !any(t1$class %in% c("unclassified", "club_meet", "age_group")),
-              paste(sort(unique(t1$class[t1$class %in% c("unclassified","club_meet","age_group")])), collapse=","))
-# Split by class: non-road T1 additions keep the original <=200 bound (still
-# catches a runaway classification bug in any OTHER class, same as before).
+              !any(t1$meet_type %in% c("unclassified", "club_meet", "age_group")),
+              paste(sort(unique(t1$meet_type[t1$meet_type %in% c("unclassified","club_meet","age_group")])), collapse=","))
+# Split by meet_type: non-road T1 additions keep the original <=200 bound (still
+# catches a runaway classification bug in any OTHER meet_type, same as before).
 # road_race gets its own, more generous bound rather than folding it into
 # the same number -- there is no principled a priori count of "how many
-# world-class road races exist across the corpus's date range" the way 200
+# world-meet_type road races exist across the corpus's date range" the way 200
 # was calibrated for global/DL-level meets, so this is reported, not a hard
 # multiplier picked to make today's number pass.
-t1_nonroad <- t1[class != "road_race"]
+t1_nonroad <- t1[meet_type != "road_race"]
 ok5 <- anchor("non-road T1 additions are a plausible count for global/DL-level meets (<=200)",
               nrow(t1_nonroad) <= 200L, sprintf("%d found", nrow(t1_nonroad)))
 ok6 <- anchor("continental_tour additions stayed tightened (<=100, was 2,293 before the fix)",
-              cat_tbl[class == "continental_tour", .N] <= 100L,
-              sprintf("%d found", cat_tbl[class == "continental_tour", .N]))
+              cat_tbl[meet_type == "continental_tour", .N] <= 100L,
+              sprintf("%d found", cat_tbl[meet_type == "continental_tour", .N]))
 ok7 <- anchor("team_champs additions stayed tightened (<=150, was 251 before the fix)",
-              cat_tbl[class == "team_champs", .N] <= 150L,
-              sprintf("%d found", cat_tbl[class == "team_champs", .N]))
-# REVERSED 2026-09-02, see docs/incidents/road-coverage-and-the-strength-
+              cat_tbl[meet_type == "team_champs", .N] <= 150L,
+              sprintf("%d found", cat_tbl[meet_type == "team_champs", .N]))
+# REVERSED 2026-09-02, see docs/incidents/road-coverage-and-the-meet_strength-
 # metric-2026-08-15.md and the road-fix note above the fin_rows/ev_q block:
 # that incident correctly held road racing out of T1/T2 because the OLD
-# strength metric averaged over a marathon's whole mass-participation field
-# (Boston Marathon measured strength 2.7 from 1,547 finishers) -- a road
+# meet_strength metric averaged over a marathon's whole mass-participation field
+# (Boston Marathon measured meet_strength 2.7 from 1,547 finishers) -- a road
 # meet reaching T1 under that metric WAS the bug. The metric is fixed now
 # (top-10-by-mark, matching what a curated championship field already gets
 # for free), so this anchor is checking the opposite thing: that a
@@ -654,10 +654,10 @@ ok7 <- anchor("team_champs additions stayed tightened (<=150, was 251 before the
 # high enough to pass today's 634 would be exactly the special-casing this
 # script's own philosophy rejects. The correctness signal that actually
 # matters is QUALITY, already independently checked below by ok9 ("no T1
-# meet sits below strength 40") -- a road_race meet only reaches T1 here
+# meet sits below meet_strength 40") -- a road_race meet only reaches T1 here
 # because its top-10-by-mark field genuinely scored that high, the same bar
-# every other T1 class clears. This is reported for visibility, not gated.
-rr_promoted <- cat_tbl[class == "road_race" & meet_tier != "T3_development"]
+# every other T1 meet_type clears. This is reported for visibility, not gated.
+rr_promoted <- cat_tbl[meet_type == "road_race" & meet_tier != "T3_development"]
 ok8 <- anchor("road_race T1/T2 promotions, reported not gated (quality checked separately by ok9)",
               TRUE,
               sprintf("%d road_race competitions reached T1/T2 (%d T1, %d T2)",
@@ -669,29 +669,29 @@ ok8 <- anchor("road_race T1/T2 promotions, reported not gated (quality checked s
 # The unqualified version of this check failed with "4 below" and blocked 1,408
 # competitions - while the root builder fails the identical check with "1 below"
 # and writes anyway. Three scripts failing one check is a gap in the metric, not
-# three exceptions: the offenders are pre-2020 meets whose field strength was
+# three exceptions: the offenders are pre-2020 meets whose field meet_strength was
 # computed from sparse coverage of a season the engine never reads. The root
 # builder's own single failure is Shanghai Diamond League **2010** at 38.4.
 #
 # Two changes, both about honesty rather than leniency:
 #   - restrict to meets the engine can actually use (last_date >= FROM_YEAR),
-#     because a 2010 meet's strength cannot affect any rating
+#     because a 2010 meet's meet_strength cannot affect any rating
 #   - report the UNMEASURED count alongside, so "0 below" can never be read as
-#     "all clear" when strength is NA throughout. 91 of 280 T1 meets in the live
-#     catalogue have no strength at all, so the bare count hides a third of them.
+#     "all clear" when meet_strength is NA throughout. 91 of 280 T1 meets in the live
+#     catalogue have no meet_strength at all, so the bare count hides a third of them.
 FROM_YEAR <- .env_int("CATALOGUE_STRENGTH_FROM", "2020")
 t1_win <- t1[is.finite(year) & year >= FROM_YEAR]
-t1_bad <- t1_win[is.finite(strength) & strength < 40]
+t1_bad <- t1_win[is.finite(meet_strength) & meet_strength < 40]
 if (nrow(t1_bad))
-  print(t1_bad[order(strength), .(comp_name, class, year,
-                                  strength = round(strength, 1), athletes, events)])
-ok9 <- anchor(sprintf("no T1 meet from %d on sits below strength 40", FROM_YEAR),
+  print(t1_bad[order(meet_strength), .(comp_name, meet_type, year,
+                                  meet_strength = round(meet_strength, 1), athletes, events)])
+ok9 <- anchor(sprintf("no T1 meet from %d on sits below meet_strength 40", FROM_YEAR),
               nrow(t1_bad) == 0L,
-              sprintf("%d below of %d measured (%d more have no strength value)",
-                      nrow(t1_bad), sum(is.finite(t1_win$strength)),
-                      sum(!is.finite(t1_win$strength))))
+              sprintf("%d below of %d measured (%d more have no meet_strength value)",
+                      nrow(t1_bad), sum(is.finite(t1_win$meet_strength)),
+                      sum(!is.finite(t1_win$meet_strength))))
 ok10 <- anchor("no NCAA D2/D3 or conference meet is above T3",
-               !any(cat_tbl[class == "ncaa_lower"]$meet_tier != "T3_development"))
+               !any(cat_tbl[meet_type == "ncaa_lower"]$meet_tier != "T3_development"))
 ok11 <- anchor("name coverage for the addition set is effectively complete (>=95%)",
                mean(!is.na(cat_tbl$comp_name)) >= 0.95,
                sprintf("%.1f%%", 100 * mean(!is.na(cat_tbl$comp_name))))
@@ -705,10 +705,10 @@ if (!all(ok1, ok2, ok3, ok4, ok5, ok6, ok7, ok8, ok9, ok10, ok11)) {
 # `finals` MUST BE IN THIS LIST or the loop below sets it to NA for every
 # added row -- computing it in `summ` is not enough. That is exactly what
 # happened on the first attempt (2026-09-03): finals was added to the
-# summary, the run completed clean, and the strength-but-no-finals count
+# summary, the run completed clean, and the meet_strength-but-no-finals count
 # was still 2,635 afterwards because this select dropped it.
 new <- cat_tbl[, .(competition_id, comp_name, year, results, athletes, events,
-                    finals, strength, races_won, class, meet_tier)]
+                    finals, meet_strength, races_won, meet_type, meet_tier)]
 for (cn in setdiff(names(cat0), names(new))) new[, (cn) := NA]
 out <- rbind(cat0, new[, names(cat0), with = FALSE])
 stopifnot("duplicate competition ids after rbind" = !anyDuplicated(out$competition_id),

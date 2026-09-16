@@ -35,7 +35,7 @@ Set-Location $verse
 # Why this order and not another:
 #   * apply_strength_ew.R RE-DERIVES meet_tier from scratch, so it must run
 #     BEFORE the one-way floors in wa_codes and depth, or it erases them
-#     silently. It also needs `class` settled, so it runs after the road steps.
+#     silently. It also needs `meet_type` settled, so it runs after the road steps.
 #   * augment_catalogue_wa_codes.R states its own prerequisite chain
 #     (build -> coverage -> road_majors -> road_half_majors -> this).
 #   * augment_catalogue_depth.R runs after wa_codes; it is the last FLOOR.

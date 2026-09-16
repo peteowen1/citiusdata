@@ -29,10 +29,10 @@
 #   audit_anchors.R     -- model-quality anchor (does the rating track recent
 #                          form). Unrelated: this script never touches ability
 #                          estimates.
-#   build_competition_catalogue.R's own anchor block -- ad hoc, per-class
+#   build_competition_catalogue.R's own anchor block -- ad hoc, per-meet_type
 #                          spot checks (Olympics, Diamond League, age-group).
 #                          This script's mislabeling check is the same PATTERN
-#                          applied systematically to every class, not just the
+#                          applied systematically to every meet_type, not just the
 #                          ones someone thought to name.
 #
 # Usage:  Rscript scripts/audit_data_integrity.R
@@ -105,7 +105,7 @@ anchor("every T1_elite meet since 2016 has >=1 result row", nrow(t1_gap) == 0,
        sprintf("%d of %d T1 meets missing", nrow(t1_gap), nrow(t1_recent)))
 if (nrow(t1_gap)) {
   cat("  gaps:\n")
-  print(head(t1_gap[order(-year), .(year, comp_name, class)], 20))
+  print(head(t1_gap[order(-year), .(year, comp_name, meet_type)], 20))
 }
 
 # ---- 3. IMPLAUSIBLE MARKS ----------------------------------------------------
@@ -120,39 +120,39 @@ anchor("implausible-mark rate is in the expected range (0.05%-0.5%)",
 
 # ---- 4. TIER/STRENGTH MISLABELING -------------------------------------------
 # Systematic version of build_competition_catalogue.R's ad hoc anchors: for
-# EVERY class (not just the ones someone thought to name), does the assigned
-# tier match what measured strength says the class should be?
-cat("\n=== 4. TIER vs STRENGTH, by class (systematic) ===\n")
-by_class <- cat_tbl[!is.na(strength), .(
+# EVERY meet_type (not just the ones someone thought to name), does the assigned
+# tier match what measured meet_strength says the meet_type should be?
+cat("\n=== 4. TIER vs STRENGTH, by meet_type (systematic) ===\n")
+by_class <- cat_tbl[!is.na(meet_strength), .(
   n = .N,
-  median_strength = round(median(strength), 1),
-  p10 = round(quantile(strength, .1), 1),
-  p90 = round(quantile(strength, .9), 1),
+  median_strength = round(median(meet_strength), 1),
+  p10 = round(quantile(meet_strength, .1), 1),
+  p90 = round(quantile(meet_strength, .9), 1),
   modal_tier = names(sort(table(meet_tier), decreasing = TRUE))[1]
-), by = class][order(-median_strength)]
-by_class[, off_tier_pct := sapply(class, function(cl) {
-  sub <- cat_tbl[class == cl & !is.na(strength)]
+), by = meet_type][order(-median_strength)]
+by_class[, off_tier_pct := sapply(meet_type, function(cl) {
+  sub <- cat_tbl[meet_type == cl & !is.na(meet_strength)]
   round(100 * mean(sub$meet_tier != names(sort(table(sub$meet_tier), decreasing = TRUE))[1]), 1)
 })]
 print(by_class)
 bad_classes <- by_class[off_tier_pct > 15 & n >= 10]
-anchor("no class has >15% of its meets split across tiers (n>=10)", nrow(bad_classes) == 0,
-       if (nrow(bad_classes)) paste(sprintf("%s (%.0f%% off, n=%d)", bad_classes$class,
+anchor("no meet_type has >15% of its meets split across tiers (n>=10)", nrow(bad_classes) == 0,
+       if (nrow(bad_classes)) paste(sprintf("%s (%.0f%% off, n=%d)", bad_classes$meet_type,
              bad_classes$off_tier_pct, bad_classes$n), collapse = "; ") else "")
 # Negative check, same reasoning as build_competition_catalogue.R's own: a
-# class whose median strength clearly belongs in a different tier band than
+# meet_type whose median meet_strength clearly belongs in a different tier band than
 # its modal assignment is a labeling bug, not noise.
 # Must match build_competition_catalogue.R's own thresholds exactly -- this
-# audit checks the catalogue's tier assignment against strength, so a drifted
+# audit checks the catalogue's tier assignment against meet_strength, so a drifted
 # copy of the same cutoffs produces false-positive mismatches for classes
-# whose median strength sits between the two thresholds (found 2026-09-02:
+# whose median meet_strength sits between the two thresholds (found 2026-09-02:
 # this was 40, the catalogue's real T2 floor is 50).
 TIER_BAND <- function(s) fcase(s >= 75, "T1_elite", s >= 50, "T2_strong", default = "T3_development")
 by_class[, strength_implied_tier := TIER_BAND(median_strength)]
 mismatch <- by_class[strength_implied_tier != modal_tier & n >= 10]
-anchor("no class's median strength implies a different tier than its modal assignment (n>=10)",
+anchor("no meet_type's median meet_strength implies a different tier than its modal assignment (n>=10)",
        nrow(mismatch) == 0,
-       if (nrow(mismatch)) paste(sprintf("%s: strength->%s but modal=%s", mismatch$class,
+       if (nrow(mismatch)) paste(sprintf("%s: meet_strength->%s but modal=%s", mismatch$meet_type,
              mismatch$strength_implied_tier, mismatch$modal_tier), collapse = "; ") else "")
 
 # ---- 5. CROSS-STORE CONSISTENCY (RDS vs citius.duckdb) -----------------------

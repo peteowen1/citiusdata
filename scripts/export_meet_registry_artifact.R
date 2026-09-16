@@ -10,10 +10,10 @@ cat(sprintf("total rows: %s\n", format(nrow(ct), big.mark = ",")))
 
 # `first_date` so a meet can be looked up rather than just filtered -- year
 # alone is not enough to find a specific edition. `strength_pb` alongside
-# `strength` so the career-best and EW bases can be compared on the page: they
+# `meet_strength` so the career-best and EW bases can be compared on the page: they
 # disagree by ~5 on the median meet and by 20+ on the fast road courses, which
 # is the whole point of the 2026-09-03 change.
-.cols <- c("competition_id", "comp_name", "class", "strength", "strength_pb",
+.cols <- c("competition_id", "comp_name", "meet_type", "meet_strength", "strength_pb",
            "meet_tier", "first_date", "last_date", "year", "country",
            "athletes", "events", "finals", "is_major", "is_global")
 .missing <- setdiff(.cols, names(ct))
@@ -22,10 +22,10 @@ if (length(.missing))
        " -- run apply_strength_ew.R, which adds strength_pb")
 keep <- ct[, .SD, .SDcols = .cols]
 
-# Never-scored, never-classified meets (strength NA AND class unclassified)
+# Never-scored, never-classified meets (meet_strength NA AND meet_type unclassified)
 # add no browsing value and are the bulk of the row count -- trimming them
 # keeps the embedded JSON well under the artifact's 16MB budget.
-trimmed <- keep[!(is.na(strength) & class == "unclassified")]
+trimmed <- keep[!(is.na(meet_strength) & meet_type == "unclassified")]
 cat(sprintf("rows after trim: %s (dropped %s never-scored/never-classified)\n",
             format(nrow(trimmed), big.mark = ","),
             format(nrow(keep) - nrow(trimmed), big.mark = ",")))

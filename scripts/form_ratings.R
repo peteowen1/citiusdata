@@ -601,7 +601,7 @@ SEEDHLPOW <- .env_num("SEQ_SEEDHLPOW", 0)
 #   on, every family                     72.023 / 71.718
 #   on, distance+middle+road+walk        72.013 / 71.746
 #   on, distance+middle+sprint+hurdles   72.053 / 71.755   <- adopted
-#   same set at strength 2               72.052 / 71.739
+#   same set at meet_strength 2               72.052 / 71.739
 # Strength 1 beats 0 below it and 2 above it, so this is an interior optimum
 # rather than the highest value that happened to be tried.
 XBLEND  <- .env_num("SEQ_XBLEND", 1)
@@ -928,7 +928,7 @@ stopifnot("SEQ_FROM is not a readable date" = !is.na(FROM))
 
 cat0 <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
 cat0[, competition_id := as.character(competition_id)]
-cat0 <- cat0[meet_tier %in% c("T1_elite","T2_strong"), .(competition_id, meet_tier, class)]
+cat0 <- cat0[meet_tier %in% c("T1_elite","T2_strong"), .(competition_id, meet_tier, meet_type)]
 reg <- as.data.table(citius::citius_events())[, .(event_id, family)]
 ag <- readRDS(file.path(OUT, "aging.rds"))
 curves <- as.data.table(ag$curves)
@@ -1608,10 +1608,10 @@ if (SEEDON) {
   #   hurdles  -0.053                          -0.048
   # SEQ_SEEDHLPOW was the elegant way to get that from one parameter, and it
   # does not work: at 0.5 it pooled to -0.006 and -0.009, kept the sign for road
-  # and distance at a fraction of the strength, lost the sprint effect entirely,
+  # and distance at a fraction of the meet_strength, lost the sprint effect entirely,
   # and damaged jumps (-0.049) and combined (-0.061). Race frequency alone is
   # the wrong functional form - it adjusts all 86 events including the field
-  # events that want no adjustment, and hands walks a long memory on the strength
+  # events that want no adjustment, and hands walks a long memory on the meet_strength
   # of their race frequency alone - when the direct test showed walks FLIP sign
   # between windows (-0.095 on 2025-26, +0.553 on 2022-24), i.e. unstable rather
   # than long-memory. An earlier version of this comment claimed the test showed
@@ -1821,7 +1821,7 @@ if (uniqueN(d$race_key) != length(starts))
 Vath <- d$athlete_id; Vperf <- d$perf; Vplace <- d$place; Vrc <- d$rc
 Vage <- d$age; Vwind <- d$wind; Vbeta <- d$beta; Vhl <- d$hl
 Vev <- d$event_id; Vdate <- d$date; Vfam <- d$family
-Vtier <- d$meet_tier; Vcls <- d$class; Vrk <- d$race_key
+Vtier <- d$meet_tier; Vcls <- d$meet_type; Vrk <- d$race_key
 # Dates as plain numbers for the hot loop, and the year precomputed. Both were
 # recomputed per athlete or per race from Date objects; year() in particular
 # goes through an IDate conversion every time it is called.
@@ -1900,12 +1900,12 @@ W_RND <- .env_num("SEQ_W_RND", 0.5)  # multiplier for a non-final round
 # corpus is visible and checked. A fall-through that quietly assigns the T2
 # weight to an uncatalogued major would bias the metric in the exact direction
 # the weighting exists to correct, and nothing downstream would show it.
-d[, w_tier := fifelse(!is.na(class) & class %chin% MAJ, W_MAJ,
+d[, w_tier := fifelse(!is.na(meet_type) & meet_type %chin% MAJ, W_MAJ,
               fifelse(!is.na(meet_tier) & meet_tier == "T1_elite", W_T1, W_T2))]
 d[, w_rnd := fifelse(rc == "final", 1, W_RND)]
 d[, wt := w_tier * w_rnd]
 wtab <- d[, .(races = uniqueN(race_key), rows = .N, weight = wt[1]),
-          by = .(class = fifelse(is.na(class), "(uncatalogued)", class),
+          by = .(meet_type = fifelse(is.na(meet_type), "(uncatalogued)", meet_type),
                  meet_tier, rc)][order(-weight, -races)]
 cat(sprintf("[%s] METRIC WEIGHTS -- every race type present, %d combinations:
 ", TAG, nrow(wtab)))
@@ -1928,14 +1928,14 @@ for (r_ in seq_along(starts)) {
   if (i2 - i1 + 1L < 3L) next
   ii <- i1:i2
   # A plain list, not a data.table: `$` on a list is a pointer read, while every
-  # data.table access pays class dispatch. The eight per-athlete columns are
+  # data.table access pays meet_type dispatch. The eight per-athlete columns are
   # sliced; the six read only at [1] keep a length-1 slice, which leaves every
   # z$col[1] in the body below working unchanged.
   z <- list(athlete_id = Vath[ii], perf = Vperf[ii], place = Vplace[ii],
             rc = Vrc[ii], age = Vage[ii], wind = Vwind[ii], beta = Vbeta[ii],
             hl = Vhl[ii],
             event_id = Vev[i1], date = Vdate[i1], family = Vfam[i1],
-            meet_tier = Vtier[i1], class = Vcls[i1], race_key = Vrk[i1],
+            meet_tier = Vtier[i1], meet_type = Vcls[i1], race_key = Vrk[i1],
             wt = Vwt[i1])
   dt0n <- Vdaten[i1]; yr <- Vyr[i1]
   a <- z$athlete_id; ev <- z$event_id[1]; kk <- key(a, ev); dt0 <- z$date[1]
@@ -2169,13 +2169,13 @@ for (r_ in seq_along(starts)) {
       }
     }
   }
-  if (!is.na(z$class[1]) && z$class[1] %chin% MAJ && z$rc[1] == "final" &&
+  if (!is.na(z$meet_type[1]) && z$meet_type[1] %chin% MAJ && z$rc[1] == "final" &&
       dt0 >= MAJ_FROM) {
     ms <- if (MAXPLACE > 0L) which(z$place <= MAXPLACE) else seq_along(a)
     gg2 <- .pairs(length(ms), z$place[ms])
     g2 <- list(i = ms[gg2$i], j = ms[gg2$j])
     if (length(g2$i)) maj[[length(maj)+1L]] <- data.table(
-      class = z$class[1], yr = as.character(yr), event_id = ev,
+      meet_type = z$meet_type[1], yr = as.character(yr), event_id = ev,
       conc = { d2 <- r_use[g2$i] - r_use[g2$j]
                c2 <- as.numeric((d2 > 0) == (z$place[g2$i] < z$place[g2$j]))
                c2[d2 == 0] <- 0.5; sum(c2) },
@@ -2421,7 +2421,7 @@ if (nrow(mj)) {
 ")
   print(mj[, .(finals = .N, conc = round(100*sum(conc)/sum(pairs),2),
                fav = round(100*mean(fav),1), medal_hits = round(100*sum(medal3)/(3*.N),1),
-               med_winner_rank = as.double(median(winner_rank))), by = .(class, yr)][order(yr, class)])
+               med_winner_rank = as.double(median(winner_rank))), by = .(meet_type, yr)][order(yr, meet_type)])
   cat("
 pooled:
 ")
