@@ -1,9 +1,9 @@
 # Build the marks-lab cache over T1 AND T2, for statistical power.
 #
-# WHY. The T1_elite test set gives 1,641 held-out finals since 2024, a median of
+# WHY. The M1 test set gives 1,641 held-out finals since 2024, a median of
 # 13 races per event. That is why 21 of 44 events come back "not separated" and
 # why no amount of parameter tuning can settle them -- the answer is not in the
-# data at that size. T2_strong adds 44,944 held-out finals, 27x more, taking the
+# data at that size. M2 adds 44,944 held-out finals, 27x more, taking the
 # median event to 233 races and the men's 100m from 60 to 1,770.
 #
 # T2 IS A DIFFERENT POPULATION and must not become the headline: fields average
@@ -50,15 +50,15 @@ if ($availMB -lt 1200) {
 }
 
 # THE FIT IS ALREADY WEIGHTED BY WAC CLASS, and that alone is most of what T2
-# needs offsetting against: measured 2026-09-08, T1_elite's WAC-weighted mass
-# (186,421) already exceeds T2_strong's (120,482) despite 19x fewer races, so
+# needs offsetting against: measured 2026-09-08, M1's WAC-weighted mass
+# (186,421) already exceeds M2's (120,482) despite 19x fewer races, so
 # fit_event_params.R's CITIUS_LAB_TIER_WEIGHT now defaults to 1 -- every row's
 # WAC weight taken at face value. The earlier default of 0.037 (equal RACE
 # COUNT) stacked a second correction on top of one the WAC weight had already
 # made, and left T2 with 2.34% of fit weight from 95% of the races -- close to
 # nullifying the reason it was added. marks_scorecard.R's weighting is
 # unaffected either way; see fit_event_params.R's own comment for the numbers.
-$env:CITIUS_LAB_TIERS = "T1_elite,T2_strong"
+$env:CITIUS_LAB_TIERS = "M1,M2"
 $env:CITIUS_LAB_CACHE = "marks_lab_cache_t1t2"
 $env:CITIUS_LAB_SIGMA_EVERY = "1"
 

@@ -2,7 +2,7 @@
 #
 # WHY. The blend was licensed in the marks lab, which is gate-verified exact
 # against estimate_ability() but scores 35 events on a 2024+ window. The launch
-# gate is the 2020+ T1_elite set of 54 events scored by score_goal_by_event.R.
+# gate is the 2020+ M1 set of 54 events scored by score_goal_by_event.R.
 # This run puts the decision on that apparatus.
 #
 # Two arms, and the PAIR is the point -- a blend arm alone cannot separate the
@@ -33,7 +33,7 @@ $env:CITIUS_BT_CALIBRATION   = "calibration_corpus_wac_coast_0904_full2.rds"
 $env:CITIUS_BT_ADJUST_RACE   = "1"
 $env:CITIUS_BT_MARKS_ONLY    = "1"
 $env:CITIUS_BT_STORE         = "athletics_corpus_store"
-$env:CITIUS_BT_TIER          = "T1_elite"
+$env:CITIUS_BT_TIER          = "M1"
 $env:CITIUS_BT_MEET_TIER     = "1"
 $env:CITIUS_BT_MEETS         = "450"
 # ONE worker, not two. The 2-worker run of this arm was OOM-killed at 16:30 on

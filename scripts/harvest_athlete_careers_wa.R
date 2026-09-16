@@ -125,7 +125,7 @@ ch <- ch[!is.na(aid)]
 cat_f <- file.path(D, "competition_catalogue.parquet")
 elite <- if (file.exists(cat_f)) {
   ct <- as.data.table(arrow::read_parquet(cat_f))[, .(competition_id, meet_tier)]
-  as.character(ct[meet_tier %chin% c("T1_elite", "T2_strong")]$competition_id)
+  as.character(ct[meet_tier %chin% c("M1", "M2")]$competition_id)
 } else character(0)
 fin <- unique(ch[!is.na(place) & as.character(competition_id) %chin% elite &
                    grepl("final", round, ignore.case = TRUE) &

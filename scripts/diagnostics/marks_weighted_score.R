@@ -48,7 +48,7 @@ pairs[!is.finite(cv_prior) | cv_prior <= 0, cv_prior := citius:::.CITIUS_FALLBAC
 # --- the WAC class of each scored race --------------------------------------
 # `tier` on the result row is the World Athletics competition category (OW, GL,
 # GW, DF, A-F). It is NOT `meet_tier`, the catalogue's T1/T2/T3, which is what
-# the test set is already filtered on. A T1_elite meet still carries a WAC code,
+# the test set is already filtered on. A M1 meet still carries a WAC code,
 # and those codes are what a reader means by "the Olympics" versus "a B meet".
 ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 ch[, athlete_id := as.character(athlete_id)]
@@ -57,7 +57,7 @@ rm(ch); invisible(gc())
 test <- merge(test, tier_of, by = "race_key", all.x = TRUE)
 test[is.na(tier), tier := "unknown"]
 
-cat("=== WAC classes present in the scored (T1_elite) test set, held out ===\n")
+cat("=== WAC classes present in the scored (M1) test set, held out ===\n")
 print(test[date >= SPLIT, .(rows = .N, races = uniqueN(race_key)), by = tier][order(-races)])
 
 parse_w <- function(spec) {

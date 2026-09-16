@@ -32,16 +32,16 @@ res <- rbindlist(lapply(c(2005, 2010, 2012, 2014, 2016, 2018, 2020), function(y)
   s <- d[yr >= y]
   data.table(from = y,
              total_rows = nrow(s),
-             t1_rows    = s[meet_tier == "T1_elite", .N],
-             t1_comps   = s[meet_tier == "T1_elite", uniqueN(competition_id)],
-             t2_rows    = s[meet_tier == "T2_strong", .N])
+             t1_rows    = s[meet_tier == "M1", .N],
+             t1_comps   = s[meet_tier == "M1", uniqueN(competition_id)],
+             t2_rows    = s[meet_tier == "M2", .N])
 }))
 res[, t1_vs_2020 := round(t1_rows / res[from == 2020, t1_rows], 2)]
 res[, rows_vs_2020 := round(total_rows / res[from == 2020, total_rows], 2)]
 print(res)
 
 cat("\n=== T1 rows by year, so the thin early years are visible ===\n")
-print(d[meet_tier == "T1_elite" & yr >= 2000,
+print(d[meet_tier == "M1" & yr >= 2000,
         .(comps = uniqueN(competition_id), rows = .N), by = yr][order(yr)])
 
 cat("\nt1_vs_2020 is the multiplier on elite sample. The T1 concordance floor\n")

@@ -1,4 +1,4 @@
-# T3_development completeness pilot: 2026-only, results >= 20 at last catalogue
+# M3 completeness pilot: 2026-only, results >= 20 at last catalogue
 # snapshot. 1,262 competitions, chosen as a bounded test of full T3 backfill
 # before committing to the full ~20,000-competition gap. See NEXT-STEPS.md /
 # session notes 2026-08-30 for the decision.

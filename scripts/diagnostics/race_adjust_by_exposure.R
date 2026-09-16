@@ -46,7 +46,7 @@ d <- merge(d, act, by = c("race_id", "athlete_id"))
 ctl <- setDT(arrow::read_parquet(file.path(OUT, "competition_catalogue.parquet")))
 d[, competition_id := as.character(competition_id)]; ctl[, competition_id := as.character(competition_id)]
 d <- merge(d, ctl[, .(competition_id, meet_tier)], by = "competition_id", all.x = TRUE)
-d <- d[meet_tier == "T1_elite" & date >= as.Date("2020-01-01")]
+d <- d[meet_tier == "M1" & date >= as.Date("2020-01-01")]
 cat(sprintf("T1 2020+ predictions: %s\n", format(nrow(d), big.mark = ",")))
 
 # EXPOSURE: decay-weighted mean |c_r| over the athlete's prior races in this

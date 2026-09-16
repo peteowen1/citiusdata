@@ -890,8 +890,8 @@ ENGINE_SHA <- if (file.exists(ENGINE_SRC))
 # source and identical config, differing only in this date, scored on the pairs
 # both share from 2021 on:
 #
-#   T1_elite    253,121 common pairs   75.777 -> 75.876   +0.099  (floor 0.099)
-#   T2_strong 6,350,370 common pairs   69.923 -> 69.573   -0.350  (floor 0.020)
+#   M1    253,121 common pairs   75.777 -> 75.876   +0.099  (floor 0.099)
+#   M2 6,350,370 common pairs   69.923 -> 69.573   -0.350  (floor 0.020)
 #
 # Neutral where it was supposed to help - exactly one noise floor at T1 - and a
 # real loss of 17.6 floors overall.
@@ -928,7 +928,7 @@ stopifnot("SEQ_FROM is not a readable date" = !is.na(FROM))
 
 cat0 <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
 cat0[, competition_id := as.character(competition_id)]
-cat0 <- cat0[meet_tier %in% c("T1_elite","T2_strong"), .(competition_id, meet_tier, meet_type)]
+cat0 <- cat0[meet_tier %in% c("M1","M2"), .(competition_id, meet_tier, meet_type)]
 reg <- as.data.table(citius::citius_events())[, .(event_id, family)]
 ag <- readRDS(file.path(OUT, "aging.rds"))
 curves <- as.data.table(ag$curves)
@@ -1317,8 +1317,8 @@ MU <- d[, .(mu = mean(perf)), by = event_id]; MUv <- setNames(MU$mu, MU$event_id
 # seed. It is still 50.00 here, and still an artefact.
 #
 # By tier, which decides what this is worth:
-#   T2_strong  6,350,370 pairs  69.923 -> 71.359  +1.436   72 floors
-#   T1_elite     253,121 pairs  75.777 -> 75.711  -0.067   inside the floor
+#   M2  6,350,370 pairs  69.923 -> 71.359  +1.436   72 floors
+#   M1     253,121 pairs  75.777 -> 75.711  -0.067   inside the floor
 #   weighted sealed             72.820 -> 73.862  +1.042   about 6.5 floors
 #
 # A large correctness win across the corpus and a NON-EVENT at elite level. T1
@@ -1892,8 +1892,8 @@ MAJ <- c("olympics","world_champs","european_champs","commonwealth")
 # care about, and lands at the same noise. Past ~40% majors the noise floor
 # collides with the effects and the metric stops being able to choose at all.
 W_MAJ <- .env_num("SEQ_W_MAJ", 40)   # olympics / worlds / euros / commonwealth
-W_T1  <- .env_num("SEQ_W_T1",  12)   # other T1_elite: diamond league, world indoor
-W_T2  <- .env_num("SEQ_W_T2",   1)   # T2_strong
+W_T1  <- .env_num("SEQ_W_T1",  12)   # other M1: diamond league, world indoor
+W_T2  <- .env_num("SEQ_W_T2",   1)   # M2
 W_RND <- .env_num("SEQ_W_RND", 0.5)  # multiplier for a non-final round
 # --- metric weight per row, enumerated and asserted -------------------------
 # Computed up front rather than inline so that EVERY combination present in the
@@ -1901,7 +1901,7 @@ W_RND <- .env_num("SEQ_W_RND", 0.5)  # multiplier for a non-final round
 # weight to an uncatalogued major would bias the metric in the exact direction
 # the weighting exists to correct, and nothing downstream would show it.
 d[, w_tier := fifelse(!is.na(meet_type) & meet_type %chin% MAJ, W_MAJ,
-              fifelse(!is.na(meet_tier) & meet_tier == "T1_elite", W_T1, W_T2))]
+              fifelse(!is.na(meet_tier) & meet_tier == "M1", W_T1, W_T2))]
 d[, w_rnd := fifelse(rc == "final", 1, W_RND)]
 d[, wt := w_tier * w_rnd]
 wtab <- d[, .(races = uniqueN(race_key), rows = .N, weight = wt[1]),
@@ -2257,7 +2257,7 @@ for (r_ in seq_along(starts)) {
   kap_e <- KAPPAv[[ev]]; if (is.null(kap_e) || !is.finite(kap_e)) kap_e <- KAPPA
   kv <- pmax(k0e * kap_e / (n_eff + kap_e), kfl_e)
   kt1_e <- KT1v[[ev]]; if (is.null(kt1_e) || !is.finite(kt1_e)) kt1_e <- KT1
-  if (kt1_e != 1 && z$meet_tier[1] == "T1_elite") kv <- pmin(kv * kt1_e, 0.9)
+  if (kt1_e != 1 && z$meet_tier[1] == "M1") kv <- pmin(kv * kt1_e, 0.9)
   cen_e <- CENSv[[ev]]; if (is.null(cen_e) || !is.finite(cen_e)) cen_e <- CENS
   if (cen_e < 1 || CENSWIN < 1) {
     fac <- rep(1, length(a))

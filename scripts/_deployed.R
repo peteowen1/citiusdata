@@ -82,7 +82,7 @@ DEPLOYED <- list(
   #
   # This exact change was REJECTED on 2026-08-29 (T1 marks MAE +3.15% worse,
   # p=3e-15) and that verdict stood until the catalogue underneath it was
-  # rebuilt. Re-run 2026-09-04 on 53,311 paired T1_elite predictions across 74
+  # rebuilt. Re-run 2026-09-04 on 53,311 paired M1 predictions across 74
   # events: marks MAE 2.495% -> 2.428% (-2.68%, p=1.9e-283), gold logloss
   # 0.1675 -> 0.1662 (p=1.3e-04), medal logloss a tie (p=0.785). No metric
   # traded against another, which is the shape of a real fix rather than a
@@ -175,7 +175,7 @@ DEPLOYED <- list(
   # moves together and placings, p_gold and p_medal are unchanged bit-for-bit;
   # only the predicted mark moves. check_deployed_debias.R asserts both.
   #
-  # WHY GATED. Applied blanket on the T1_elite 2020+ goal set the debias took
+  # WHY GATED. Applied blanket on the M1 2020+ goal set the debias took
   # events beating last-5 on marks from 18 to 25 of 54 with zero event-level
   # regressions, but pooled MAE got WORSE (+23.7%) because road/marathon are
   # 36% of predictions and were pushed the wrong way. Per family, control ->
@@ -259,7 +259,7 @@ DEPLOYED <- list(
   # shock and the mark-distribution spread are the cell's values (a T1 final
   # shares 0.33-0.96 of the event-wide shock by family) rather than the
   # corpus-wide ones. Judged by pit_coverage_check.R on 2024 and 2025 finals.
-  race_context = list(enabled = TRUE, meet_tier = "T1_elite"),
+  race_context = list(enabled = TRUE, meet_tier = "M1"),
 
   # MARKS RECENCY BLEND: OFF, and it is a diagnostic lever rather than a model
   # component. Deployed at 0.5 on 2026-09-07 and withdrawn the same day.
@@ -313,7 +313,7 @@ DEPLOYED <- list(
   #
   # WHAT THE GATE ACTUALLY SAID. `_run_event_params_arm_chunked.ps1` ran both
   # arms to completion over 395 meets (2026-09-09), ctrl = this config without
-  # the table, event = with it. On T1_elite, 1,760 races / 28,457 predictions:
+  # the table, event = with it. On M1, 1,760 races / 28,457 predictions:
   #   medal Brier   -3.16%  p = 4.5e-06
   #   medal logloss -2.34%  p = 0.000138
   #   gold logloss  -1.66%  p = 0.041
@@ -356,7 +356,7 @@ DEPLOYED <- list(
   #
   # MEASURED ON THE PROPERLY-POWERED TEST, 2026-09-16: 1,766 R1 races (races
   # whose OWN tier code is elite, not their meet's -- see
-  # docs/reference/modelling-traps.md, "R1 vs M1"), 201 T1_elite meets,
+  # docs/reference/modelling-traps.md, "R1 vs M1"), 201 M1 meets,
   # 376,674 pairwise comparisons for concordance.
   #   gold Brier    +0.04%  p=0.54  (wrong direction)
   #   medal Brier   +0.00%  p=0.96  (exactly flat)

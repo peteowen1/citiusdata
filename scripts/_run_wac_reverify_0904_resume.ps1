@@ -13,7 +13,12 @@ $env:CITIUS_BT_CALIBRATION = "calibration_corpus_csigma_coast.rds"
 $env:CITIUS_BT_STORE       = "athletics_corpus_store"
 $env:CITIUS_BT_CACHE       = "bt_cache_wac_ctrl_0904"
 $env:CITIUS_BT_OUT         = "backtest_wac_ctrl_0904.rds"
-$env:CITIUS_BT_TIER        = "T1_elite"
+# T1_elite -> M1 relabel (2026-09-16): this cache's own _arm.rds still has
+# tier_filter = "T1_elite" (pre-relabel). arm_fingerprint bakes CITIUS_BT_TIER
+# in, so this WILL hit the fingerprint guard and abort rather than resume --
+# correct, fail-loud behaviour, not a bug. Delete the cache dir for a clean
+# restart, or manually reconcile the stamp, before relying on this script.
+$env:CITIUS_BT_TIER        = "M1"
 $env:CITIUS_BT_MEETS       = "450"
 $env:CITIUS_BT_WORKERS     = "1"
 $env:CITIUS_HALF_LIFE_FAMILY = "road=1095,walk=730,hurdles=180"

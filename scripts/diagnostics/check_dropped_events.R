@@ -32,9 +32,9 @@ res <- rbindlist(lapply(drop$event_id, function(EV) {
   x[, competition_id := as.character(competition_id)]
   x <- merge(x, cat0[, .(competition_id, meet_tier)], by = "competition_id", all.x = TRUE)
   data.table(event_id = EV, corpus_rows = nrow(x),
-             t1 = x[meet_tier == "T1_elite", .N], t2 = x[meet_tier == "T2_strong", .N],
+             t1 = x[meet_tier == "M1", .N], t2 = x[meet_tier == "M2", .N],
              uncat = x[is.na(meet_tier), .N],
-             other = x[!is.na(meet_tier) & !meet_tier %chin% c("T1_elite","T2_strong"), .N])
+             other = x[!is.na(meet_tier) & !meet_tier %chin% c("M1","M2"), .N])
 }))
 m <- merge(drop[, .(event_id, discipline, sex, rated)], res, by = "event_id")
 setorder(m, rated)

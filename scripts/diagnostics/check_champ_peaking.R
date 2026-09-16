@@ -66,7 +66,7 @@ h <- merge(h, merge(cp, cg, by = "competition_id", all.x = TRUE)[, .(race_key, c
            by = "race_key", all.x = TRUE)
 MAJ <- c("olympics","world_champs","european_champs","commonwealth","world_indoor")
 h[, occasion := fifelse(!is.na(class) & class %chin% MAJ, "championship",
-                fifelse(!is.na(meet_tier) & meet_tier == "T1_elite", "T1 meet", "ordinary"))]
+                fifelse(!is.na(meet_tier) & meet_tier == "M1", "T1 meet", "ordinary"))]
 # merged races out, as everywhere
 dup <- h[, .(n = .N, marks = uniqueN(round(perf, 9))), by = .(race_key, place)][
          n > 1 & marks > 1, unique(race_key)]

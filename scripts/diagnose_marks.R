@@ -41,7 +41,7 @@ d <- merge(d, act, by = c("race_id", "athlete_id"))
 d <- merge(d, as.data.table(citius_events())[, .(event_id, orientation, family)], by = "event_id")
 cat_tbl <- setDT(arrow::read_parquet(file.path(OUT, "competition_catalogue.parquet")))
 d <- merge(d, cat_tbl[, .(competition_id, meet_tier, meet_strength)], by = "competition_id", all.x = TRUE)
-d <- d[meet_tier == "T1_elite" & date >= HOLDOUT]
+d <- d[meet_tier == "M1" & date >= HOLDOUT]
 
 # The baseline, rebuilt exactly as score_arm.R builds it: the mean of an
 # athlete's last five oriented performances before the race.

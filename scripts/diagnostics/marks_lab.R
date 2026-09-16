@@ -8,7 +8,7 @@
 # path already relies on), so a marks-only question needs no simulation at all,
 # and a monthly as-of refit costs minutes instead of hours.
 #
-# WHAT IT DOES. For a window of T1_elite finals: refit ability at the start of
+# WHAT IT DOES. For a window of M1 finals: refit ability at the start of
 # each month from marks strictly before it, predict each entrant's mark, and
 # score MAE per event against the last-5 baseline computed on the same rows.
 #
@@ -49,7 +49,7 @@ say("window %s..%s | calibration %s | global half-life %g | family %s",
     format(FROM), format(TO), CAL, HL_GLOBAL,
     paste(names(hl_map), unlist(hl_map), sep = "=", collapse = ","))
 
-# --- the test set: T1_elite finals, as the goal metric defines them ----------
+# --- the test set: M1 finals, as the goal metric defines them ----------
 ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 ch[, athlete_id := as.character(athlete_id)]
 ch[, competition_id := as.character(competition_id)]
@@ -60,7 +60,7 @@ ct <- as.data.table(open_dataset(file.path(OUT, "competition_catalogue.parquet")
                       dplyr::select(competition_id, meet_tier) |> dplyr::collect())
 ct[, competition_id := as.character(competition_id)]
 test <- merge(test, unique(ct[!is.na(meet_tier)], by = "competition_id"), by = "competition_id")
-test <- test[meet_tier == "T1_elite" & date >= FROM & date < TO]
+test <- test[meet_tier == "M1" & date >= FROM & date < TO]
 test <- test[grepl("final", tolower(round)) & !grepl("semi|quarter", tolower(round))]
 reg <- as.data.table(citius_events())[, .(event_id, orientation, family, discipline = event_id, sex)]
 test <- merge(test, reg[, .(event_id, orientation, family, sex)], by = "event_id")

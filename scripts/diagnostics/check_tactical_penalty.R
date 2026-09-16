@@ -12,7 +12,7 @@
 #
 # This measures whether it does. If T1 finals carry a systematically negative
 # residual after S, then championship performances are being read as decline,
-# and SEQ_KT1 (which scales the learning rate for T1_elite races, default 1) is
+# and SEQ_KT1 (which scales the learning rate for M1 races, default 1) is
 # the existing knob for it.
 suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages(library(arrow)); suppressMessages(library(data.table))

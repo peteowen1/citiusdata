@@ -43,7 +43,7 @@ tk   <- function(l, e) { t0 <- Sys.time(); v <- force(e)
   say("%-38s %5.1fs", l, as.numeric(difftime(Sys.time(), t0, units = "secs"))); invisible(v) }
 cal <- readRDS(file.path(OUT, CAL))
 
-# --- test set: T1_elite finals ----------------------------------------------
+# --- test set: M1 finals ----------------------------------------------
 ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 ch[, `:=`(athlete_id = as.character(athlete_id), competition_id = as.character(competition_id))]
 test <- unique(ch[!is.na(mark) & !is.na(race_key) & !is.na(place) & place > 0 & !is.na(event_id),
@@ -53,7 +53,7 @@ ct <- as.data.table(open_dataset(file.path(OUT, "competition_catalogue.parquet")
                       dplyr::select(competition_id, meet_tier) |> dplyr::collect())
 ct[, competition_id := as.character(competition_id)]
 test <- merge(test, unique(ct[!is.na(meet_tier)], by = "competition_id"), by = "competition_id")
-test <- test[meet_tier == "T1_elite" & date >= FROM & date < TO &
+test <- test[meet_tier == "M1" & date >= FROM & date < TO &
                grepl("final", tolower(round)) & !grepl("semi|quarter", tolower(round))]
 reg <- as.data.table(citius_events())[, .(event_id, orientation, family)]
 test <- merge(test, reg, by = "event_id")[, act := orientation * log(mark)][is.finite(act)]

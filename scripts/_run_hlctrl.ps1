@@ -18,7 +18,7 @@ $env:CITIUS_BT_MARKS_ONLY    = "1"
 # sides of the 2023-01-01 holdout) -- an earlier re-run with no tier filter
 # sampled TARGET=900 evenly BY ROW, not by date, and landed entirely in
 # 2016-2018 because that's where most rows in the unrestricted pool sit.
-$env:CITIUS_BT_TIER          = "T1_elite,T2_strong"
+$env:CITIUS_BT_TIER          = "M1,M2"
 Remove-Item Env:\CITIUS_BT_SIGMA_SCALE -ErrorAction SilentlyContinue
 Remove-Item Env:\CITIUS_BT_PROJECT_ROUND -ErrorAction SilentlyContinue
 Remove-Item Env:\CITIUS_HALF_LIFE_FAMILY -ErrorAction SilentlyContinue

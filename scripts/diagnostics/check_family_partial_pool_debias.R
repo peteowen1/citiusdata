@@ -133,8 +133,8 @@ fit_hierarchy <- function(dd, err_col) {
 # the-mean mechanism check_sigma_coverage.R/the selection-shrinkage arm target
 # elsewhere in this session -- by fitting ONLY on the population being scored.
 FIT_T1_ONLY <- as.logical(Sys.getenv("CITIUS_POOL_FIT_T1_ONLY", "FALSE"))
-tr_fit <- if (FIT_T1_ONLY) tr[meet_tier == "T1_elite"] else tr
-say("fitting population: %s (%s races)", if (FIT_T1_ONLY) "T1_elite only" else "all tiers pooled",
+tr_fit <- if (FIT_T1_ONLY) tr[meet_tier == "M1"] else tr
+say("fitting population: %s (%s races)", if (FIT_T1_ONLY) "M1 only" else "all tiers pooled",
     format(uniqueN(tr_fit$race_id), big.mark = ","))
 fit_m <- fit_hierarchy(tr_fit, "em")
 fit_b <- fit_hierarchy(tr_fit, "eb")
@@ -199,7 +199,7 @@ report <- function(dd, label) {
 
 cat("\n================ OUT-OF-SAMPLE TEST ================\n")
 report(te, "TEST, all tiers")
-report(te[meet_tier == "T1_elite"], "TEST, T1_elite")
+report(te[meet_tier == "M1"], "TEST, M1")
 
 cat("\n---- fitted family x sex offsets (train, model) ----\n")
 print(fit_m$fs[order(-abs(shrunk)), .(fs, n, mean_g = round(mean_g,2), shrunk = round(shrunk,2), w = round(w,2))])

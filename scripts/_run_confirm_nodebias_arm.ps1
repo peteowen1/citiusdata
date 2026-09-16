@@ -3,7 +3,7 @@
 #
 # WHY. The debias was disabled 2026-09-07 13:30 on the marks lab, which is
 # gate-verified exact against estimate_ability() but scores a 2025-2026 window
-# of 39 events. The launch gate is the 2020+ T1_elite set of 54 events scored
+# of 39 events. The launch gate is the 2020+ M1 set of 54 events scored
 # by score_goal_by_event.R. This run puts the decision on that apparatus.
 #
 # Read against:
@@ -26,7 +26,7 @@ $env:CITIUS_BT_MARKS_ONLY     = "1"
 $env:CITIUS_BT_STORE          = "athletics_corpus_store"
 $env:CITIUS_BT_CACHE          = "bt_cache_confirm_nodebias"
 $env:CITIUS_BT_OUT            = "backtest_confirm_nodebias.rds"
-$env:CITIUS_BT_TIER           = "T1_elite"
+$env:CITIUS_BT_TIER           = "M1"
 $env:CITIUS_BT_MEET_TIER      = "1"
 $env:CITIUS_BT_MEETS          = "450"
 $env:CITIUS_BT_WORKERS        = "2"

@@ -4,7 +4,7 @@
 # "F", which citius/R/ability.R's .tier_class() maps to LOW, not top -- so
 # this filter pulled in club/minor-meet marks, not elite ones, and its 5M-row
 # "F" bucket dominated everything. (2) it used the catalogue's meet_tier,
-# which has entire YEARS with zero T1_elite rows across every discipline
+# which has entire YEARS with zero M1 rows across every discipline
 # (checked directly: 2013/2015/2017/2018/2020/2025/2026 all-zero) -- a
 # pre-existing catalogue coverage gap, not a tech-era signal.
 #
@@ -26,7 +26,7 @@
 # Method: annual mean of the TOP 20 marks per event/sex/year (not all marks),
 # specifically to blunt the "more people compete now" depth confound -- top-20
 # should already be near-saturated at elite fields even in a thinner year.
-# Restricted to T1_elite via the catalogue's meet_tier, the same anchor-guarded
+# Restricted to M1 via the catalogue's meet_tier, the same anchor-guarded
 # field every other finding in this repo uses, not the feed's incoherent tier.
 suppressMessages(devtools::load_all(here::here("citius")))
 suppressMessages(library(data.table))
@@ -53,7 +53,7 @@ cov <- 100 * mean(!is.na(corpus$meet_tier))
 cat(sprintf("meet_tier attached to %.1f%% of matched rows\n", cov))
 stopifnot("join must not silently match nothing" = cov > 50)
 
-t1 <- corpus[meet_tier == "T1_elite"]
+t1 <- corpus[meet_tier == "M1"]
 # discipline/sex/orientation already live on the corpus itself (verified by
 # inspection) -- no need to bring them in from the registry a second time.
 t1[, year := data.table::year(date)]

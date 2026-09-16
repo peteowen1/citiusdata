@@ -127,10 +127,10 @@ compare <- function(sc, sf, label) {
 }
 
 cuts <- setdiff(unique(dc$structure), "other")
-cat("\n================ T1_elite: bias before vs after the fix ================\n")
+cat("\n================ M1: bias before vs after the fix ================\n")
 out1 <- rbindlist(lapply(cuts, function(k)
-  compare(dc[meet_tier == "T1_elite" & structure == k],
-          df[meet_tier == "T1_elite" & structure == k], k)), fill = TRUE)
+  compare(dc[meet_tier == "M1" & structure == k],
+          df[meet_tier == "M1" & structure == k], k)), fill = TRUE)
 if (nrow(out1)) print(out1[order(ctrl)])
 
 cat("\n================ all tiers pooled: bias before vs after ================\n")
@@ -156,13 +156,13 @@ if (!is.null(tri)) {
   a_t5   <- merge(dt5, k3, by = c("race_id", "athlete_id"))
   stopifnot("three-arm shared set is not aligned" =
               nrow(a_ctrl) == nrow(a_fix) && nrow(a_fix) == nrow(a_t5))
-  cat("\n================ THREE ARMS, T1_elite (shared rows) ================\n")
+  cat("\n================ THREE ARMS, M1 (shared rows) ================\n")
   say("rows: %s | races: %s", format(nrow(a_ctrl), big.mark = ","),
       format(uniqueN(a_ctrl$race_id), big.mark = ","))
   tri_out <- rbindlist(lapply(cuts, function(k) {
-    s1 <- a_ctrl[meet_tier == "T1_elite" & structure == k]
-    s2 <- a_t5[meet_tier   == "T1_elite" & structure == k]
-    s3 <- a_fix[meet_tier  == "T1_elite" & structure == k]
+    s1 <- a_ctrl[meet_tier == "M1" & structure == k]
+    s2 <- a_t5[meet_tier   == "M1" & structure == k]
+    s3 <- a_fix[meet_tier  == "M1" & structure == k]
     if (!nrow(s1)) return(NULL)
     data.table(cut = k, n = nrow(s1),
                ctrl = clustered(s1$bias_pct, s1$race_id)$est,
@@ -209,8 +209,8 @@ split_out <- mm[structure != "other",
 setorder(split_out, era, ctrl)
 print(split_out)
 
-cat("\n================ post-holdout only, T1_elite (the honest read) ================\n")
-post_t1 <- mm[date >= FIT_HOLDOUT & meet_tier == "T1_elite" & structure != "other"]
+cat("\n================ post-holdout only, M1 (the honest read) ================\n")
+post_t1 <- mm[date >= FIT_HOLDOUT & meet_tier == "M1" & structure != "other"]
 if (nrow(post_t1)) {
   po <- rbindlist(lapply(split(post_t1, post_t1$structure), function(s) {
     a <- clustered(s$b_ctrl, s$race_id); b <- clustered(s$b_fix, s$race_id)
@@ -220,7 +220,7 @@ if (nrow(post_t1)) {
                closer_to_zero = abs(b$est) < abs(a$est))
   }), fill = TRUE)
   print(po[order(ctrl)])
-} else say("no post-holdout T1_elite rows")
+} else say("no post-holdout M1 rows")
 
 cat("\n================ VERDICT ================\n")
 src <- if (nrow(out1) >= 3) out1 else out2

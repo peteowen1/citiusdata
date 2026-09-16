@@ -26,7 +26,7 @@ $env:CITIUS_BT_PROJECT_TIER  = "0.5"
 $env:CITIUS_BT_FAMILY_DEBIAS = "1"
 $env:CITIUS_HALF_LIFE_FAMILY = "road=1095,walk=730,hurdles=180,jump=180"
 $env:CITIUS_BT_MARKS_ONLY    = "1"
-$env:CITIUS_BT_TIER          = "T1_elite,T2_strong"
+$env:CITIUS_BT_TIER          = "M1,M2"
 Remove-Item Env:\CITIUS_BT_SIGMA_SCALE -ErrorAction SilentlyContinue
 Remove-Item Env:\CITIUS_BT_PROJECT_ROUND -ErrorAction SilentlyContinue
 

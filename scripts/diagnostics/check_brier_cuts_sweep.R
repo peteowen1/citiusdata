@@ -86,7 +86,7 @@ sim_rows <- rbindlist(lapply(split(d, d$race_id), function(r) {
 d <- merge(d, sim_rows, by = c("race_id", "athlete_id"))
 d <- d[date >= HOLDOUT]
 
-t1 <- d[meet_tier == "T1_elite"]
+t1 <- d[meet_tier == "M1"]
 say("\nT1 elite population: %s rows, %s races", format(nrow(t1), big.mark=","), format(uniqueN(t1$race_id), big.mark=","))
 
 EPS <- 1e-4

@@ -98,10 +98,10 @@ for (col in present) cat(sprintf("    %-22s %5.2f%%\n", col, null_rates[[col]]))
 # A T1 meet already in our own catalogue with zero rows in our own corpus is a
 # silent internal gap -- distinct from audit_coverage.R's feed-vs-us check.
 cat("\n=== 2b. COVERAGE COMPLETENESS: T1 meets since 2016 with ZERO results ===\n")
-t1_recent <- cat_tbl[meet_tier == "T1_elite" & year >= 2016]
+t1_recent <- cat_tbl[meet_tier == "M1" & year >= 2016]
 have_results <- unique(ch$competition_id)
 t1_gap <- t1_recent[!competition_id %in% have_results]
-anchor("every T1_elite meet since 2016 has >=1 result row", nrow(t1_gap) == 0,
+anchor("every M1 meet since 2016 has >=1 result row", nrow(t1_gap) == 0,
        sprintf("%d of %d T1 meets missing", nrow(t1_gap), nrow(t1_recent)))
 if (nrow(t1_gap)) {
   cat("  gaps:\n")
@@ -147,7 +147,7 @@ anchor("no meet_type has >15% of its meets split across tiers (n>=10)", nrow(bad
 # copy of the same cutoffs produces false-positive mismatches for classes
 # whose median meet_strength sits between the two thresholds (found 2026-09-02:
 # this was 40, the catalogue's real T2 floor is 50).
-TIER_BAND <- function(s) fcase(s >= 75, "T1_elite", s >= 50, "T2_strong", default = "T3_development")
+TIER_BAND <- function(s) fcase(s >= 75, "M1", s >= 50, "M2", default = "M3")
 by_class[, strength_implied_tier := TIER_BAND(median_strength)]
 mismatch <- by_class[strength_implied_tier != modal_tier & n >= 10]
 anchor("no meet_type's median meet_strength implies a different tier than its modal assignment (n>=10)",

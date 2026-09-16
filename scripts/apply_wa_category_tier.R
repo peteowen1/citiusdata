@@ -59,9 +59,9 @@ KNOWN <- c("olympics","world_champs","commonwealth","world_indoor","diamond_leag
            "african_games","panam_games","european_games","age_group","club_meet",
            "ncaa_lower","team_champs_lower","road_race")
 RANK <- c(OW = 1, DF = 2, GW = 3, GL = 4, A = 5, B = 6, C = 7, D = 8, E = 9, F = 10)
-TIER <- c(OW = "T1_elite", DF = "T1_elite", GW = "T1_elite", GL = "T1_elite",
-          A = "T2_strong", B = "T2_strong", C = "T2_strong", D = "T2_strong",
-          E = "T3_development", F = "T3_development")
+TIER <- c(OW = "M1", DF = "M1", GW = "M1", GL = "M1",
+          A = "M2", B = "M2", C = "M2", D = "M2",
+          E = "M3", F = "M3")
 
 best_code <- function(s) vapply(strsplit(s, "/"), function(v) {
   v <- v[v %in% names(RANK)]
@@ -104,8 +104,8 @@ print(ct[.from != meet_tier, .(meets = .N, finals = sum(finals, na.rm = TRUE)),
 cat("\ntier counts:\n"); print(ct[, .N, by = meet_tier][order(meet_tier)])
 cat("\nscored pool:\n")
 for (y in c(2024, 2025, 2026)) {
-  a <- sum(ct[before %chin% c("T1_elite","T2_strong") & year == y]$finals, na.rm=TRUE)
-  b <- ct[meet_tier %chin% c("T1_elite","T2_strong") & year == y, sum(finals, na.rm=TRUE)]
+  a <- sum(ct[before %chin% c("M1","M2") & year == y]$finals, na.rm=TRUE)
+  b <- ct[meet_tier %chin% c("M1","M2") & year == y, sum(finals, na.rm=TRUE)]
   cat(sprintf("  %d finals: %s -> %s (%+d)\n", y, format(a, big.mark=","),
               format(b, big.mark=","), b - a))
 }

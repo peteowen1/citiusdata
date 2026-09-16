@@ -164,14 +164,14 @@ wac_score_weights <- function() {
 # artefacts or caller-supplied tables, because two unrelated classifications
 # share the word:
 #
-#   meet_tier   the CATALOGUE's rating of a MEETING: T1_elite, T2_strong,
-#               T3_development. What the lab's test set is filtered on.
+#   meet_tier   the CATALOGUE's rating of a MEETING: M1, M2,
+#               M3. What the lab's test set is filtered on.
 #   race_code   the World Athletics category of a RACE: OW, GL, GW, DF, A-F.
 #               What the scoring weights use.
 #
-# They cross: a T1_elite meeting contains races of several WAC classes. Weltklasse
+# They cross: a M1 meeting contains races of several WAC classes. Weltklasse
 # Zurich's Diamond League disciplines are race_code GW while its supporting
-# programme is race_code F, and both sit inside meet_tier T1_elite. Ninety of the
+# programme is race_code F, and both sit inside meet_tier M1. Ninety of the
 # 849 held-out races in the "elite" test set are race_code F for exactly that
 # reason.
 #

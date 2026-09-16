@@ -269,7 +269,7 @@ separate follow-on decision, not something this work already did.
   access to it**: 7189491, 7189494, 7204909, 7213160. Confirmed via a real,
   branded WA "Error 500" page in a browser, not a bot-block — retrying
   further will not fix this from citius's side.
-- **T3_development (minor/local meets) has a ~20,000-competition gap**
+- **M3 (minor/local meets) has a ~20,000-competition gap**
   against its own catalogue population (28,269 total, only 8,263 confirmed
   present as of 2026-08-30). A bounded 2026-only pilot (1,262 competitions,
   ≥20 results) ran at ~7.5 competitions/minute with a ~0.4% failure rate —

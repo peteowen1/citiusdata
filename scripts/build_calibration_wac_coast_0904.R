@@ -9,7 +9,7 @@
 #
 # Differs from the deployed calibration_corpus_csigma_coast.rds in exactly one
 # input: tier offsets fitted on the catalogue's meet_tier (WAC-based: OW/DF/GW/
-# GL -> T1_elite, A/B/C/D -> T2_strong, E/F -> T3_development) instead of the
+# GL -> M1, A/B/C/D -> M2, E/F -> M3) instead of the
 # feed's raw per-result tier. Same coasting trait fit, same wind fit, same
 # sigma_context fit -- so a control (deployed) vs treatment (this) backtest
 # arm-pair isolates the tier-basis question alone.

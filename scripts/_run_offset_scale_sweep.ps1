@@ -11,7 +11,7 @@ $LOG = "C:\dev\citiusverse\citiusdata\offset_scale_sweep_log.txt"
 
 $env:CITIUS_BT_CALIBRATION   = "calibration_corpus_wac_coast_0904.rds"
 $env:CITIUS_BT_STORE         = "athletics_corpus_store"
-$env:CITIUS_BT_TIER          = "T1_elite"
+$env:CITIUS_BT_TIER          = "M1"
 $env:CITIUS_BT_MEET_TIER     = "1"
 $env:CITIUS_BT_MEETS         = "450"
 $env:CITIUS_BT_WORKERS       = "1"

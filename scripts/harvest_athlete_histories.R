@@ -55,14 +55,14 @@ ch <- ch[!is.na(aid)]
 # interrupted sweep leaves the useful half done did not hold.
 #
 # Narrow it to finals at meets the MODEL can actually see: form_ratings.R keeps
-# only T1_elite and T2_strong and inner-joins, so an athlete whose finals are
+# only M1 and M2 and inner-joins, so an athlete whose finals are
 # all T3 never reaches it. The catalogue carries meet_tier per competition.
 .cat_f <- file.path(OUT, "competition_catalogue.parquet")
 fin <- if (file.exists(.cat_f)) {
   ct <- as.data.table(arrow::read_parquet(.cat_f))[, .(competition_id, meet_tier)]
   ct[, competition_id := as.character(competition_id)]
   ch[, .cid := as.character(competition_id)]
-  elite <- ct[meet_tier %chin% c("T1_elite", "T2_strong")]$competition_id
+  elite <- ct[meet_tier %chin% c("M1", "M2")]$competition_id
   out <- unique(ch[!is.na(place) & .cid %chin% elite &
                      grepl("final", round, ignore.case = TRUE) &
                      !grepl("semi", round, ignore.case = TRUE)]$aid)

@@ -14,8 +14,8 @@
 #
 # The genuine World Athletics (formerly IAAF) World Half Marathon Championships
 # is deliberately NOT handled here: build_competition_catalogue.R's `world_other`
-# rule already matches "World Half Marathon" and tiers it T1_elite. Everything
-# this script adds is the LABEL circuit, which is T2_strong - a strong field, not
+# rule already matches "World Half Marathon" and tiers it M1. Everything
+# this script adds is the LABEL circuit, which is M2 - a strong field, not
 # a global championship.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D <- here::here("citiusdata", "data")
@@ -76,12 +76,12 @@ cand <- miss[is_half(competition) & !is_other(competition) &
              grepl(rx(HALF_LABEL_CITY), competition, ignore.case = TRUE)]
 # A genuine WORLD championship half is not a label race and must not be tiered
 # T2 because its host city is on the list above - the first run put "New Delhi
-# IAAF World Half Marathon Championships" in as T2_strong, demoting a global
+# IAAF World Half Marathon Championships" in as M2, demoting a global
 # championship to a city road race.
 #
 # But "Championships" ALONE is far too loose, and putting it in this pattern
 # tiered 170 NATIONAL championships - Latvian, Cyprus, Algerian, Russian - as
-# T1_elite, i.e. level with the Olympics. National championships are a different
+# M1, i.e. level with the Olympics. National championships are a different
 # question with a different tier and they are deliberately OUT OF SCOPE here:
 # this script covers the World Athletics label circuit and the world
 # championship, nothing else.
@@ -94,7 +94,7 @@ add <- rbind(cand[!is_champs(competition) & !is_natl(competition)], champs, fill
 add <- unique(add, by = "competition_id")
 if (!nrow(add)) { cat("nothing to add\n"); quit(status = 0) }
 add[, `:=`(meet_type     = fifelse(is_champs(competition), "world_other", "road_label"),
-           meet_tier = fifelse(is_champs(competition), "T1_elite", "T2_strong"))]
+           meet_tier = fifelse(is_champs(competition), "M1", "M2"))]
 
 # ANCHOR CHECK before writing: every added competition must actually be a half.
 # A full marathon reaching this set would be tiered as a half marathon's peer,
@@ -126,16 +126,16 @@ stopifnot("duplicate competition ids" = !anyDuplicated(out$competition_id),
           "a substring match recruited a city nobody listed" =
             !any(grepl("Marrakesh|Marrakech|Indianapolis", add$competition, ignore.case = TRUE)),
           "a world championship was tiered as a label race" =
-            !any(is_champs(add$competition) & add$meet_tier != "T1_elite"),
-          "a national championship was tiered T1_elite" =
-            !any(add$meet_tier == "T1_elite" &
+            !any(is_champs(add$competition) & add$meet_tier != "M1"),
+          "a national championship was tiered M1" =
+            !any(add$meet_tier == "M1" &
                  !grepl("World|IAAF", add$competition, ignore.case = TRUE)),
           "national championships are out of scope for this script" =
             !any(is_natl(add$competition)),
           # a T1 addition is a global championship: there is one per year at most,
           # so a large count means the pattern has gone loose again
           "too many T1 additions to be world championships" =
-            sum(add$meet_tier == "T1_elite") <= 30)
+            sum(add$meet_tier == "M1") <= 30)
 if (!file.exists(paste0(CAT, ".bak"))) file.copy(CAT, paste0(CAT, ".bak"))
 # arrow memory-maps a parquet it has read, so writing back to the same path
 # fails with "user-mapped section open". Write beside it, release, then replace.

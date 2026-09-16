@@ -99,8 +99,8 @@ if (nrow(bad)) { print(bad); stop(nrow(bad), " cells have no finite cond_sd") }
 setorder(tbl, level, family, meet_tier, round_class, event_id)
 
 # --- what it says, before it is written -----------------------------------------
-cat("\n=== T1_elite finals: context cond_sd vs the event-wide value (largest events) ===\n")
-show <- merge(tbl[level == "event" & meet_tier == "T1_elite" & round_class == "final"],
+cat("\n=== M1 finals: context cond_sd vs the event-wide value (largest events) ===\n")
+show <- merge(tbl[level == "event" & meet_tier == "M1" & round_class == "final"],
               ev[, .(event_id, cond_sd_global = condition_sd)], by = "event_id")
 show[, ratio := round(cond_sd / cond_sd_global, 3)]
 print(show[order(-n_races)][1:24, .(event_id, n_races, cond_sd_global = round(cond_sd_global, 5),
@@ -108,7 +108,7 @@ print(show[order(-n_races)][1:24, .(event_id, n_races, cond_sd_global = round(co
 cat("\n=== family x tier x round (T1 and T2 finals/heats), ratio to the family-wide value ===\n")
 fs <- merge(cell_fam, glob_fam, by = c("family"), suffixes = c("", ".g"))
 fs[, ratio := round(sqrt(var_shr / var_glob.g), 3)]
-print(dcast(fs[meet_tier %in% c("T1_elite", "T2_strong") & round_class %in% c("final", "heat")],
+print(dcast(fs[meet_tier %in% c("M1", "M2") & round_class %in% c("final", "heat")],
             family ~ meet_tier + round_class, value.var = "ratio"))
 
 cal$condition_sd_context <- tbl

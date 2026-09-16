@@ -78,12 +78,12 @@ fit   <- as.list(readRDS(file.path(OUT, "marks_fit_params.rds")))
 # offsetting so it could not steer the answer. That reasoning double-counted a
 # correction the WAC class weight was already making.
 #
-# Measured 2026-09-08 on the fit-years population: T1_elite's WAC-weighted mass
-# is 186,421 against T2_strong's 120,482 -- T1 already outweighs T2 BEFORE any
+# Measured 2026-09-08 on the fit-years population: M1's WAC-weighted mass
+# is 186,421 against M2's 120,482 -- T1 already outweighs T2 BEFORE any
 # tier adjustment, despite having 19x fewer races, because T1 races are so much
-# more densely championship-class (T1_elite is 5% of fit-year races and 97.66%
+# more densely championship-class (M1 is 5% of fit-year races and 97.66%
 # of fit-year weight at the old 0.037; T2 contributed just 2.34%, close to
-# nothing). A single T1_elite/OW row outweighed a T2_strong/F row 5,454:1.
+# nothing). A single M1/OW row outweighed a M2/F row 5,454:1.
 # Stacking TIER_W on top of the WAC weight corrected an imbalance the WAC
 # weight had already fixed on its own, and came close to nullifying the entire
 # reason T2 was added -- 27x more races bought almost no stability.
@@ -116,7 +116,7 @@ if (!is.finite(TIER_W) || TIER_W < 0) {
   TIER_W <- 1
 }
 if (!"meet_tier" %in% names(test)) {
-  test[, meet_tier := "T1_elite"]
+  test[, meet_tier := "M1"]
   say("cache predates the meet_tier column; treating every row as T1")
 }
 # TWO WEIGHTS MULTIPLY HERE, and they answer different questions.
@@ -126,10 +126,10 @@ if (!"meet_tier" %in% names(test)) {
 # final 1 * 10. Fitting on the unweighted mean is what let today's parameters be
 # chosen by races the project does not forecast.
 test <- attach_score_weight(test, OUT)
-test[, row_w := fifelse(meet_tier == "T1_elite", 1, TIER_W) * sw]
+test[, row_w := fifelse(meet_tier == "M1", 1, TIER_W) * sw]
 say("fit weights: %s T1 rows at 1.0, %s non-T1 rows at %.3f (effective n %.0f)",
-    format(sum(test$meet_tier == "T1_elite"), big.mark = ","),
-    format(sum(test$meet_tier != "T1_elite"), big.mark = ","),
+    format(sum(test$meet_tier == "M1"), big.mark = ","),
+    format(sum(test$meet_tier != "M1"), big.mark = ","),
     TIER_W, sum(test$row_w))
 
 # grid, and the (kappa_family, kappa_event) each parameter earned on its sweep

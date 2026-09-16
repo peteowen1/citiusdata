@@ -171,7 +171,7 @@ all[, c("mark_r", "richness") := NULL]
 #
 # Measured on AT-800Metres-W before this fix: 27.6% of corpus races had more
 # than one first place, holding 64.9% of all placed rows, the worst a single
-# "final" with 361 athletes and 45 winners. On T1_elite meets it was 45.9% --
+# "final" with 361 athletes and 45 winners. On M1 meets it was 45.9% --
 # these are championship heats, not obscure club sections. The competition
 # harvest keyed the same event at 0.1%.
 #

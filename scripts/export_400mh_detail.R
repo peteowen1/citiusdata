@@ -35,7 +35,7 @@ d <- merge(d, reg, by = "event_id")
 cat_tbl <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
 cat_tbl[, competition_id := as.character(competition_id)]
 d <- merge(d, cat_tbl[, .(competition_id, meet_tier, comp_name)], by = "competition_id", all.x = TRUE)
-d <- d[meet_tier == "T1_elite" & date >= HOLDOUT & event_id == EVENT_ID]
+d <- d[meet_tier == "M1" & date >= HOLDOUT & event_id == EVENT_ID]
 setorder(d, date)
 say("population: %d rows (races), event %s", nrow(d), EVENT_ID)
 stopifnot("expected 27 rows to match the artifact's own count" = nrow(d) > 0)

@@ -65,7 +65,7 @@ if (!is.null(.prior) && nrow(.prior)) {
 # Applied naively on 2026-08-21 it wiped the name off every major: Paris 2024,
 # Rio, London, Sydney and the World Championships all came through with
 # named_rows = 0, `class` is derived from comp_name by regex, and so all of them
-# became `unclassified` and dropped out of T1_elite. Catalogue naming fell from
+# became `unclassified` and dropped out of M1. Catalogue naming fell from
 # 83.0% to 67.1% in one run, and the anchor that exists to catch exactly this
 # passed vacuously - `cat_tbl[class == "olympics"]` was EMPTY, and all() of
 # nothing is TRUE.

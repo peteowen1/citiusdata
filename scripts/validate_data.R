@@ -244,7 +244,7 @@ if (file.exists(cp)) {
     K2 <- c("continental","national_champs","ncaa","team_champs","continental_tour",
             "regional_games","asian_games","african_games","panam_games","european_games")
     K3 <- c("age_group","club_meet","ncaa_lower","team_champs_lower")
-    for (spec in list(list(K1, "T1_elite"), list(K2, "T2_strong"), list(K3, "T3_development"))) {
+    for (spec in list(list(K1, "M1"), list(K2, "M2"), list(K3, "M3"))) {
       pop <- ct[meet_type %chin% spec[[1]]]
       # Population-nonzero guard: without it, a band with ZERO meets (e.g. a
       # meet_type name typo, or a live meet_type silently renamed upstream) reports

@@ -76,16 +76,16 @@ report <- function(dt, header) {
   invisible(out)
 }
 
-t1 <- report(d[meet_tier == "T1_elite" & structure != "other"], "T1_elite, by attempt structure")
+t1 <- report(d[meet_tier == "M1" & structure != "other"], "M1, by attempt structure")
 report(d[structure != "other"], "all tiers pooled, by attempt structure")
 
-cat("\n================ jump split out by discipline (T1_elite) ================\n")
-jd <- d[meet_tier == "T1_elite" & family == "jump"]
+cat("\n================ jump split out by discipline (M1) ================\n")
+jd <- d[meet_tier == "M1" & family == "jump"]
 print(rbindlist(lapply(split(jd, jd$discipline), function(s)
   summarise(s, s$discipline[1])), fill = TRUE)[order(bias_pct)])
 
-cat("\n================ throw split out by discipline (T1_elite) ================\n")
-td <- d[meet_tier == "T1_elite" & family == "throw"]
+cat("\n================ throw split out by discipline (M1) ================\n")
+td <- d[meet_tier == "M1" & family == "throw"]
 print(rbindlist(lapply(split(td, td$discipline), function(s)
   summarise(s, s$discipline[1])), fill = TRUE)[order(bias_pct)])
 

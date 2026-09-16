@@ -28,7 +28,7 @@ OUT <- here::here("citiusdata", "data")
 
 ARM      <- Sys.getenv("CITIUS_GOAL_ARM", "backtest_wac_trt_0904.rds")
 FROM     <- as.Date(Sys.getenv("CITIUS_GOAL_FROM", "2020-01-01"))
-TIER     <- Sys.getenv("CITIUS_GOAL_TIER", "T1_elite")
+TIER     <- Sys.getenv("CITIUS_GOAL_TIER", "M1")
 # An event with a handful of races cannot pass or fail this goal, it can only
 # produce a number. Reported separately rather than counted either way -- the
 # same "decline when the sample is too thin" rule score_arm.R applies to whole

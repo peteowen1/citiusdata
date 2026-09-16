@@ -80,7 +80,7 @@ d[, `:=`(act_perf = orientation * log(actual), a_perf = orientation * log(a_mark
 d <- d[!is.na(act_perf) & !is.na(a_perf) & !is.na(l5) & date >= HOLDOUT]
 d[, `:=`(em = 100 * (a_perf - act_perf), eb = 100 * (l5 - act_perf))]
 
-t1 <- d[meet_tier == "T1_elite"]
+t1 <- d[meet_tier == "M1"]
 say("\nT1 elite population: %s rows, %s races", format(nrow(t1), big.mark=","),
     format(uniqueN(t1$race_id), big.mark=","))
 

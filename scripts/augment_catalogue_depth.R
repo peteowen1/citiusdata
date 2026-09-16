@@ -3,8 +3,8 @@
 # RUNS AFTER augment_catalogue_wa_codes.R, and is the same shape: a ONE-WAY
 # floor, never a demotion, never producing a T1.
 #
-# WHY THIS MATTERS MORE THAN A REWEIGHTING. form_ratings.R keeps only T1_elite
-# and T2_strong and INNER-JOINS, so a T3 competition is not down-weighted, it is
+# WHY THIS MATTERS MORE THAN A REWEIGHTING. form_ratings.R keeps only M1
+# and M2 and INNER-JOINS, so a T3 competition is not down-weighted, it is
 # absent. Every race in a wrongly-T3 meet is invisible to the model, which is
 # also why augment_catalogue_wa_codes.R exists.
 #
@@ -66,7 +66,7 @@ dep <- c0[elite == TRUE, .(elite_athletes = uniqueN(athlete_id),
 cg <- merge(cg, dep, by = "competition_id", all.x = TRUE)
 cg[is.na(elite_athletes), `:=`(elite_athletes = 0L, elite_events = 0L)]
 
-T2MED <- cg[meet_tier == "T2_strong" & !is.na(meet_strength), stats::median(meet_strength)]
+T2MED <- cg[meet_tier == "M2" & !is.na(meet_strength), stats::median(meet_strength)]
 cat(sprintf("\nmedian meet_strength of an existing T2 meet: %.1f\n", T2MED))
 stopifnot("no T2 meet has a meet_strength - cannot set the bar" = is.finite(T2MED))
 
@@ -74,23 +74,23 @@ BLOCKED <- c("age_group", "ncaa_lower", "team_champs_lower", "club_meet")
 cg[, .u23 := meet_type == "age_group" & grepl("U23", comp_name, fixed = TRUE) &
               !grepl("U18|U20|Youth|Junior", comp_name, ignore.case = TRUE) &
               !is.na(meet_strength) & meet_strength > T2MED]
-cg[, .liftable := meet_tier == "T3_development" &
+cg[, .liftable := meet_tier == "M3" &
                   elite_athletes >= MIN_A & elite_events >= MIN_E &
                   (!(meet_type %chin% BLOCKED) | .u23 == TRUE)]
 
 lift <- cg[.liftable == TRUE]
 cat(sprintf("\nT3 meets with %d+ elite athletes across %d+ events: %d\n", MIN_A, MIN_E,
-            cg[meet_tier == "T3_development" & elite_athletes >= MIN_A & elite_events >= MIN_E, .N]))
+            cg[meet_tier == "M3" & elite_athletes >= MIN_A & elite_events >= MIN_E, .N]))
 cat(sprintf("of those, liftable: %d (U23 exception used on %d)\n", nrow(lift), lift[.u23 == TRUE, .N]))
 cat(sprintf("still blocked by meet_type: %d\n",
-            cg[meet_tier == "T3_development" & elite_athletes >= MIN_A & elite_events >= MIN_E &
+            cg[meet_tier == "M3" & elite_athletes >= MIN_A & elite_events >= MIN_E &
                meet_type %chin% BLOCKED & .u23 != TRUE, .N]))
 cat("\n=== everything lifted ===\n")
 print(lift[order(-elite_athletes)][seq_len(min(15L, .N)),
       .(comp_name = substr(comp_name, 1, 40), year, meet_type,
         meet_strength = round(meet_strength, 1), elite_athletes, elite_events)])
 cat("\n=== still blocked, for the record ===\n")
-print(cg[meet_tier == "T3_development" & elite_athletes >= MIN_A & elite_events >= MIN_E &
+print(cg[meet_tier == "M3" & elite_athletes >= MIN_A & elite_events >= MIN_E &
          meet_type %chin% BLOCKED & .u23 != TRUE][order(-elite_athletes)][seq_len(min(8L, .N)),
       .(comp_name = substr(comp_name, 1, 40), year, meet_type,
         meet_strength = round(meet_strength, 1), elite_athletes, elite_events)])
@@ -101,9 +101,9 @@ print(cg[meet_tier == "T3_development" & elite_athletes >= MIN_A & elite_events 
 .youth <- function(dt) dt[meet_type == "age_group" &
                           grepl("U18|U20|Youth|Junior", comp_name, ignore.case = TRUE) &
                           !grepl("U23", comp_name, fixed = TRUE) &
-                          meet_tier != "T3_development", .N]
+                          meet_tier != "M3", .N]
 .youth_before <- .youth(cg)
-cg[.liftable == TRUE, meet_tier := "T2_strong"]
+cg[.liftable == TRUE, meet_tier := "M2"]
 .n_lift <- nrow(lift)
 cg[, c(".liftable", ".u23", "elite_athletes", "elite_events") := NULL]
 
@@ -113,11 +113,11 @@ stopifnot(
   "the depth floor lifted no meet at all - it is inert" = .n_lift > 0,
   "the floor changed the number of competitions" = nrow(cg) == n0,
   "the floor must never produce a T1 meet" =
-    cg[, sum(meet_tier == "T1_elite")] == t0[meet_tier == "T1_elite", N],
+    cg[, sum(meet_tier == "M1")] == t0[meet_tier == "M1", N],
   "a T2 meet was demoted - this floor is one-way" =
-    cg[, sum(meet_tier == "T2_strong")] >= t0[meet_tier == "T2_strong", N],
-  "an Olympics stopped being T1" = nrow(oly) == 0 || all(oly$meet_tier == "T1_elite"),
-  "a World Championships stopped being T1" = nrow(wch) == 0 || all(wch$meet_tier == "T1_elite"),
+    cg[, sum(meet_tier == "M2")] >= t0[meet_tier == "M2", N],
+  "an Olympics stopped being T1" = nrow(oly) == 0 || all(oly$meet_tier == "M1"),
+  "a World Championships stopped being T1" = nrow(wch) == 0 || all(wch$meet_tier == "M1"),
   "a U18, U20, youth or junior meet was lifted - only U23 is exempt" =
     .youth(cg) == .youth_before)
 .bak <- file.path(D, "competition_catalogue.before_depth.parquet")

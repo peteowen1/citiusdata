@@ -868,8 +868,8 @@ if (nrow(empty)) {
   cat("\n  swim_* is scope, not a gap: this engine reads the athletics corpus only.\n")
   cat("\nROAD IS THE STRUCTURAL ONE, and it is upstream of this script.\n",
       "AT-Marathon-M holds 1,698 corpus rows dated 2026, but of 2024+ marathon\n",
-      "rows only 171 are T1_elite and 84 T2_strong; 5,386 are absent from the\n",
-      "competition catalogue and 2,739 are T3_development. The engine keeps\n",
+      "rows only 171 are M1 and 84 M2; 5,386 are absent from the\n",
+      "competition catalogue and 2,739 are M3. The engine keeps\n",
       "T1/T2 only, so the majors are invisible to it. Fix the catalogue tiering,\n",
       "not the filter here.\n", sep = "")
 }

@@ -37,7 +37,7 @@ d <- merge(d, reg, by = "event_id")
 cat_tbl <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
 cat_tbl[, competition_id := as.character(competition_id)]
 d <- merge(d, cat_tbl[, .(competition_id, meet_tier)], by = "competition_id", all.x = TRUE)
-d <- d[meet_tier == "T1_elite" & date >= HOLDOUT]
+d <- d[meet_tier == "M1" & date >= HOLDOUT]
 d[, year := data.table::year(date)]
 d[, bias_pct := orientation * (actual - median_mark) / median_mark * 100]
 say("population: %s rows, %s races, %d events", format(nrow(d), big.mark=","),
@@ -169,7 +169,7 @@ say("wrote event_metrics_artifact.json")
 
 # also write population metadata for the artifact header
 meta <- list(arm = "backtest_combined_full.rds", holdout = format(HOLDOUT),
-            tier = "T1_elite", races = uniqueN(d$race_id), rows = nrow(d),
+            tier = "M1", races = uniqueN(d$race_id), rows = nrow(d),
             date_span = c(format(min(d$date)), format(max(d$date))),
             generated_at = format(Sys.time()))
 write_json(meta, file.path(OUT, "event_metrics_artifact_meta.json"), auto_unbox = TRUE, digits = 6)

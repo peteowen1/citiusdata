@@ -6,7 +6,7 @@
 # sweep), which build_athletics_corpus.R folds into athletics_corpus.parquet
 # and alone accounts for 28,716 of the corpus's 32,076 distinct competitions.
 # form_ratings.R INNER JOINS results to the catalogue and further restricts to
-# meet_tier %in% c("T1_elite","T2_strong"), so every result whose competition
+# meet_tier %in% c("M1","M2"), so every result whose competition
 # has no catalogue row -- 78.0% of them -- is dropped before any tier is ever
 # consulted.
 #
@@ -128,7 +128,7 @@ cat(sprintf("competition names available: %s\n", format(nrow(nm), big.mark = ","
 # correctly reclassified unclassified -> road_race with meet_strength 98.0
 # already sitting in cat0 (computed by build_competition_catalogue.R's own
 # road-race fix before this script ever runs), but left at meet_tier
-# T2_strong because nothing checked BY_STRENGTH's threshold for it. Fixed
+# M2 because nothing checked BY_STRENGTH's threshold for it. Fixed
 # alongside the K1/K3 bumps below -- see that block.
 .unnamed_before <- cat0[is.na(comp_name) | !nzchar(comp_name), .N]
 if (.unnamed_before > 0L) {
@@ -377,8 +377,8 @@ reclassified %s of %s previously-unclassified named meets
     K1 <- c("olympics","world_champs","world_indoor","commonwealth","european_champs",
             "diamond_league","world_other","indoor_tour")
     K3 <- c("age_group","club_meet","ncaa_lower","team_champs_lower")
-    .n1 <- cat0[meet_tier == "T1_elite", .N]
-    cat0[competition_id %chin% .ids & meet_type %chin% K1, meet_tier := "T1_elite"]
+    .n1 <- cat0[meet_tier == "M1", .N]
+    cat0[competition_id %chin% .ids & meet_type %chin% K1, meet_tier := "M1"]
     # DEMOTE FROM WHEREVER IT SITS, not just from T1. The base builder puts a
     # KNOWN_T3 meet_type at T3 outright, so once we learn a meet IS age-group or a
     # lower NCAA division, T3 is what its tier means - leaving it at T2 states
@@ -386,10 +386,10 @@ reclassified %s of %s previously-unclassified named meets
     # against exactly that ("a named development meet was lifted"). Its anchor
     # caught this and stopped the chain, which is the anchor working.
     cat0[competition_id %chin% .ids & meet_type %chin% K3 &
-         meet_tier != "T3_development", meet_tier := "T3_development"]
+         meet_tier != "M3", meet_tier := "M3"]
     cat(sprintf("T1 after reclassification: %s (was %s)
 ",
-                format(cat0[meet_tier == "T1_elite", .N], big.mark = ","),
+                format(cat0[meet_tier == "M1", .N], big.mark = ","),
                 format(.n1, big.mark = ",")))
   }
 }
@@ -403,7 +403,7 @@ reclassified %s of %s previously-unclassified named meets
 # then stays wrong permanently, however many times this script runs.
 #
 # Found twice, the same shape both times, 2026-09-03:
-#   - road_race: Boston Marathon 2026 sat at T2_strong with meet_strength 98
+#   - road_race: Boston Marathon 2026 sat at M2 with meet_strength 98
 #     because the BY_STRENGTH rule didn't exist when its meet_type was set.
 #     136 road races were affected.
 #   - KNOWN_T1 classes: 97 meets (56 diamond_league at T2, 19 world_other
@@ -424,7 +424,7 @@ reclassified %s of %s previously-unclassified named meets
 # printed "no disagreements" on 2026-09-03 while 407 meets disagreed: 78,034
 # athletes and 12,630 finals, including the Greek, Irish, Belgian, Canadian,
 # Swiss, Dutch and Brazilian national championships sitting in T3, which the
-# builder's `meet_type %in% KNOWN_T2 -> "T2_strong"` makes unreachable.
+# builder's `meet_type %in% KNOWN_T2 -> "M2"` makes unreachable.
 #
 # The tell that it was a guard hole rather than a data quirk: KNOWN_T1 had 0
 # violations and KNOWN_T3 had 0. Only the uncovered band was dirty.
@@ -433,12 +433,12 @@ reclassified %s of %s previously-unclassified named meets
          "asian_games","african_games","panam_games","european_games")
 .K3 <- c("age_group","club_meet","ncaa_lower","team_champs_lower")
 .want_tier <- function(meet_type, meet_strength) data.table::fcase(
-  meet_type %chin% .K1, "T1_elite",
-  meet_type %chin% .K2, "T2_strong",
-  meet_type %chin% .K3, "T3_development",
-  meet_type == "road_race" & !is.na(meet_strength) & meet_strength >= 75, "T1_elite",
-  meet_type == "road_race" & !is.na(meet_strength) & meet_strength >= 50, "T2_strong",
-  meet_type == "road_race", "T3_development",
+  meet_type %chin% .K1, "M1",
+  meet_type %chin% .K2, "M2",
+  meet_type %chin% .K3, "M3",
+  meet_type == "road_race" & !is.na(meet_strength) & meet_strength >= 75, "M1",
+  meet_type == "road_race" & !is.na(meet_strength) & meet_strength >= 50, "M2",
+  meet_type == "road_race", "M3",
   default = NA_character_)   # NA = this pass has no opinion, leave as-is
 cat0[, .should := .want_tier(meet_type, meet_strength)]
 .fix <- cat0[!is.na(.should) & .should != meet_tier]
@@ -571,26 +571,26 @@ KNOWN_T2 <- c("continental", "national_champs", "ncaa", "team_champs",
 KNOWN_T3 <- c("age_group", "club_meet", "ncaa_lower", "team_champs_lower")
 BY_STRENGTH <- c("road_race")
 cat_tbl[, meet_tier := fcase(
-  meet_type %in% KNOWN_T1, "T1_elite",
-  meet_type %in% KNOWN_T2, "T2_strong",
-  meet_type %in% KNOWN_T3, "T3_development",
-  meet_type %in% BY_STRENGTH & !is.na(meet_strength) & meet_strength >= 75, "T1_elite",
-  meet_type %in% BY_STRENGTH & !is.na(meet_strength) & meet_strength >= 50, "T2_strong",
-  meet_type %in% BY_STRENGTH, "T3_development",
+  meet_type %in% KNOWN_T1, "M1",
+  meet_type %in% KNOWN_T2, "M2",
+  meet_type %in% KNOWN_T3, "M3",
+  meet_type %in% BY_STRENGTH & !is.na(meet_strength) & meet_strength >= 75, "M1",
+  meet_type %in% BY_STRENGTH & !is.na(meet_strength) & meet_strength >= 50, "M2",
+  meet_type %in% BY_STRENGTH, "M3",
   default = NA_character_)]
 uq <- stats::quantile(cat_tbl[is.na(meet_tier)]$meet_strength, 0.55, na.rm = TRUE)
 cat_tbl[is.na(meet_tier), meet_tier := fcase(
-  is.na(meet_strength), "T3_development",
-  meet_strength >= uq[[1]], "T2_strong",
-  default = "T3_development")]
+  is.na(meet_strength), "M3",
+  meet_strength >= uq[[1]], "M2",
+  default = "M3")]
 cat(sprintf("\nunclassified additions capped at T2, split at meet_strength %.1f\n", uq[[1]]))
 
 cat("\ntier distribution of the additions:\n")
 print(cat_tbl[, .N, by = meet_tier][order(-N)])
 cat("\nT1 additions by meet_type:\n")
-print(cat_tbl[meet_tier == "T1_elite", .N, by = meet_type])
+print(cat_tbl[meet_tier == "M1", .N, by = meet_type])
 cat("\nT2 additions by meet_type:\n")
-print(cat_tbl[meet_tier == "T2_strong", .N, by = meet_type])
+print(cat_tbl[meet_tier == "M2", .N, by = meet_type])
 
 # ---- ANCHOR CHECKS -----------------------------------------------------------
 # Same discipline as build_competition_catalogue.R and the two road scripts:
@@ -602,8 +602,8 @@ anchor <- function(label, ok, detail = "") {
               if (nzchar(detail)) paste0("  ", detail) else ""))
   isTRUE(ok)
 }
-t1 <- cat_tbl[meet_tier == "T1_elite"]
-t2 <- cat_tbl[meet_tier == "T2_strong"]
+t1 <- cat_tbl[meet_tier == "M1"]
+t2 <- cat_tbl[meet_tier == "M2"]
 ok1 <- anchor("no duplicate competition ids in the addition set",
               !anyDuplicated(cat_tbl$competition_id))
 ok2 <- anchor("no added id is already in the catalogue",
@@ -657,12 +657,12 @@ ok7 <- anchor("team_champs additions stayed tightened (<=150, was 251 before the
 # meet sits below meet_strength 40") -- a road_race meet only reaches T1 here
 # because its top-10-by-mark field genuinely scored that high, the same bar
 # every other T1 meet_type clears. This is reported for visibility, not gated.
-rr_promoted <- cat_tbl[meet_type == "road_race" & meet_tier != "T3_development"]
+rr_promoted <- cat_tbl[meet_type == "road_race" & meet_tier != "M3"]
 ok8 <- anchor("road_race T1/T2 promotions, reported not gated (quality checked separately by ok9)",
               TRUE,
               sprintf("%d road_race competitions reached T1/T2 (%d T1, %d T2)",
-                      nrow(rr_promoted), sum(rr_promoted$meet_tier == "T1_elite"),
-                      sum(rr_promoted$meet_tier == "T2_strong")))
+                      nrow(rr_promoted), sum(rr_promoted$meet_tier == "M1"),
+                      sum(rr_promoted$meet_tier == "M2")))
 # STRENGTH IS ONLY MEANINGFUL INSIDE THE ENGINE'S WINDOW, and only where enough
 # of the field was harvested to measure it.
 #
@@ -691,7 +691,7 @@ ok9 <- anchor(sprintf("no T1 meet from %d on sits below meet_strength 40", FROM_
                       nrow(t1_bad), sum(is.finite(t1_win$meet_strength)),
                       sum(!is.finite(t1_win$meet_strength))))
 ok10 <- anchor("no NCAA D2/D3 or conference meet is above T3",
-               !any(cat_tbl[meet_type == "ncaa_lower"]$meet_tier != "T3_development"))
+               !any(cat_tbl[meet_type == "ncaa_lower"]$meet_tier != "M3"))
 ok11 <- anchor("name coverage for the addition set is effectively complete (>=95%)",
                mean(!is.na(cat_tbl$comp_name)) >= 0.95,
                sprintf("%.1f%%", 100 * mean(!is.na(cat_tbl$comp_name))))

@@ -30,7 +30,7 @@
 #     difference and is documented at length where it happens, below --
 #     search "WHOLE-FIELD-PER-COMPETITION-EVENT".
 #   * TIERING is a LEFT join, never an inner join. Only 64 of 24,524 swim
-#     competitions carry a tier (T1_elite; no T2 exists), so an athletics-style
+#     competitions carry a tier (M1; no T2 exists), so an athletics-style
 #     inner join would drop 99.7% of the data. Every race is still RATED
 #     regardless of tier; tier only ever affects the METRIC WEIGHT.
 #   * SEEDING resolves identity through a crosswalk first. The careers store
@@ -56,7 +56,7 @@
 #   finding about mid-race split times; not established for swimming), and
 #   the MAJORS FINALS scorecard (the swim competition catalogue carries no
 #   `class` column distinguishing Olympics/Worlds/Commonwealth from other
-#   T1_elite meets, so the machinery has nothing to key on).
+#   M1 meets, so the machinery has nothing to key on).
 #
 # TUNE/CONFIRM WINDOW: athletics scores 2025 vs 2026 as a pre-registered
 # tuning-then-sealed pair, built up over months of ladder experiments. No such
@@ -263,10 +263,10 @@ stopifnot("SEQ_FROM is not a readable date" = !is.na(FROM))
 # swimming. 2015 is a generic choice (spans Rio 2016 through the present,
 # ~2 Olympic cycles) -- flagged as a follow-up, not a finding.
 
-# --- metric weights: T1_elite vs everything else, no T2 tier exists ---------
+# --- metric weights: M1 vs everything else, no T2 tier exists ---------
 # UNVALIDATED transplant of athletics' T1 weight. No W_MAJ: the swim
 # competition catalogue has no `class` column distinguishing Olympics/Worlds/
-# Commonwealth from other T1_elite meets (see harvesting notes), so there is
+# Commonwealth from other M1 meets (see harvesting notes), so there is
 # nothing to key an extra "majors" tier on for v1.
 W_T1_ELITE <- .env_num("SEQ_W_T1_ELITE", 12)
 W_DEFAULT  <- .env_num("SEQ_W_DEFAULT",   1)
@@ -345,8 +345,8 @@ if ("tier" %chin% names(d)) d[, tier := NULL]
 n0 <- nrow(d)
 d <- merge(d, cat0, by = "competition_id", all.x = TRUE)
 stopifnot("the tier left-join changed the row count" = nrow(d) == n0)
-cat(sprintf("[%s] tier coverage: %.2f%% of rows carry T1_elite (left join, not filtered)\n",
-            TAG, 100 * mean(!is.na(d$tier) & d$tier == "T1_elite")))
+cat(sprintf("[%s] tier coverage: %.2f%% of rows carry M1 (left join, not filtered)\n",
+            TAG, 100 * mean(!is.na(d$tier) & d$tier == "M1")))
 
 # `date` has a small NA rate (0.5% corpus-wide); fall back to the
 # competition's start date rather than dropping those rows outright.
@@ -654,7 +654,7 @@ Vtier <- d$tier; Vbk <- d$block_key; Vrk <- d$race_key
 Vdaten <- as.numeric(d$date); Vyr <- year(d$date)
 
 # --- metric weight per row ---------------------------------------------------
-d[, w_tier := fifelse(!is.na(tier) & tier == "T1_elite", W_T1_ELITE, W_DEFAULT)]
+d[, w_tier := fifelse(!is.na(tier) & tier == "M1", W_T1_ELITE, W_DEFAULT)]
 d[, w_rnd  := fifelse(rc == "final", 1, W_RND)]
 d[, wt := w_tier * w_rnd]
 wtab <- d[, .(races = uniqueN(block_key), rows = .N, weight = wt[1]),
@@ -832,7 +832,7 @@ for (r_ in seq_along(starts)) {
   kap_e <- KAPPAv[[ev]]; if (is.null(kap_e) || !is.finite(kap_e)) kap_e <- KAPPA
   kv <- pmax(k0e * kap_e / (n_eff + kap_e), kfl_e)
   kt1_e <- KT1v[[ev]]; if (is.null(kt1_e) || !is.finite(kt1_e)) kt1_e <- KT1
-  if (kt1_e != 1 && !is.na(z$tier) && z$tier == "T1_elite") kv <- pmin(kv * kt1_e, 0.9)
+  if (kt1_e != 1 && !is.na(z$tier) && z$tier == "M1") kv <- pmin(kv * kt1_e, 0.9)
   cen_e <- CENSv[[ev]]; if (is.null(cen_e) || !is.finite(cen_e)) cen_e <- CENS
   if (cen_e < 1 || CENSWIN < 1) {
     fac <- rep(1, length(a))
@@ -903,7 +903,7 @@ cat(sprintf("[%s] concordance %.3f%% | favourite %.1f%% | %d scored races (%d sk
     TAG, res$conc, res$fav, res$races, n_conflict_skipped,
     if (n_merged > 0) 100 * n_conflict_skipped / n_merged else NA_real_,
     format(n_merged, big.mark = ","), el))
-cat(sprintf("[%s] WEIGHTED (T1_elite %g / default %g, non-final x%g): %.3f%% (ess %s)\n",
+cat(sprintf("[%s] WEIGHTED (M1 %g / default %g, non-final x%g): %.3f%% (ess %s)\n",
     TAG, W_T1_ELITE, W_DEFAULT, W_RND, res$wconc, format(round(res$ess), big.mark = ",")))
 cat(sprintf("[%s] TUNE    (2025) weighted %.3f%% (ess %s, %s races)\n",
     TAG, tune_w$wconc, format(round(tune_w$ess), big.mark = ","), format(tune_w$races, big.mark = ",")))

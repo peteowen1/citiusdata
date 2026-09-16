@@ -48,14 +48,14 @@ cat(sprintf("ANCHOR: %d Olympic and %d senior World Championship competitions fo
             nrow(.olympic), nrow(.worlds)))
 stopifnot("no Olympic competitions matched - the anchor cannot test anything" = nrow(.olympic) > 0,
           "no World Championship competitions matched" = nrow(.worlds) > 0)
-.bad <- rbind(.olympic, .worlds)[meet_tier != "T1_elite"]
+.bad <- rbind(.olympic, .worlds)[meet_tier != "M1"]
 if (nrow(.bad)) {
   cat("\nANCHOR FAILED - these are top-tier meets by definition:\n")
   print(.bad[, .(competition_id, year, meet_tier, results, comp_name)])
 }
 stopifnot("an Olympics or World Championships is not classified T1 - the TIERING is wrong, not the meet" =
             nrow(.bad) == 0)
-cat("ANCHOR PASSED: every Olympics and senior World Championships is T1_elite\n\n")
+cat("ANCHOR PASSED: every Olympics and senior World Championships is M1\n\n")
 
 # ---- 1. tier coverage ------------------------------------------------------
 cat("=== do we hold what we should, by tier? ===\n")
@@ -67,7 +67,7 @@ print(cov)
 cat("\nfetched = we have pulled it from the competition endpoint, which is what\n")
 cat("carries eventName (age divisions) and the full field.\n")
 
-gap <- cg[meet_tier %chin% c("T1_elite", "T2_strong") & fetched == FALSE]
+gap <- cg[meet_tier %chin% c("M1", "M2") & fetched == FALSE]
 cat(sprintf("\nT1/T2 competitions NOT fetched: %s, holding %s corpus rows\n",
             format(nrow(gap), big.mark = ","), format(sum(gap$results, na.rm = TRUE), big.mark = ",")))
 if (nrow(gap)) {
@@ -98,7 +98,7 @@ cat(sprintf("events kept (>= %s marks): %s | elite bar = %.0fth percentile withi
             format(MINN, big.mark = ","), format(nrow(n_ev), big.mark = ","), 100 * QBAR))
 
 t3 <- merge(c0[elite == TRUE], cg[, .(competition_id, meet_tier, comp_name, year, results)],
-            by = "competition_id")[meet_tier == "T3_development"]
+            by = "competition_id")[meet_tier == "M3"]
 s <- t3[, .(elite_marks = .N, elite_athletes = uniqueN(athlete_id),
             elite_events = uniqueN(event_id)),
         by = .(competition_id, comp_name, year, results)]

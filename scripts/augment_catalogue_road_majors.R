@@ -86,7 +86,7 @@ add <- miss[is_wmm | is_plat]
 if (!nrow(add)) { cat("nothing to add\n"); quit(status = 0) }
 
 add[, `:=`(meet_type = fifelse(is_wmm, "marathon_major", "road_label"),
-           meet_tier = fifelse(is_wmm, "T1_elite", "T2_strong"))]
+           meet_tier = fifelse(is_wmm, "M1", "M2"))]
 cat(sprintf("\nadding %s competitions: %s majors (T1), %s label races (T2)\n",
             format(nrow(add), big.mark = ","),
             format(add[is_wmm == TRUE, .N], big.mark = ","), format(add[is_plat == TRUE, .N], big.mark = ",")))

@@ -406,7 +406,7 @@ USE_MEET_TIER <- nzchar(Sys.getenv("CITIUS_BT_MEET_TIER", ""))
 # The transfer needs each event's FULL population of ability_raw to rank an
 # athlete's standing, which the `only=` fast path (citius/CLAUDE.md) never
 # computes -- recomputing it per meet measured at ~21s for 4 events alone,
-# 3-5 ADDED HOURS across a T1_elite run's 900+ meets. Instead the population
+# 3-5 ADDED HOURS across a M1 run's 900+ meets. Instead the population
 # reference is built once per calendar year of `cut_date` and cached in
 # NEIGHBOUR_REF_CACHE; measured cost with that cache: ~23s per year bucket
 # (there are a few dozen at most) plus ~0.3s per meet -- called out here
@@ -694,7 +694,7 @@ if (FAMILY_DEBIAS) {
 # 105 are T1 and 262 are T2/T3 -- so 72% of a 90-minute run went to populations
 # the framework calls "context only, never the headline".
 #
-# CITIUS_BT_TIER=T1_elite keeps everything the T1 decision needs: 43 scored
+# CITIUS_BT_TIER=M1 keeps everything the T1 decision needs: 43 scored
 # meets after the holdout, plus 62 before it, which is what score_arm.R fits the
 # baseline sigma on. ~25 minutes instead of ~90.
 #
@@ -725,7 +725,7 @@ ELITE_HISTORY <- nzchar(Sys.getenv("CITIUS_BT_ELITE_HISTORY", ""))
 # RESTRICT THE TRAINING HISTORY BY MEET TIER (Pete's goal, 2026-09-05: "train
 # all T1 and T2 leading up to a T1 event and test on the T1 event").
 #
-#   CITIUS_BT_TRAIN_TIERS=T1_elite,T2_strong
+#   CITIUS_BT_TRAIN_TIERS=M1,M2
 #
 # DIFFERENT KNOB FROM CITIUS_BT_TIER, and conflating them is the easy mistake:
 # CITIUS_BT_TIER picks which meets are SCORED, leaving the model untouched;
@@ -1075,7 +1075,7 @@ if (ELITE_HISTORY) {
                      .(competition_id = as.character(competition_id),
                        athlete_id = as.character(athlete_id))]
   ec <- merge(ec, ctl, by = "competition_id", all.x = TRUE)
-  elite_ids <- unique(ec[meet_tier == "T1_elite"]$athlete_id)
+  elite_ids <- unique(ec[meet_tier == "M1"]$athlete_id)
   cli::cli_alert_info("Elite history mode: {length(elite_ids)} athlete{?s} have a T1 final.")
   # Zero would silently mean "history is just the entrants", which is a
   # different and much worse model, not a faster one.
@@ -1458,7 +1458,7 @@ run_meet <- function(i) {
   #
   # This used to run unconditionally on every meet, on the stated assumption
   # that "every meet scored here is a championship". That was true when the
-  # backtest only scored global championships. It is false for a T1_elite
+  # backtest only scored global championships. It is false for a M1
   # population: measured 2026-09-09, 347 of 4,273 scored races (8.1%) are OW
   # championships and the other 3,926 (91.9%) were getting a championship
   # uplift they should never have had.
@@ -2011,7 +2011,7 @@ cli::cli_alert_info(
 # Assemble THIS RUN'S POOL, not the whole directory. The cache outlives the pool
 # that filled it: narrowing CITIUS_BT_TIER or lowering CITIUS_BT_TARGET leaves
 # the earlier meets on disk, and reading the directory scored them anyway -- so a
-# T1-only arm reported T1+T2+T3 races under a `tier_filter = T1_elite` stamp,
+# T1-only arm reported T1+T2+T3 races under a `tier_filter = M1` stamp,
 # which score_arm.R then trusts to decide comparability. `_arm.rds` is skipped by
 # construction here rather than filtered out downstream.
 cache_files <- file.path(BT_CACHE, paste0(pool$competition_id, ".rds"))

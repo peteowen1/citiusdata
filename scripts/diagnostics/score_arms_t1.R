@@ -30,7 +30,7 @@ suppressMessages(library(arrow)); suppressMessages(library(data.table))
 source(here::here("citiusdata", "scripts", "_env.R"))
 D    <- here::here("citiusdata", "data")
 YR   <- .env_int("ARMS_FROM_YEAR", "2021")
-TIER <- Sys.getenv("TIER_ONLY", "T1_elite")
+TIER <- Sys.getenv("TIER_ONLY", "M1")
 
 c0 <- setDT(read_parquet(file.path(D, "competition_catalogue.parquet")))
 c0[, competition_id := as.character(competition_id)]

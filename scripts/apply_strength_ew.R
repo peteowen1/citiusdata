@@ -89,18 +89,18 @@ KNOWN_T2 <- c("continental","national_champs","ncaa","team_champs",
               "asian_games","african_games","panam_games","european_games")
 KNOWN_T3 <- c("age_group","club_meet","ncaa_lower","team_champs_lower")
 ct[, meet_tier := fcase(
-  meet_type %in% KNOWN_T1, "T1_elite",
-  meet_type %in% KNOWN_T2, "T2_strong",
-  meet_type %in% KNOWN_T3, "T3_development",
-  meet_type == "road_race" & !is.na(meet_strength) & meet_strength >= 75, "T1_elite",
-  meet_type == "road_race" & !is.na(meet_strength) & meet_strength >= 50, "T2_strong",
-  meet_type == "road_race", "T3_development",
+  meet_type %in% KNOWN_T1, "M1",
+  meet_type %in% KNOWN_T2, "M2",
+  meet_type %in% KNOWN_T3, "M3",
+  meet_type == "road_race" & !is.na(meet_strength) & meet_strength >= 75, "M1",
+  meet_type == "road_race" & !is.na(meet_strength) & meet_strength >= 50, "M2",
+  meet_type == "road_race", "M3",
   default = NA_character_)]
 uq <- stats::quantile(ct[is.na(meet_tier)]$meet_strength, 0.55, na.rm = TRUE)[[1]]
 ct[is.na(meet_tier), meet_tier := fcase(
-  is.na(meet_strength), "T3_development",
-  meet_strength >= uq, "T2_strong",
-  default = "T3_development")]
+  is.na(meet_strength), "M3",
+  meet_strength >= uq, "M2",
+  default = "M3")]
 cat(sprintf("unclassified split at meet_strength %.1f\n", uq))
 
 cat(sprintf("\ntier changes: %s\n", format(sum(before_tier != ct$meet_tier), big.mark = ",")))
@@ -109,7 +109,7 @@ cat("\ntier counts now:\n")
 print(ct[, .N, by = meet_tier][order(meet_tier)])
 for (y in c(2025, 2026))
   cat(sprintf("%d finals in scored pool: %s\n", y,
-      format(ct[meet_tier %chin% c("T1_elite","T2_strong") & year == y,
+      format(ct[meet_tier %chin% c("M1","M2") & year == y,
                 sum(finals, na.rm = TRUE)], big.mark = ",")))
 
 # Assert the VALUES, not that the script ran. Counting rows is not checking

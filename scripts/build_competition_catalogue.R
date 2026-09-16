@@ -530,12 +530,12 @@ KNOWN_T3 <- c("age_group", "club_meet", "ncaa_lower", "team_champs_lower")
 # where measured meet_strength genuinely decides the tier rather than the label.
 BY_STRENGTH <- c("road_race")
 cat_tbl[, meet_tier := fcase(
-  meet_type %in% KNOWN_T1, "T1_elite",
-  meet_type %in% KNOWN_T2, "T2_strong",
-  meet_type %in% KNOWN_T3, "T3_development",
-  meet_type %in% BY_STRENGTH & !is.na(meet_strength) & meet_strength >= 75, "T1_elite",
-  meet_type %in% BY_STRENGTH & !is.na(meet_strength) & meet_strength >= 50, "T2_strong",
-  meet_type %in% BY_STRENGTH, "T3_development",
+  meet_type %in% KNOWN_T1, "M1",
+  meet_type %in% KNOWN_T2, "M2",
+  meet_type %in% KNOWN_T3, "M3",
+  meet_type %in% BY_STRENGTH & !is.na(meet_strength) & meet_strength >= 75, "M1",
+  meet_type %in% BY_STRENGTH & !is.na(meet_strength) & meet_strength >= 50, "M2",
+  meet_type %in% BY_STRENGTH, "M3",
   # unclassified: fall back to the measured field meet_strength, banded on its own
   # distribution among unclassified meets so the bands mean something.
   default = NA_character_)]
@@ -553,9 +553,9 @@ cat_tbl[, meet_tier := fcase(
 # to RANK meets we had identified, not to identify them.
 uq <- stats::quantile(cat_tbl[is.na(meet_tier)]$meet_strength, 0.55, na.rm = TRUE)
 cat_tbl[is.na(meet_tier), meet_tier := fcase(
-  is.na(meet_strength), "T3_development",
-  meet_strength >= uq[[1]], "T2_strong",
-  default = "T3_development")]
+  is.na(meet_strength), "M3",
+  meet_strength >= uq[[1]], "M2",
+  default = "M3")]
 cat(sprintf("
 unclassified meets capped at T2, split at meet_strength %.1f
 ", uq[[1]]))
@@ -625,19 +625,19 @@ p2 <- anchor("world_champs population is non-empty", nrow(wch) >= 8, sprintf("%d
 p3 <- anchor("diamond_league population is non-empty", nrow(dl) >= 20, sprintf("%d rows", nrow(dl)))
 p4 <- anchor("age_group population is non-empty", nrow(age) >= 20, sprintf("%d rows", nrow(age)))
 
-ok1 <- anchor("every Olympic Games is T1", p1 && all(oly$meet_tier == "T1_elite"),
+ok1 <- anchor("every Olympic Games is T1", p1 && all(oly$meet_tier == "M1"),
               paste(sort(unique(oly$meet_tier)), collapse = "/"))
-ok2 <- anchor("every senior World Championships is T1", p2 && all(wch$meet_tier == "T1_elite"),
+ok2 <- anchor("every senior World Championships is T1", p2 && all(wch$meet_tier == "M1"),
               paste(sort(unique(wch$meet_tier)), collapse = "/"))
-ok3 <- anchor("most Diamond League is T1", p3 && mean(dl$meet_tier == "T1_elite") > 0.6,
-              sprintf("%.0f%%", 100 * mean(dl$meet_tier == "T1_elite")))
-ok4 <- anchor("no age-group meet is T1", p4 && !any(age$meet_tier == "T1_elite"),
-              sprintf("%d of %d", sum(age$meet_tier == "T1_elite"), nrow(age)))
+ok3 <- anchor("most Diamond League is T1", p3 && mean(dl$meet_tier == "M1") > 0.6,
+              sprintf("%.0f%%", 100 * mean(dl$meet_tier == "M1")))
+ok4 <- anchor("no age-group meet is T1", p4 && !any(age$meet_tier == "M1"),
+              sprintf("%d of %d", sum(age$meet_tier == "M1"), nrow(age)))
 
 # NEGATIVE anchors. The set above only said what must be IN, which is why a
 # youth meeting at meet_strength 18 sat in T1 and every check passed. Naming what
 # must be true catches under-inclusion; you also have to name what must be FALSE.
-t1 <- cat_tbl[meet_tier == "T1_elite"]
+t1 <- cat_tbl[meet_tier == "M1"]
 ok5 <- anchor("no T1 meet is named as a youth/junior meeting",
               !any(grepl("m.odzie|youth|junior|U1[0-9]|U2[0-3]", t1$comp_name,
                          ignore.case = TRUE, perl = TRUE)),
@@ -648,17 +648,17 @@ ok6 <- anchor("no T1 meet sits below meet_strength 40",
               !any(t1$meet_strength < 40, na.rm = TRUE),
               sprintf("%d below", sum(t1$meet_strength < 40, na.rm = TRUE)))
 ok10 <- anchor("no NCAA D2/D3 or conference meet is above T3",
-               !any(cat_tbl[meet_type == "ncaa_lower"]$meet_tier != "T3_development"),
-               sprintf("%d above", sum(cat_tbl[meet_type == "ncaa_lower"]$meet_tier != "T3_development")))
+               !any(cat_tbl[meet_type == "ncaa_lower"]$meet_tier != "M3"),
+               sprintf("%d above", sum(cat_tbl[meet_type == "ncaa_lower"]$meet_tier != "M3")))
 ok11 <- anchor("world_other (senior world titles) is T1",
-               all(cat_tbl[meet_type == "world_other"]$meet_tier == "T1_elite"),
+               all(cat_tbl[meet_type == "world_other"]$meet_tier == "M1"),
                paste(sort(unique(cat_tbl[meet_type == "world_other"]$meet_tier)), collapse = "/"))
 ok9 <- anchor("no unclassified meet is T1",
-              !any(cat_tbl[meet_tier == "T1_elite"]$meet_type == "unclassified"),
-              sprintf("%d found", sum(cat_tbl[meet_tier == "T1_elite"]$meet_type == "unclassified")))
+              !any(cat_tbl[meet_tier == "M1"]$meet_type == "unclassified"),
+              sprintf("%d found", sum(cat_tbl[meet_tier == "M1"]$meet_type == "unclassified")))
 ok8 <- anchor("no club or warm-up meet is T1",
-              !any(cat_tbl[meet_tier == "T1_elite"]$meet_type == "club_meet"),
-              sprintf("%d found", sum(cat_tbl[meet_tier == "T1_elite"]$meet_type == "club_meet")))
+              !any(cat_tbl[meet_tier == "M1"]$meet_type == "club_meet"),
+              sprintf("%d found", sum(cat_tbl[meet_tier == "M1"]$meet_type == "club_meet")))
 ok7 <- anchor("no Diamond League entry is a road race",
               !any(grepl("Marathon|Half|10 ?[Kk]m?\\b", cat_tbl[meet_type == "diamond_league"]$comp_name,
                          ignore.case = TRUE, perl = TRUE)),

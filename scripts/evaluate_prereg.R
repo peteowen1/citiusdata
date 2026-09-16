@@ -67,7 +67,7 @@ for (n in c("cevent", "noctx")) {
 d <- merge(d, act, by = c("race_id", "athlete_id"))
 d <- merge(d, ev, by = "event_id")
 d <- merge(d, cat_tbl[, .(competition_id, meet_tier)], by = "competition_id", all.x = TRUE)
-d <- d[meet_tier == "T1_elite" & date >= HOLDOUT]
+d <- d[meet_tier == "M1" & date >= HOLDOUT]
 if (!nrow(d)) cli::cli_abort("No T1 rows to evaluate.")
 
 d[, t_perf := orientation * log(actual)]
