@@ -1211,6 +1211,16 @@ CHAMP_OK <- !is.null(calibration$championship) && nrow(calibration$championship)
 NOFAM <- new.env(parent = emptyenv())
 NOFAM$rows <- 0L; NOFAM$meets <- 0L; NOFAM$events <- character()
 
+# Meets skipped because their history carried no usable meet_tier. Counted, not
+# fatal. The guard below used to abort the WHOLE run for ONE such meet, which
+# killed a 150-meet arm on 2026-09-17 after 8 meets. Skipping is NOT the silent
+# fallback the guard exists to prevent -- that was falling back to the FEED tier
+# and scoring the meet anyway. This excludes the meet and says so, and both arms
+# skip the same meets because the condition depends on history data alone, not
+# on the calibration under test.
+TIER_SKIP <- new.env(parent = emptyenv())
+TIER_SKIP$n <- 0L; TIER_SKIP$ids <- character()
+
 n <- min(nrow(todo), MAX_PER_RUN)
 
 # SPREAD THE CAPPED SELECTION ACROSS TIME. `pool` is sampled evenly across the
@@ -1329,10 +1339,21 @@ run_meet <- function(i) {
     # this flag exists to avoid, so it aborts rather than reports.
     .fill <- if ("meet_tier" %in% names(past)) mean(!is.na(past$meet_tier)) else NA_real_
     if (!is.finite(.fill) || .fill == 0) {
-      cli::cli_abort(c(
-        "x" = "{.envvar CITIUS_BT_MEET_TIER} is on but no usable {.field meet_tier} reached the history.",
-        "i" = "Columns present: {.val {grep('^meet_tier', names(past), value = TRUE)}}.",
-        "i" = "Without it the context adjustment falls back to the feed tier, silently."))
+      # SKIP THE MEET, DO NOT KILL THE RUN. Aborting here cost a 150-meet arm
+      # after 8 meets on 2026-09-17. The defect this guard was written for is
+      # scoring a meet while silently falling back to the FEED tier; excluding
+      # the meet and reporting it is not that. The caller counts these and
+      # aborts if the rate is material, so a systemic break still fails loudly
+      # -- what changes is that ONE bad meet no longer costs 150.
+      cli::cli_alert_warning(
+        "{cid}: no usable meet_tier in its history -- SKIPPED (not scored). Columns present: {.val {grep('^meet_tier', names(past), value = TRUE)}}.")
+      return(list(cid = cid, out = list(), rows = nrow(past), timing = local_timing,
+                  age_warn = local_age_warn, nofam = local_nofam,
+                  shock_applied = local_shock_applied,
+                  shock_fallback = local_shock_fallback,
+                  champ_applied = local_champ_applied,
+                  champ_na = local_champ_na, champ_mixed = local_champ_mixed,
+                  tier_skip = TRUE))
     }
     if (i == 1L) cli::cli_alert_info(
       # NB `{tier_src}`, not `{.src}` -- cli reads a leading dot as an inline
@@ -1993,6 +2014,9 @@ if (N_WORKERS > 1L) {
     i <- i + 1L
     r <- results[[.k]]
     saveRDS(r$out, file.path(BT_CACHE, paste0(r$cid, ".rds")))
+    if (isTRUE(r$tier_skip)) {
+      TIER_SKIP$n <- TIER_SKIP$n + 1L; TIER_SKIP$ids <- c(TIER_SKIP$ids, r$cid)
+    }
     TIMING$rows <- TIMING$rows + r$rows
     TIMING$read <- TIMING$read + r$timing$read
     TIMING$ability <- TIMING$ability + r$timing$ability
@@ -2023,6 +2047,9 @@ if (N_WORKERS > 1L) {
   for (i in seq_len(n)) {
     r <- run_meet(i)
     saveRDS(r$out, file.path(BT_CACHE, paste0(r$cid, ".rds")))
+    if (isTRUE(r$tier_skip)) {
+      TIER_SKIP$n <- TIER_SKIP$n + 1L; TIER_SKIP$ids <- c(TIER_SKIP$ids, r$cid)
+    }
     TIMING$rows <- TIMING$rows + r$rows
     TIMING$read <- TIMING$read + r$timing$read
     TIMING$ability <- TIMING$ability + r$timing$ability
@@ -2129,6 +2156,23 @@ if (NOFAM$rows > 0L) {
   cli::cli_alert_warning(
     "{format(NOFAM$rows, big.mark = ',')} history row{?s} across {length(NOFAM$events)} event{?s} had no registry family on {NOFAM$meets} meet{?s}; estimated at half_life = {half_life}.")
   cli::cli_alert_info("Events: {.val {utils::head(NOFAM$events, 5)}}")
+}
+# Meets excluded for having no usable meet_tier. A handful is a data fact about
+# old or thinly-catalogued meets; a large share means the join is broken and the
+# arm is being scored on a population nobody chose, so that still aborts. The
+# bar is 10% -- high enough that the long tail of odd meets passes, low enough
+# that a systemic break cannot hide as "a few skips".
+if (TIER_SKIP$n > 0L) {
+  .skip_share <- 100 * TIER_SKIP$n / max(1L, nrow(pool))
+  cli::cli_alert_warning(
+    "meet_tier: {TIER_SKIP$n} of {nrow(pool)} meet{?s} ({round(.skip_share,1)}%) had no usable meet_tier and were SKIPPED, not scored.")
+  cli::cli_alert_info("Skipped: {.val {utils::head(TIER_SKIP$ids, 12)}}{if (TIER_SKIP$n > 12) ' ...' else ''}")
+  if (.skip_share > 10) cli::cli_abort(c(
+    "x" = "{round(.skip_share,1)}% of meets had no usable meet_tier -- that is a broken join, not a tail of odd meets.",
+    "i" = "Rebuild the store with {.code join_tier = TRUE}, or check the catalogue's competition_id type (character in parquet, integer in the harvest).",
+    "i" = "Refusing to report an arm scored on a population chosen by a defect."))
+} else if (USE_MEET_TIER) {
+  cli::cli_alert_success("meet_tier: usable on every scored meet.")
 }
 if (AGE_WARN$n > 0L) {
   cli::cli_alert_warning(
