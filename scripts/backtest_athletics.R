@@ -1036,7 +1036,53 @@ store_fp <- function() if (!USE_STORE) NA_character_ else tryCatch({
   unname(tools::md5sum(tf))
 }, error = function(e) NA_character_)
 
+# CODE IDENTITY. The fingerprint above md5s every DATA input and says nothing
+# about the CODE that read them -- a script edit or a package change moves
+# what an arm computes exactly as much as a new calibration file does, and
+# this fingerprint was blind to it. Bit on 2026-09-17: alt_m was added to
+# keep_cols mid-session, and the already-populated control cache was still
+# accepted because no fingerprint field had moved -- the reasoning that it was
+# harmless was almost certainly right and was never actually checked.
+#
+# script_md5 catches an edit to THIS file. citius_git catches everything
+# else: the package this script calls into (estimate_ability, deployed_field,
+# .altitude_band, ...) lives in its own git repo, and a change there is
+# invisible to a hash of this script alone. Warns rather than aborts on
+# failure (no git on PATH, not a repo, etc.) -- consistent with md5_of()'s
+# own choice: a degraded fingerprint that still runs beats an arm that
+# refuses to start because git introspection failed.
+# here::here(), not commandArgs() introspection of the running script's own
+# path -- this file is always invoked as citiusdata/scripts/backtest_athletics.R
+# (every runner in this repo calls it that way), so hardcoding the known path
+# is simpler and more reliable than parsing --file= out of commandArgs(), which
+# behaves differently under Rscript, R CMD BATCH and an interactive source().
+this_script_md5 <- tryCatch(
+  unname(tools::md5sum(here::here("citiusdata", "scripts", "backtest_athletics.R"))),
+  error = function(e) NA_character_)
+if (is.na(this_script_md5)) cli::cli_alert_warning(
+  "Could not md5 this script's own file; the fingerprint cannot detect a code edit here.")
+
+citius_git <- tryCatch({
+  pkg_dir <- here::here("citius")
+  sha   <- system2("git", c("-C", pkg_dir, "rev-parse", "--short=12", "HEAD"),
+                   stdout = TRUE, stderr = FALSE)
+  ok    <- length(sha) == 1L && !identical(attr(sha, "status"), 128L)
+  if (!ok) {
+    NA_character_
+  } else {
+    dirty <- length(system2("git", c("-C", pkg_dir, "status", "--porcelain"),
+                            stdout = TRUE, stderr = FALSE)) > 0
+    paste0(sha, if (dirty) "-dirty" else "")
+  }
+}, error = function(e) NA_character_)
+if (is.na(citius_git)) cli::cli_alert_warning(
+  "Could not read the citius package's git SHA; the fingerprint cannot detect a package change.")
+
 arm_fingerprint <- list(
+  # CODE identity, not data. A script edit or a citius package change moves
+  # what an arm computes exactly as much as a new calibration file does; this
+  # is the fix for that gap. See the definitions and their own comment above.
+  script_md5 = this_script_md5, citius_git = citius_git,
   history = HISTORY, outcomes = OUTCOMES, calibration = CALIBRATION,
   calibration_md5 = md5_of(CALIBRATION), history_md5 = md5_of(HISTORY),
   history_source = if (USE_STORE) "store" else "rds", store_md5 = store_fp(),
@@ -1223,7 +1269,25 @@ if (nzchar(TIER_FILTER)) {
 # backtest is not all one era.
 pool <- unique(finals[, .(competition_id, comp_start)])[!is.na(comp_start) &
                                                           comp_start >= as.Date("2016-01-01")]
-setorder(pool, comp_start)
+# competition_id, NOT just comp_start. setorder() on comp_start ALONE leaves
+# ties in whatever order the input arrived in, and pool[round(seq(1, .N,
+# length.out = TARGET))] below is an evenly spaced SAMPLE -- so a tie-break
+# that depends on input order changes WHICH MEETS an arm scores whenever
+# anything upstream reorders `finals`/`outcome_rows`, silently. Measured
+# 2026-09-18: adding a merge() without sort = FALSE reordered outcome_rows and
+# two arms that should have shared a pool overlapped on only 87 of 120 meets --
+# both caches looked complete, neither had an empty meet, no guard fired, and
+# the resulting comparison numbers were meaningless. competition_id makes the
+# order a pure function of the data: two meets can share a start date, never a
+# competition_id, so this is deterministic regardless of what order the rows
+# arrived in.
+#
+# INVALIDATES EVERY EXISTING ARM CACHE. The pool for a given TARGET can shift
+# meet-for-meet the moment ties are broken a different way, so a resumed run
+# against an old cache is comparing (potentially) different meets under one
+# fingerprint. This is why the fix waited for a moment with nothing running --
+# see DECISIONS.md 2026-09-18.
+setorder(pool, comp_start, competition_id)
 # All meets with finals, not a sample. The old 250 cap dated from when each
 # refit took 17s; restricting history to the meet's own events made it 2.5s. At
 # 250 meets the backtest used only 13% of the 13,108 available finals.
