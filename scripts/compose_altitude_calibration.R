@@ -40,9 +40,39 @@ if (!nrow(alt)) cli::cli_abort("altitude_effect.parquet carries no residual rows
 # than carried as noise: throw and combined measure null, and applying a
 # noisy near-zero to 325k throw rows is a cost with no expected gain.
 MIN_T <- as.numeric(Sys.getenv("CITIUS_ALT_MIN_T", "3"))
+# `abs(t) < MIN_T` is NA when t is NA, and data.table's `i` treats NA as
+# no-match -- so the plain filter would SKIP a row whose t could not even be
+# computed, leaving its unvalidated beta in place. That is backwards: a
+# coefficient with no t-statistic is the one most in need of zeroing. Same shape
+# as the documented `dt[col > k]` trap in C:/dev/.claude/rules/r-datatable-gotchas.md.
+alt[!is.finite(t), t := 0]
 n_zeroed <- alt[abs(t) < MIN_T, .N]
 alt[abs(t) < MIN_T, beta := 0]
 say("families zeroed for |t| < %.1f: %d of %d rows", MIN_T, n_zeroed, nrow(alt))
+
+# Every (family, has_cr) cell must be present. fit_altitude_effect.R fits per
+# cell behind a MIN_PAIRS gate, so one scope of a family can drop out while
+# nrow(alt) stays comfortably positive. A missing cell never matches at runtime,
+# gets beta NA -> 0, and is then indistinguishable from the deliberate no-op.
+# Athletics only: fit_altitude_effect.R fits the athletics corpus, so the
+# swimming families are legitimately absent and must not be demanded here. This
+# guard failed on its first run for exactly that reason -- a gate is not correct
+# until it has been run against known-good data and NOT fired.
+ev <- as.data.table(citius::citius_events())
+fam_all <- sort(unique(ev[sport == "Athletics", family]))
+want <- CJ(family = fam_all, has_cr = c(FALSE, TRUE))
+miss <- want[!alt, on = .(family, has_cr)]
+if (nrow(miss)) cli::cli_abort(c(
+  "altitude_effect.parquet is missing {nrow(miss)} of {nrow(want)} (family, has_cr) cells.",
+  i = "Missing: {paste(miss$family, miss$has_cr, collapse = '; ')}",
+  x = "A missing cell is silently inert at runtime, not an error -- re-run fit_altitude_effect.R."))
+
+# All-zero is a valid-looking calibration that changes nothing. It passes the
+# wiring test (the element exists and has rows) and ability.R's own guard, while
+# contributing exactly zero to every prediction -- a setter and a reader both
+# present, and numerically inert, which no existing check can see.
+if (all(alt$beta == 0)) cli::cli_abort(
+  "every family zeroed at |t| < {MIN_T} -- this would write a calibration that is wired but inert. Check the fit before composing.")
 
 cal$altitude <- alt[]
 cal$provenance$altitude <- list(

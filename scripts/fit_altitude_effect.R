@@ -31,11 +31,18 @@ source(file.path(VERSE, "citiusdata", "scripts", "_venue_elevation.R"))
 say <- function(...) cat(sprintf(...), "\n", sep = "")
 MIN_PAIRS <- as.integer(Sys.getenv("CITIUS_ALT_MIN_PAIRS", "200"))
 
+# Per-stage runtimes, appended to ~/.claude/runtime-log.csv so "what is slow"
+# is a query rather than a recollection. See the Long Runs section of
+# ~/.claude/CLAUDE.md.
+source(file.path(Sys.getenv("USERPROFILE"), ".claude", "lib", "runtime_log.R"))
+rt_script("fit_altitude_effect.R")
+
 alt <- venue_elevation(D, quiet = FALSE)[, .(venue_city, alt_m)]
 
-ch <- with_citius_db_connection(function(conn) load_championship_results(
-  conn, columns = c("athlete_id", "event_id", "date", "perf",
-                    "venue_city", "indoor", "race_key")), read_only = TRUE)
+ch <- rt_stage("load corpus (7 cols)", with_citius_db_connection(
+  function(conn) load_championship_results(
+    conn, columns = c("athlete_id", "event_id", "date", "perf",
+                      "venue_city", "indoor", "race_key")), read_only = TRUE))
 setDT(ch)
 say("corpus rows: %s", format(nrow(ch), big.mark = ","))
 
@@ -122,6 +129,17 @@ print(use[family == "distance", .(rows = .N, mean_y = round(mean(y), 4)), by = b
 # NOT the full c_r -- replicating what the pipeline does rather than what it
 # looks like it does is the "harness must replicate the deployed pipeline"
 # rule, which has cost a wrong verdict here before.
+#
+# AND THE FIELD-SIZE SHRINK, added 2026-09-17 after review. The paragraph above
+# was written, and was still wrong, because it stopped one line short of the
+# pipeline it claimed to replicate: ability.R multiplies the strip by
+# wt = n_r/(n_r + k) before removing it, and sets has_cr from wt > 0, so a race
+# effect fitted on a small field is shrunk toward zero and a tiny one is not
+# applied at all. Fitting against the FULL strip got both halves wrong at once
+# -- the has_cr = TRUE population was a superset of production's (it included
+# races production shrinks to wt = 0), and the target itself was off by
+# (1 - wt) * strip on every partially-shrunk row. Citing the rule in a comment
+# is not the same as following it.
 CAL <- Sys.getenv("CITIUS_ALT_CAL", "calibration_corpus_wac_coast_0904_full2.rds")
 cal <- tryCatch(readRDS(file.path(D, CAL)), error = function(e) NULL)
 
@@ -141,19 +159,43 @@ if (!is.null(cal) && !is.null(cal$race) && !is.null(cal$race_shock)) {
   rr[!is.finite(beta_s), beta_s := cal$race_shock$beta]
   rr[, strip := (1 - beta_s) * (c_r - e_cell)]
 
-  u2 <- merge(use, rr[, .(race_key, strip)], by = "race_key", all.x = TRUE)
-  u2[, has_cr := is.finite(strip)]
-  u2[!is.finite(strip), strip := 0]
-  say("\nrows with a fitted race effect: %.1f%%", 100 * mean(u2$has_cr))
+  # n_in_race and the per-event precision ratio are what the shrink is built
+  # from. Both must be present: falling back to an unshrunk strip would silently
+  # reproduce the exact defect this block exists to fix, so it aborts instead.
+  if (!"n_in_race" %in% names(rr))
+    cli::cli_abort("cal$race has no n_in_race -- cannot replicate estimate_ability()'s field-size shrink, and fitting without it gives a coefficient the model cannot use.")
+  evt <- as.data.table(cal$events)
+  if (!all(c("sigma_within", "condition_sd") %in% names(evt)))
+    cli::cli_abort("cal$events lacks sigma_within/condition_sd -- same reason.")
+
+  u2 <- merge(use, rr[, .(race_key, strip, n_in_race)], by = "race_key", all.x = TRUE)
+  u2 <- merge(u2, evt[, .(event_id, sigma_within, condition_sd)],
+              by = "event_id", all.x = TRUE)
+
+  # Identical arithmetic to ability.R lines ~1161-1181, deliberately spelled out
+  # the same way rather than tidied: an unknown k resolves to Inf, i.e. weight 0,
+  # i.e. no race correction -- fail closed rather than apply an unshrunk one.
+  u2[, k := fifelse(is.finite(sigma_within) & is.finite(condition_sd) & condition_sd > 0,
+                    (sigma_within / condition_sd)^2, Inf)]
+  u2[, n_r := fifelse(is.finite(n_in_race), as.numeric(n_in_race), 0)]
+  u2[, wt := n_r / (n_r + k)]
+  u2[!is.finite(wt), wt := 0]
+  u2[, strip_applied := fifelse(is.finite(strip), strip, 0) * wt]
+  u2[, has_cr := is.finite(strip) & wt > 0]
+  say("\nrows with a fitted race effect ACTUALLY applied (wt > 0): %.1f%%", 100 * mean(u2$has_cr))
+  say("  rows with a strip available before shrink:               %.1f%%", 100 * mean(is.finite(u2$strip)))
+  say("  mean shrink weight where applied:                        %.3f",
+      u2[(has_cr), mean(wt)])
 
   # Re-demean AFTER the strip: the within-athlete mean moves once perf changes.
-  u2[, perf_adj := perf - strip]
+  u2[, perf_adj := perf - strip_applied]
   u2[, `:=`(y = perf_adj - mean(perf_adj), x = alt_km - mean(alt_km)),
      by = .(athlete_id, event_id, has_cr)]
   u2 <- u2[is.finite(y) & is.finite(x)]
 
-  res_fam <- u2[, if (uniqueN(.SD, by = c("athlete_id","event_id")) >= MIN_PAIRS) fit_one(.SD),
-                by = .(family, has_cr), .SDcols = c("x","y","athlete_id","event_id")]
+  res_fam <- rt_stage("residual fit per (family, has_cr)",
+    u2[, if (uniqueN(.SD, by = c("athlete_id","event_id")) >= MIN_PAIRS) fit_one(.SD),
+       by = .(family, has_cr), .SDcols = c("x","y","athlete_id","event_id")])
   res_fam[, pct_per_km := round(100 * (exp(beta) - 1), 2)]
   res_fam[, scope := fifelse(has_cr, "residual (race effect applied)",
                              "gross (no race effect)")]

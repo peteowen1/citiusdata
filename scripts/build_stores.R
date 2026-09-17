@@ -139,8 +139,25 @@ build <- function(src, dest, label, join_tier = FALSE, data = NULL) {
     cov_all  <- 100 * mean(!is.na(d$alt_m))
     cov_join <- if (any(has_city)) 100 * mean(!is.na(d$alt_m[has_city])) else NA_real_
     cli::cli_alert_info("  {label}: alt_m on {round(cov_all, 1)}% of rows; of rows WITH a venue_city, {round(cov_join, 1)}% resolved.")
-    if (!is.na(cov_join) && cov_join < 60) cli::cli_abort(
-      "{label}: only {round(cov_join, 1)}% of rows carrying a venue_city resolved to an elevation -- the join is broken, not merely sparse.")
+    # NA must ABORT, not pass. cov_join is NA exactly when the column exists but
+    # no row carries a value -- which is the shape of the comp_name incident
+    # (4,978,201 names silently discarded because a union filled a column that
+    # one source spelled differently). Writing this as `!is.na(x) && x < floor`
+    # lets that case through with a log line reading "NA% resolved", which is
+    # the only tell. The meet_tier guard above gets this right; match it.
+    #
+    # The floor sits just under the LOWEST measured healthy value, not under the
+    # typical one. Measured 2026-09-17 on the joinable subset: athletics comps
+    # 87.6, swimming 87.7, athletics corpus 86.0, athletics careers 85.7,
+    # swimming careers 74.1. Swimming careers sets the floor, and a floor picked
+    # from the headline 84.5% would abort a perfectly healthy build -- so the
+    # number to check a floor against is the worst store, never the average.
+    # 60 was too loose: it would pass a join that had quietly lost a quarter of
+    # its coverage, which is the degradation worth catching, since a totally
+    # broken join announces itself anyway.
+    ALT_COV_FLOOR <- 70
+    if (is.na(cov_join) || cov_join < ALT_COV_FLOOR) cli::cli_abort(
+      "{label}: of rows carrying a venue_city, {round(cov_join, 1)}% resolved to an elevation, under the {ALT_COV_FLOOR}% floor -- the join is degraded or broken, not merely sparse.")
   }
 
   keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "round",
