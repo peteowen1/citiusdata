@@ -111,9 +111,15 @@ if (is.na(.avail0)) {
     "Could not read available memory ({.pkg ps} missing); preflight guard skipped.")
 } else if (.avail0 < BT_MIN_FREE_MB) {
   cli::cli_abort(c(
-    "Only {round(.avail0)} MB available; this backtest needs about 8,000 MB and would be OOM-killed part-way.",
+    # Quote the ACTUAL floor, not a number typed into the string. This said
+    # "about 8,000 MB" while BT_MIN_FREE_MB defaulted to 9,000, so a run
+    # launched at 8,595 MB -- comfortably over the stated bar -- aborted anyway
+    # and read as a bug in the launcher (2026-09-17). A guard that misstates its
+    # own threshold sends people chasing the wrong thing.
+    "Only {round(.avail0)} MB available; this backtest needs {BT_MIN_FREE_MB} MB and would be OOM-killed part-way.",
     "i" = "Wait for other jobs to finish, or lower the floor with {.envvar CITIUS_BT_MIN_FREE_MB} if you accept the risk.",
-    "i" = "Cached meets already written are kept, so a stopped run resumes rather than restarts."))
+    "i" = "Available memory swings while another big job runs, so a launch can pass the check you did by hand and fail this one seconds later. Check immediately before launching, or just retry.",
+    "i" = "Cached meets already written are kept, so a stopped run resumes rather than restarts -- true on the parallel path only since the per-chunk cache write of 2026-09-17."))
 } else {
   cli::cli_alert_info("Preflight: {round(.avail0)} MB available (floor {BT_MIN_FREE_MB} MB).")
 }
