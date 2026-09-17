@@ -2161,6 +2161,29 @@ cli::cli_alert_info(
   "read {round(TIMING$read)}s ({round(100*TIMING$read/tot)}%) | ability {round(TIMING$ability)}s ({round(100*TIMING$ability/tot)}%) | simulate {round(TIMING$sim)}s ({round(100*TIMING$sim/tot)}%) | {format(TIMING$rows, big.mark=',')} history rows read"
 )
 
+# These three numbers were PRINTED and then thrown away, which is why "which
+# stage dominated?" needed a special profiling run to answer instead of a query.
+# They now land in the same central log the long-run hook and runtime_log.R
+# write, so the question is answerable after the fact for every arm ever run:
+#   bash ~/.claude/lib/runtimes.sh citiusdata
+# Wrapped in tryCatch because a logging failure must never fail an arm that has
+# already done its work.
+tryCatch({
+  .rt <- file.path(Sys.getenv("USERPROFILE"), ".claude", "runtime-log.csv")
+  if (nzchar(Sys.getenv("USERPROFILE")) && dir.exists(dirname(.rt))) {
+    if (!file.exists(.rt)) cat("ts_end,secs,repo,tool,source,label\n", file = .rt)
+    .arm <- basename(BT_CACHE)
+    for (.st in c("read", "ability", "sim")) {
+      .v <- round(TIMING[[.st]])
+      if (is.finite(.v) && .v >= 1)
+        cat(sprintf("%s,%d,citiusdata,R,backtest,backtest_athletics.R / %s / %s (%d meets)\n",
+                    format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
+                    as.integer(.v), .st, .arm, nrow(pool)),
+            file = .rt, append = TRUE)
+    }
+  }
+}, error = function(e) invisible(NULL))
+
 # --- assemble and score ------------------------------------------------------
 # Assemble THIS RUN'S POOL, not the whole directory. The cache outlives the pool
 # that filled it: narrowing CITIUS_BT_TIER or lowering CITIUS_BT_TARGET leaves

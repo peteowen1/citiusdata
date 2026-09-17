@@ -15,7 +15,8 @@
 #
 #   powershell -NoProfile -File citiusdata\scripts\_run_altitude_slice.ps1 ctrl
 #   powershell -NoProfile -File citiusdata\scripts\_run_altitude_slice.ps1 on
-param([ValidateSet("ctrl","on","noroad")][string]$Arm = "ctrl")
+param([ValidateSet("ctrl","on","noroad")][string]$Arm = "ctrl",
+      [switch]$Placings)
 
 $ErrorActionPreference = "Continue"
 Set-Location "C:\dev\citiusverse"
@@ -42,7 +43,21 @@ switch ($Arm) {
   "noroad" { $env:CITIUS_BT_CALIBRATION = "calibration_corpus_wac_coast_0904_full2_altitude_noroad.rds" }
 }
 $env:CITIUS_BT_ADJUST_RACE   = "1"
-$env:CITIUS_BT_MARKS_ONLY    = "1"
+# MARKS_ONLY off for a placings arm. The two share an ABILITY CACHE -- marks_only
+# is in backtest_athletics.R's ABIL_EXCLUDE list precisely because it cannot
+# change an ability -- so a placings arm reuses whatever the marks arm already
+# computed for the same calibration and pays only for the simulation.
+#
+# The cache is also why placings need asking at all. "Altitude is a shared
+# whole-field shock so it cannot reorder a field" is TRUE of a shock applied to
+# the race being predicted and FALSE here: this term corrects an athlete's
+# HISTORY, moving each athlete's ability by an amount that depends on their own
+# altitude exposure, so two athletes in one final get different corrections.
+if ($Placings) {
+  Remove-Item Env:\CITIUS_BT_MARKS_ONLY -ErrorAction SilentlyContinue
+} else {
+  $env:CITIUS_BT_MARKS_ONLY  = "1"
+}
 $env:CITIUS_BT_STORE         = "athletics_corpus_store"
 $env:CITIUS_BT_TIER          = "M1"
 $env:CITIUS_BT_MEET_TIER     = "1"
@@ -61,11 +76,16 @@ $env:CITIUS_BT_TARGET        = "120"
 $env:CITIUS_BT_MEETS         = "150"
 $env:CITIUS_BT_WORKERS       = "2"
 $env:CITIUS_HALF_LIFE_FAMILY = "road=1095,walk=730,hurdles=180"
-$env:CITIUS_BT_CACHE         = "bt_cache_alt_$Arm"
-$env:CITIUS_BT_OUT           = "backtest_alt_$Arm.rds"
+# Separate backtest cache per MODE as well as per arm: a marks-only cache holds
+# no placings, so reading it back for a placings arm would score NA gold/medal
+# and report a dead heat. The ability cache is deliberately shared; this one is
+# deliberately not.
+$suffix = if ($Placings) { "$($Arm)_sim" } else { $Arm }
+$env:CITIUS_BT_CACHE         = "bt_cache_alt_$suffix"
+$env:CITIUS_BT_OUT           = "backtest_alt_$suffix.rds"
 
 $t0 = Get-Date
-$before = (Get-ChildItem "citiusdata\data\bt_cache_alt_$Arm" -ErrorAction SilentlyContinue).Count
+$before = (Get-ChildItem "citiusdata\data\bt_cache_alt_$suffix" -ErrorAction SilentlyContinue).Count
 
 # WAIT FOR A WINDOW BEFORE LAUNCHING. Available memory swings by gigabytes while
 # another verse's job iterates -- measured 948 MB to 9,817 MB within minutes on
@@ -91,10 +111,20 @@ while ($true) {
 & Rscript "citiusdata\scripts\backtest_athletics.R" 2>&1 |
   Select-String -Pattern "remaining|chunking|SKIPPED|meet_tier:|Loop wall|Error|available|floor|wrote|brier" |
   Select-Object -Last 12
-$after = (Get-ChildItem "citiusdata\data\bt_cache_alt_$Arm" -ErrorAction SilentlyContinue).Count
+$after = (Get-ChildItem "citiusdata\data\bt_cache_alt_$suffix" -ErrorAction SilentlyContinue).Count
 $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
-"SLICE arm=$Arm  cache $before -> $after files  in $mins min"
+"SLICE arm=$suffix  cache $before -> $after files  in $mins min"
+# The target is 120 meets plus one _arm.rds stamp. This said 151 for a while --
+# left over from when CITIUS_BT_MEETS=150 was mistaken for the pool size -- and
+# a stray `$ (` in the interpolation made every slice print a PowerShell error
+# after its result. Cosmetic, but a runner that errors on every successful run
+# teaches you to ignore its output, which is how a real error gets missed.
+$total = [int]$env:CITIUS_BT_TARGET + 1
 if ($after -gt $before) {
   $rate = [math]::Round($mins * 60 / ($after - $before), 1)
-  "  $rate s/meet; $([math]::Max(0, 151 - $after)) meets left, roughly $([math]::Round(($ (151 - $after)) * $rate / 60, 1)) min"
+  $left = [math]::Max(0, $total - $after)
+  $eta  = [math]::Round($left * $rate / 60, 1)
+  "  $rate s/meet; $left meets left, roughly $eta min"
+} elseif ($after -ge $total) {
+  "  ARM COMPLETE: $($after - 1) meets cached."
 }
