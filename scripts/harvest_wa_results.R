@@ -35,7 +35,19 @@ if (is.na(COMP)) cli_abort("Set {.envvar CITIUS_COMP} to a World Athletics compe
 if (!nzchar(MEET)) cli_abort("Set {.envvar CITIUS_MEET} to a calendar meet_id (names the output file).")
 
 # --- endpoint -----------------------------------------------------------------
-ep <- local({
+# REUSED IF THE CALLER ALREADY HAS ONE. Discovery costs 2.93s (measured
+# 2026-09-17) against a ~4.2s total per meet, so a batch that spawns one
+# process per meet spends ~70% of its life re-deriving the same endpoint --
+# about 4.0 hours of the 5h48m the 4,949-meet run took. harvest_meets_batch.R
+# discovers once and sources this in a loop; a standalone run is unchanged
+# because `ep` does not exist in a fresh session.
+#
+# Guarded on the pair actually being usable, not merely present, so a stale or
+# half-built object falls back to discovery rather than failing every meet.
+if (exists("ep", inherits = FALSE) && is.list(ep) &&
+    !is.null(ep$url) && !is.null(ep$key) && isTRUE(ep$status == 200L)) {
+  cli_alert_info("Reusing endpoint {.val {ep$edge}} from the caller.")
+} else ep <- local({
   o <- capture.output(v <- source(
     file.path(here::here("citiusdata", "scripts"), "discover_wa_endpoint.R"))$value)
   v
