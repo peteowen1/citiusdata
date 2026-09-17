@@ -40,7 +40,15 @@ $env:CITIUS_BT_MARKS_ONLY    = "1"
 $env:CITIUS_BT_STORE         = "athletics_corpus_store"
 $env:CITIUS_BT_TIER          = "M1"
 $env:CITIUS_BT_MEET_TIER     = "1"
-$env:CITIUS_BT_MEETS         = "450"
+# 150, cut from 450 on 2026-09-17 while the control arm was running. The
+# architecture queue's own profile says a 200-meet arm is ~70 min, so 450 was
+# ~2.5h per arm and ~5h for the pair. 150 is enough to separate an effect this
+# size: the family coefficients are t = -66.6 (distance), -38.8 (middle) and
+# -17.7 (road) on the fit, and the marks-MAE question is a family-level
+# comparison, not a per-event one. If a family comes back ambiguous at 150, that
+# is itself informative -- widen only that family rather than paying for 450
+# meets across all nine.
+$env:CITIUS_BT_MEETS         = "150"
 $env:CITIUS_BT_WORKERS       = "2"
 $env:CITIUS_HALF_LIFE_FAMILY = "road=1095,walk=730,hurdles=180"
 # Cleared for the same reason the excess-strip arm clears them: a stale variable
