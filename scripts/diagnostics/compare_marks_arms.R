@@ -155,6 +155,60 @@ if (nrow(tm) < 30) {
     , lapply(.SD, function(x) if (is.numeric(x)) round(x, 4) else x)])
 }
 
+cat("\n=== CONCORDANCE — does the ORDERING improve? ===\n")
+cat("Pairwise: of all athlete pairs within a race, the share the model ranks the\n")
+cat("same way the actual marks did. HIGHER is better. diff_pp = B minus A.\n\n")
+cat("WHY THIS AND NOT BRIER. Brier bundles two different questions -- is the\n")
+cat("ordering right, and does the spread turn that ordering into calibrated\n")
+cat("probabilities. A term that improves ability levels can improve the ordering\n")
+cat("while Brier worsens, because the sigma it was calibrated against no longer\n")
+cat("matches. Concordance isolates the first. Judge an ABILITY change here and a\n")
+cat("SPREAD change on Brier/logloss, or the two questions get answered as one.\n\n")
+# Orientation via to_perf(), never hand-rolled: a sign flip would silently make
+# "better" mean "slower" for every track event and the number would still look
+# plausible.
+conc <- m[is.finite(mark_a) & is.finite(mark_b)]
+# to_perf() takes the ORIENTATION (-1 lower-is-better, +1 higher-is-better), not
+# an event_id. Passing the event_id aborts, which is the good outcome -- the bad
+# one would be a function that accepted it and quietly treated every throw like
+# a sprint. Orientation comes from the registry, never from a guess about the
+# event name.
+.orient <- as.data.table(citius_events())[, .(event_id, orientation)]
+# `actual` and `event_id` both come from act, not from m -- m carries only the
+# two arms' predictions and the APEs derived from them.
+conc <- merge(conc, act[, .(race_id, athlete_id, event_id, actual)],
+              by = c("race_id", "athlete_id"))
+conc <- conc[is.finite(actual) & actual > 0]
+conc <- merge(conc, .orient, by = "event_id", all.x = TRUE)
+conc <- conc[is.finite(orientation)]
+conc[, `:=`(pa = to_perf(mark_a, orientation),
+            pb = to_perf(mark_b, orientation),
+            pt = to_perf(actual, orientation))]
+conc <- conc[is.finite(pa) & is.finite(pb) & is.finite(pt)]
+.pair_conc <- function(pred, truth) {
+  n <- length(pred)
+  if (n < 2L) return(NA_real_)
+  i <- utils::combn(n, 2)
+  dp <- pred[i[1, ]] - pred[i[2, ]]
+  dt <- truth[i[1, ]] - truth[i[2, ]]
+  ok <- dt != 0
+  if (!any(ok)) return(NA_real_)
+  mean(sign(dp[ok]) == sign(dt[ok]))
+}
+cr <- conc[, .(ca = .pair_conc(pa, pt), cb = .pair_conc(pb, pt), n = .N), by = race_id][
+  is.finite(ca) & is.finite(cb)]
+if (nrow(cr) < 30) {
+  cat(sprintf("only %d scoreable races -- too few for a concordance test.\n", nrow(cr)))
+} else {
+  tt <- stats::t.test(cr$cb, cr$ca, paired = TRUE)
+  cat(sprintf("concordance  A %.4f%%  B %.4f%%  | diff %+.4f pp  t = %+.2f  p = %.3g  races = %s\n",
+              100 * mean(cr$ca), 100 * mean(cr$cb),
+              100 * (mean(cr$cb) - mean(cr$ca)), unname(tt$statistic), tt$p.value,
+              format(nrow(cr), big.mark = ",")))
+  cat(sprintf("B better in %d races, worse in %d, identical in %d\n",
+              sum(cr$cb > cr$ca), sum(cr$cb < cr$ca), sum(cr$cb == cr$ca)))
+}
+
 cat("\n=== POOLED (expected to be near flat: most rows are sea level) ===\n")
 print(rep_block(m, "all rows")[, lapply(.SD, function(x) if (is.numeric(x)) round(x, 4) else x)])
 cat("\nA pooled null is NOT evidence against the term. Read the bands.\n")
