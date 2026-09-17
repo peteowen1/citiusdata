@@ -35,7 +35,7 @@ alt <- venue_elevation(D, quiet = FALSE)[, .(venue_city, alt_m)]
 
 ch <- with_citius_db_connection(function(conn) load_championship_results(
   conn, columns = c("athlete_id", "event_id", "date", "perf",
-                    "venue_city", "indoor")), read_only = TRUE)
+                    "venue_city", "indoor", "race_key")), read_only = TRUE)
 setDT(ch)
 say("corpus rows: %s", format(nrow(ch), big.mark = ","))
 
@@ -81,6 +81,7 @@ fit_one <- function(d) {
 fam <- use[, if (uniqueN(.SD, by = c("athlete_id","event_id")) >= MIN_PAIRS) fit_one(.SD),
            by = family, .SDcols = c("x", "y", "athlete_id", "event_id")]
 setorder(fam, beta)
+fam[, scope := "gross"]
 # pct is the effect on the MARK of +1 km of altitude. perf is oriented so
 # higher is better, so a negative beta means altitude makes the mark worse.
 fam[, pct_per_km := round(100 * (exp(beta) - 1), 2)]
@@ -101,8 +102,71 @@ say("\n=== within-athlete mean demeaned perf by altitude band (distance only) ==
 say("a linear-in-metres term assumes these step evenly; they do not have to.")
 print(use[family == "distance", .(rows = .N, mean_y = round(mean(y), 4)), by = band][order(band)])
 
+# --- THE RESIDUAL FIT, which is the one a model can actually use ------------
+#
+# calibrate()'s per-race shared effect `c_r` ALREADY absorbs part of altitude,
+# because altitude is shared by the whole field exactly like wind is. Measured
+# 2026-09-17, c_r moves with altitude in the right direction for every family
+# but by very different fractions -- ~35% of the distance effect, ~82% of road,
+# and it OVERSHOOTS for jump.
+#
+# So neither obvious option is right. Copying the wind block (suppress wherever
+# c_r exists) leaves ~65% of the distance effect uncorrected on the 73% of rows
+# that have a race effect. Applying the gross beta everywhere double-counts
+# whatever c_r already took -- the "one lever at a time" incident in this
+# repo's own history.
+#
+# Fitted here instead on perf AFTER the strip estimate_ability() actually
+# applies, so the coefficient is by construction what the deployed model has
+# NOT already removed. Note the strip is (1 - beta_shock) * (c_r - e_cell),
+# NOT the full c_r -- replicating what the pipeline does rather than what it
+# looks like it does is the "harness must replicate the deployed pipeline"
+# rule, which has cost a wrong verdict here before.
+CAL <- Sys.getenv("CITIUS_ALT_CAL", "calibration_corpus_wac_coast_0904_full2.rds")
+cal <- tryCatch(readRDS(file.path(D, CAL)), error = function(e) NULL)
+
+if (!is.null(cal) && !is.null(cal$race) && !is.null(cal$race_shock)) {
+  rr <- as.data.table(cal$race)[is.finite(c_r)]
+  rr[, .rcl := citius:::.round_class(if ("round" %in% names(rr)) round else NA_character_)]
+  rr[, .tcl := citius:::.tier_class(if ("tier" %in% names(rr)) tier else NA_character_)]
+  ex <- as.data.table(cal$race_shock$expected)
+  rr[, e_cell := ex$e_cell[match(paste(event_id, .tcl, .rcl, sep = "|"),
+                                 paste(ex$event_id, ex$tier_class, ex$round_class, sep = "|"))]]
+  # Same fallback ladder ability.R uses when a cell is missing.
+  evm <- rr[, .(m = mean(c_r, na.rm = TRUE)), by = event_id]
+  rr[!is.finite(e_cell), e_cell := evm$m[match(event_id, evm$event_id)]]
+  rr[!is.finite(e_cell), e_cell := 0]
+  bt <- as.data.table(cal$race_shock$by_tier)
+  rr[, beta_s := bt$beta[match(.tcl, bt$tier_class)]]
+  rr[!is.finite(beta_s), beta_s := cal$race_shock$beta]
+  rr[, strip := (1 - beta_s) * (c_r - e_cell)]
+
+  u2 <- merge(use, rr[, .(race_key, strip)], by = "race_key", all.x = TRUE)
+  u2[, has_cr := is.finite(strip)]
+  u2[!is.finite(strip), strip := 0]
+  say("\nrows with a fitted race effect: %.1f%%", 100 * mean(u2$has_cr))
+
+  # Re-demean AFTER the strip: the within-athlete mean moves once perf changes.
+  u2[, perf_adj := perf - strip]
+  u2[, `:=`(y = perf_adj - mean(perf_adj), x = alt_km - mean(alt_km)),
+     by = .(athlete_id, event_id, has_cr)]
+  u2 <- u2[is.finite(y) & is.finite(x)]
+
+  res_fam <- u2[, if (uniqueN(.SD, by = c("athlete_id","event_id")) >= MIN_PAIRS) fit_one(.SD),
+                by = .(family, has_cr), .SDcols = c("x","y","athlete_id","event_id")]
+  res_fam[, pct_per_km := round(100 * (exp(beta) - 1), 2)]
+  res_fam[, scope := fifelse(has_cr, "residual (race effect applied)",
+                             "gross (no race effect)")]
+  setorder(res_fam, has_cr, beta)
+  say("\n=== residual altitude effect, split by whether a race effect was applied ===")
+  say("the `has_cr = TRUE` rows are what a model can still gain from.")
+  print(res_fam[, .(family, has_cr, beta = round(beta, 4), se = round(se, 4),
+                    t = round(t, 1), pct_per_km, n_ath_ev)])
+  fam <- rbind(fam, res_fam, fill = TRUE)
+}
+
 out <- file.path(D, "altitude_effect.parquet")
 write_parquet(fam, out)
-say("\nwrote %s (%d families)", basename(out), nrow(fam))
+say("\nwrote %s (%d rows)", basename(out), nrow(fam))
 say("NOT wired into any prediction path by this script -- that is a separate,")
 say("measured arm. See docs/reference/storage-formats.md on model lifecycle.")
