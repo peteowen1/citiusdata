@@ -119,7 +119,25 @@ pull_day <- function(day) {
     cli_alert_warning("day {day}: HTTP {resp_status(r)}")
     return(NULL)
   }
-  d <- resp_body_json(r)$data$getCalendarCompetitionResults
+  body <- resp_body_json(r)
+  # A GraphQL 200 can still carry an `errors` array with data = null. That is a
+  # SERVER FAULT, not "this meet has no results" -- and until 2026-09-17 the two
+  # were indistinguishable downstream, because only $data was read. The wrong
+  # one sends people chasing a data gap that no amount of harvesting can close.
+  #
+  # Measured: 38 catalogue meets flagged has_api_results = TRUE return
+  # errorType "Lambda:Unhandled", message "Cannot read properties of undefined
+  # (reading 'events')" -- for day:1, for every other day, and with no day
+  # argument at all. WA's own resolver throws for those competitions; nothing we
+  # send changes it. They had been reported as "returned no results on days
+  # 1..8", which reads as an empty meet and is not what happened.
+  if (length(body$errors)) {
+    GQL_ERR$type <<- body$errors[[1]]$errorType %||% NA_character_
+    GQL_ERR$msg  <<- body$errors[[1]]$message   %||% "unknown GraphQL error"
+    cli_alert_warning("day {day}: server error {.val {GQL_ERR$type}} -- {GQL_ERR$msg}")
+    return(NULL)
+  }
+  d <- body$data$getCalendarCompetitionResults
   # The two sibling branches, stashed for the writers below. They are arrays at
   # a different nesting level from results, so they cannot share this table
   # without duplicating rows -- they get their own files instead of being
@@ -254,6 +272,11 @@ pull_day <- function(day) {
 }
 
 # Accumulators for the two sibling branches, filled inside pull_day().
+# Set by pull_day() when the API returns a GraphQL `errors` array. Kept so the
+# final message can say SERVER FAULT rather than "no results" -- see pull_day().
+GQL_ERR <- new.env(parent = emptyenv())
+GQL_ERR$type <- NA_character_; GQL_ERR$msg <- NA_character_
+
 SIDE <- new.env(parent = emptyenv())
 SIDE$startlist <- list(); SIDE$summary <- list()
 
@@ -295,7 +318,15 @@ DAYS <- local({
 })
 
 res <- rbindlist(lapply(DAYS, pull_day), fill = TRUE)
-if (!nrow(res)) cli_abort("Competition {COMP} returned no results on days {.val {DAYS}}.")
+if (!nrow(res)) {
+  # Name which of the two it is. They are not the same problem: an empty meet
+  # is a data fact, a resolver crash is WA's bug and is not fixable by us.
+  if (!is.na(GQL_ERR$msg)) cli_abort(c(
+    "Competition {COMP}: the WA API errored rather than returning no results.",
+    "x" = "{GQL_ERR$type}: {GQL_ERR$msg}",
+    "i" = "Server-side fault, identical for every day and with no day argument. Not harvestable by retrying; record it as known-unfixable rather than re-queuing it."))
+  cli_abort("Competition {COMP} returned no results on days {.val {DAYS}}.")
+}
 
 # --- keys the scorer needs ----------------------------------------------------
 # The `competitor.id` the API returns is an opaque hash, NOT the numeric World
