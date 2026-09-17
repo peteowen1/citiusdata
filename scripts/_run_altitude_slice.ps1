@@ -43,9 +43,31 @@ $env:CITIUS_BT_OUT           = "backtest_alt_$Arm.rds"
 
 $t0 = Get-Date
 $before = (Get-ChildItem "citiusdata\data\bt_cache_alt_$Arm" -ErrorAction SilentlyContinue).Count
+
+# WAIT FOR A WINDOW BEFORE LAUNCHING. Available memory swings by gigabytes while
+# another verse's job iterates -- measured 948 MB to 9,817 MB within minutes on
+# 2026-09-17 -- so a hand check can pass and R's own check fail seconds later.
+# That happened twice. Poll here instead, and require headroom over the floor so
+# the two checks agree.
+$FLOOR = 7500
+$WAIT_MAX_SEC = 240
+$w0 = Get-Date
+while ($true) {
+  $avail = [math]::Round((Get-Counter '\Memory\Available MBytes').CounterSamples.CookedValue)
+  if ($avail -ge $FLOOR) { "window open: $avail MB available, launching"; break }
+  if (((Get-Date) - $w0).TotalSeconds -ge $WAIT_MAX_SEC) {
+    "no window in $WAIT_MAX_SEC s (last $avail MB, need $FLOOR) -- nothing run, nothing lost. Try again later."
+    exit 0
+  }
+  Start-Sleep -Seconds 15
+}
+
+# Do NOT over-filter: the reason a slice refused to start is the single most
+# useful line it can print, and an earlier version of this filter swallowed it
+# and reported a bare "Error:".
 & Rscript "citiusdata\scripts\backtest_athletics.R" 2>&1 |
-  Select-String -Pattern "remaining|chunking|SKIPPED|meet_tier:|Loop wall|Error|wrote|brier" |
-  Select-Object -Last 10
+  Select-String -Pattern "remaining|chunking|SKIPPED|meet_tier:|Loop wall|Error|available|floor|wrote|brier" |
+  Select-Object -Last 12
 $after = (Get-ChildItem "citiusdata\data\bt_cache_alt_$Arm" -ErrorAction SilentlyContinue).Count
 $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
 "SLICE arm=$Arm  cache $before -> $after files  in $mins min"
