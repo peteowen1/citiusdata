@@ -15,7 +15,7 @@
 #
 #   powershell -NoProfile -File citiusdata\scripts\_run_altitude_slice.ps1 ctrl
 #   powershell -NoProfile -File citiusdata\scripts\_run_altitude_slice.ps1 on
-param([ValidateSet("ctrl","on","noroad","midonly")][string]$Arm = "ctrl",
+param([ValidateSet("ctrl","on","noroad","midonly","banded","banded_noroad")][string]$Arm = "ctrl",
       [switch]$Placings,
       [switch]$AddBack)
 
@@ -49,6 +49,13 @@ switch ($Arm) {
   # p = 0.26, 610 of 780 races identical), so the open question is whether the
   # middle gain survives on its own or was part of the same level-only shift.
   "midonly" { $env:CITIUS_BT_CALIBRATION = "calibration_corpus_wac_coast_0904_full2_altitude_midonly.rds" }
+  # banded/banded_noroad: the 2026-09-18 refit. family x sex x band, not a
+  # linear slope -- <200m is the reference band, beta=0 there by construction,
+  # so this calibration CANNOT move a sea-level mark. The linear versions above
+  # (on/noroad/midonly) made 9,677 sea-level races significantly worse; that is
+  # structurally impossible here. See DECISIONS.md 2026-09-18.
+  "banded"        { $env:CITIUS_BT_CALIBRATION = "calibration_corpus_wac_coast_0904_full2_altitude_banded.rds" }
+  "banded_noroad" { $env:CITIUS_BT_CALIBRATION = "calibration_corpus_wac_coast_0904_full2_altitude_banded_noroad.rds" }
 }
 # The COMPLETE altitude design: history subtraction (from the calibration) plus
 # the target-venue add-back. Shipping only the first half is a known defect --

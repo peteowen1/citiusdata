@@ -236,6 +236,17 @@ if (!is.null(cal) && !is.null(cal$race) && !is.null(cal$race_shock)) {
     r
   })
   res_fam <- rbindlist(res_list, fill = TRUE)
+  # Explicit <200 reference rows for the RESIDUAL scope too, not only gross.
+  # Without this, a has_cr lookup that finds no <200 row still defaults to 0 via
+  # the NA-coercion in ability.R -- functionally correct, but indistinguishable
+  # from "this (family, sex, has_cr) was never fitted at all", which is exactly
+  # the ambiguity this table is meant to remove. Caught reading back the diff
+  # rather than a wrong number: the claim in this file's own header ("every
+  # fitted cell also gets an explicit <200 row") was false for has_cr until this.
+  res_ref <- unique(res_fam[, .(family, sex, has_cr)])[
+    , `:=`(band = REF_BAND, beta = 0, se = NA_real_, t = Inf,
+           n_rows = NA_integer_, n_ath_ev = NA_integer_)]
+  res_fam <- rbind(res_fam, res_ref, fill = TRUE)
   res_fam[, scope := fifelse(has_cr, "residual (race effect applied)",
                              "gross (no race effect)")]
   res_fam[, pct_effect := round(100 * (exp(beta) - 1), 2)]

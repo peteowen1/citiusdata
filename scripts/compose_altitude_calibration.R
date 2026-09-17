@@ -32,8 +32,16 @@ ae <- as.data.table(read_parquet(file.path(D, "altitude_effect.parquet")))
 # The residual coefficients, split by whether a race effect was applied. The
 # `gross` scope rows from the same file are the diagnostic fit, NOT what the
 # model applies -- taking them here would double-count the share c_r removed.
+#
+# sex, band and scope are SELECTED, not dropped. Banding (2026-09-18) added
+# sex and band as lookup keys ability.R now requires, and scope is what the
+# completeness check below reads. An earlier version of this line selected
+# only (family, has_cr, beta, se, t, n_ath_ev) -- correct for the old linear
+# fit, silently wrong the moment the fit gained new columns, because dropping
+# a column here is not an error, it just removes a key the model needs to
+# match on.
 alt <- ae[scope %in% c("residual (race effect applied)", "gross (no race effect)"),
-          .(family, has_cr, beta, se, t, n_ath_ev)]
+          .(family, sex, has_cr, band, beta, se, t, n_ath_ev, scope)]
 if (!nrow(alt)) cli::cli_abort("altitude_effect.parquet carries no residual rows -- re-run fit_altitude_effect.R.")
 
 # A coefficient that is not distinguishable from zero is set to zero rather
@@ -85,22 +93,39 @@ if (length(ZERO_FAM)) {
   say("  (the REASON is the caller's; road is excluded for an invalid regressor, an isolation run is not)")
 }
 
-# Every (family, has_cr) cell must be present. fit_altitude_effect.R fits per
-# cell behind a MIN_PAIRS gate, so one scope of a family can drop out while
-# nrow(alt) stays comfortably positive. A missing cell never matches at runtime,
-# gets beta NA -> 0, and is then indistinguishable from the deliberate no-op.
+# Every (family, sex) must have AT LEAST its <200 reference row -- NOT every
+# (family, sex, band, has_cr) cell, which the banded refit (2026-09-18) does
+# not guarantee: fit_family_sex_band() only emits a band row when that
+# contrast clears MIN_PAIRS, so 77 of 90 family x sex x band cells are fitted
+# by design, not 90. Demanding all 90 here would abort a healthy fit.
+#
+# What MUST hold: a (family, sex) that never clears MIN_PAIRS for ANY band
+# never appears in the gross table at all -- fit_family_sex_band() only adds
+# the explicit <200 reference row for family/sex combos that already have at
+# least one fitted band (`unique(gross[, .(family, sex)])`). So a (family, sex)
+# missing here means it produced NOTHING, not "produced only the reference" --
+# the exact "wired but inert" failure this guard exists to catch, at the
+# coarser grain the design now guarantees.
+#
 # Athletics only: fit_altitude_effect.R fits the athletics corpus, so the
 # swimming families are legitimately absent and must not be demanded here. This
 # guard failed on its first run for exactly that reason -- a gate is not correct
 # until it has been run against known-good data and NOT fired.
 ev <- as.data.table(citius::citius_events())
 fam_all <- sort(unique(ev[sport == "Athletics", family]))
-want <- CJ(family = fam_all, has_cr = c(FALSE, TRUE))
-miss <- want[!alt, on = .(family, has_cr)]
+sex_all <- sort(unique(ev[sport == "Athletics", sex]))
+want <- CJ(family = fam_all, sex = sex_all)
+# NOT scope == "gross": `alt` was already filtered above to the two RESIDUAL
+# scopes ("gross (no race effect)" and "residual (race effect applied)"). The
+# plain "gross" diagnostic scope is never in `alt` at all, so checking for it
+# here would find zero rows and abort on every run -- caught reading this back
+# rather than by the abort firing on known-good data.
+have <- unique(alt[, .(family, sex)])
+miss <- want[!have, on = .(family, sex)]
 if (nrow(miss)) cli::cli_abort(c(
-  "altitude_effect.parquet is missing {nrow(miss)} of {nrow(want)} (family, has_cr) cells.",
-  i = "Missing: {paste(miss$family, miss$has_cr, collapse = '; ')}",
-  x = "A missing cell is silently inert at runtime, not an error -- re-run fit_altitude_effect.R."))
+  "altitude_effect.parquet is missing {nrow(miss)} of {nrow(want)} (family, sex) cells entirely -- not even a <200 reference row.",
+  i = "Missing: {paste(miss$family, miss$sex, collapse = '; ')}",
+  x = "A missing (family, sex) is silently inert at runtime for EVERY band -- re-run fit_altitude_effect.R, or check whether that combination genuinely never clears MIN_PAIRS."))
 
 # All-zero is a valid-looking calibration that changes nothing. It passes the
 # wiring test (the element exists and has rows) and ability.R's own guard, while
@@ -117,6 +142,10 @@ cal$provenance$altitude <- list(
 saveRDS(cal, file.path(D, OUTF))
 say("\nwrote %s", OUTF)
 say("$altitude rows: %d", nrow(alt))
-print(alt[order(has_cr, beta), .(family, has_cr, beta = round(beta, 4),
-                                 pct_per_km = round(100*(exp(beta)-1), 2), t = round(t, 1))])
+# pct_effect, not pct_per_km: beta is now the level effect of a BAND vs <200m
+# (banded, 2026-09-18), not a per-km rate, so there is no "per km" to name.
+print(alt[order(has_cr, family, sex, band), .(family, sex, has_cr, band,
+                                              beta = round(beta, 4),
+                                              pct_effect = round(100*(exp(beta)-1), 2),
+                                              t = round(t, 1))])
 say("\nEverything else is byte-identical to %s.", BASE)
