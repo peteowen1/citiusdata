@@ -65,10 +65,9 @@ meets <- if (length(args)) args else
 if (!length(meets)) cli::cli_abort("No meets selected (season {SEASON}).")
 cli::cli_alert_info("Forecast store: {length(meets)} meet{?s} -- {.val {meets}}")
 
-# The config stamp names the directory, so two vintages coexist rather than one
-# overwriting the other. Slashes and spaces are not path-safe.
+# The config stamp names the directory, so two model vintages coexist rather
+# than one overwriting the other. Slashes and spaces are not path-safe.
 STAMP <- gsub("[^A-Za-z0-9._-]+", "_", DEPLOYED$stamp)
-dir.create(file.path(OUT, STAMP), recursive = TRUE, showWarnings = FALSE)
 
 calibration <- deployed_calibration(D)
 aging <- deployed_aging(D)
@@ -93,6 +92,20 @@ HISTORY_VINTAGE <- local({
   sprintf("%s_%.0f", format(max(i$mtime), "%Y%m%d%H%M%S"), sum(i$size))
 })
 cli::cli_alert_info("history vintage: {.val {HISTORY_VINTAGE}}")
+
+# AND THE VINTAGE NAMES THE DIRECTORY TOO, for the same reason the config
+# stamp does. Without this, a re-run under an unchanged config but a changed
+# corpus overwrote the earlier forecast with a different number -- which
+# happened to zurich2026's 2026-09-09 file on 2026-09-17, the morning the
+# corpus went 4.77M -> 5.04M rows. The vintage COLUMN made the two
+# distinguishable after the fact; only the path stops one destroying the other.
+#
+# Files written under the old flat <config>/<meet>.parquet layout are left
+# exactly where they are: a recursive glob over forecasts/ finds both, and
+# nothing reads this store by an exact path (checked 2026-09-17 -- it has no
+# consumers yet, which is why the layout could still be changed cheaply).
+VINTAGE_DIR <- file.path(OUT, STAMP, HISTORY_VINTAGE)
+dir.create(VINTAGE_DIR, recursive = TRUE, showWarnings = FALSE)
 
 # Parameter is `mid`, not `meet_id`: a param named after the column it filters
 # on shadows that column inside `[...]` and the filter silently self-joins or
@@ -204,9 +217,51 @@ dupes <- nrow(all_fc) - uniqueN(all_fc, by = PK)
 if (dupes) cli::cli_abort("{dupes} duplicate {.field {PK}} row{?s} -- the key does not hold.")
 
 # Positions are a distribution: each athlete's top-8 mass cannot exceed 1.
+#
+# NA IS ITS OWN FAILURE, checked before the magnitude test rather than swept
+# under an na.rm. On 2026-09-17 this aborted with "missing value where
+# TRUE/FALSE needed" -- `any(NA > 1)` is NA and `if (NA)` is an error, the
+# exact trap in C:\dev\.claude\rules ("coerce verdicts with isTRUE()"). The
+# guard was right to fire; it just could not say what it had found, so it
+# killed the run 20 minutes in and named nothing.
 pcols <- paste0("pos_", seq_len(K_POS))
-mass <- rowSums(as.matrix(all_fc[, ..pcols]))
-if (any(mass > 1 + 1e-9)) cli::cli_abort("position probabilities sum above 1 for {sum(mass > 1 + 1e-9)} row{?s}.")
+
+# A RACE SMALLER THAN K_POS HAS NO K_POS-TH PLACE, and that is a zero, not an
+# unknown. position_probs() caps `max_position` at the field size
+# (citius/R/positions.R:34), so a 7-athlete final legitimately returns
+# pos_1..pos_7 and no pos_8 column at all; the NA only appears when rbindlist()
+# unions it with an 8+ athlete race. P(finishing 8th) in a 7-athlete race is 0.
+#
+# Filled ONLY beyond each race's own field size, never blanket-filled: an NA at
+# a position that DOES exist is a real computation failure and must still reach
+# the guard below. This is the "never recorded" versus "genuinely zero"
+# distinction the archive doc is about -- here it is provably zero.
+all_fc[, .n_field := .N, by = .(competition_id, event_id, round)]
+for (j in seq_len(K_POS)) {
+  cn <- paste0("pos_", j)
+  all_fc[j > .n_field & is.na(get(cn)), (cn) := 0]
+}
+n_filled <- all_fc[, sum(.n_field < K_POS)]
+if (n_filled) cli::cli_alert_info(
+  "{n_filled} row{?s} in races smaller than {K_POS}: positions beyond the field set to 0.")
+all_fc[, .n_field := NULL]
+
+pm <- as.matrix(all_fc[, ..pcols])
+bad_na <- which(!stats::complete.cases(pm))
+if (length(bad_na)) {
+  cli::cli_alert_danger("{length(bad_na)} row{?s} carry NA position probabilities:")
+  print(all_fc[bad_na][1:min(10, length(bad_na)),
+                       c("meet_id", "event_id", "round", "athlete_id", pcols), with = FALSE])
+  cli::cli_abort("NA in pos_1..pos_{K_POS} -- a probability that was never computed must not ship as a forecast.")
+}
+mass <- rowSums(pm)
+over <- which(mass > 1 + 1e-9)
+if (length(over)) {
+  cli::cli_alert_danger("{length(over)} row{?s} with position mass above 1:")
+  print(all_fc[over][1:min(10, length(over)),
+                     .(meet_id, event_id, round, athlete_id, mass = mass[over][1:min(10, length(over))])])
+  cli::cli_abort("position probabilities sum above 1 -- the simulation's rank distribution is not a distribution.")
+}
 stopifnot("pos_1 must equal p_gold" = isTRUE(all.equal(all_fc$pos_1, all_fc$p_gold)))
 
 # ONE FILE PER MEET, not one file for the run.
@@ -217,9 +272,9 @@ stopifnot("pos_1 must equal p_gold" = isTRUE(all.equal(all_fc$pos_1, all_fc$p_go
 # rebuild idempotent and scoped: re-running a meet replaces only its own file,
 # which is the same reason backtest_cache_* is keyed per competition.
 for (m in unique(all_fc$meet_id)) {
-  write_parquet(all_fc[meet_id == m], file.path(OUT, STAMP, paste0(m, ".parquet")))
+  write_parquet(all_fc[meet_id == m], file.path(VINTAGE_DIR, paste0(m, ".parquet")))
 }
-f_out <- file.path(OUT, STAMP)
+f_out <- VINTAGE_DIR
 # Counts races by the KEY, not by race_key -- which is NA at forecast time by
 # design and would report 1 for any number of races.
 n_races <- uniqueN(all_fc, by = c("competition_id", "event_id", "round"))
