@@ -100,7 +100,18 @@ MAX_PER_RUN <- .env_int("CITIUS_BT_MEETS", "25")
 #
 # AND NOTE PARALLEL MODE: each PSOCK worker carries its own copy of the history,
 # so CITIUS_BT_WORKERS = n needs roughly n x this floor, not one lot of it.
-BT_MIN_FREE_MB <- .env_int("CITIUS_BT_MIN_FREE_MB", "9000")
+# 7,000 since 2026-09-17, down from 9,000, at Pete's call. The reason it is
+# defensible now and would not have been this morning: an OOM used to destroy
+# the whole run, because the parallel path wrote its per-meet cache only after
+# the LAST meet returned. It now writes after each chunk, so being killed costs
+# at most one chunk (N_WORKERS * 4 meets) and the next run resumes. Lowering a
+# guard is reasonable exactly when the cost of tripping it has gone down.
+#
+# Trade accepted knowingly: at 2 workers this is below what the comment above
+# implies is comfortable, so an OOM is likelier than before. It is now cheap
+# rather than catastrophic, and waiting hours for another verse's job to finish
+# has its own cost.
+BT_MIN_FREE_MB <- .env_int("CITIUS_BT_MIN_FREE_MB", "7000")
 .sys_avail_mb <- function() {
   if (!requireNamespace("ps", quietly = TRUE)) return(NA_real_)
   tryCatch(ps::ps_system_memory()[["avail"]] / 1024^2, error = function(e) NA_real_)
