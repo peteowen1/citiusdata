@@ -1061,6 +1061,16 @@ arm_fingerprint <- list(
   shock_addback_md5 = if (nzchar(SHOCK_FILE)) md5_of(SHOCK_FILE) else NA_character_,
   history_days = HISTORY_DAYS, n_sims = N_SIMS, cohort = COHORT,
   sigma_k_hoist = SIGMA_K_HOIST,
+  # CITIUS_SIGMA_K_BY_EVENT is read DIRECTLY by estimate_ability() from the
+  # environment, not passed through this script at all -- so without this
+  # line it is invisible to the ability cache key. Two arms differing only by
+  # this flag would share the same calibration_md5 (per-event k is a runtime
+  # behaviour, not a calibration file), so the SECOND arm would silently
+  # cache-hit the FIRST arm's pooled-k ability and test nothing. Caught before
+  # it cost an arm, not after: the same class of silent-cache bug this file
+  # has already hit twice today (ABIL_ON/ABIL_DIR missing from export_vars,
+  # alt_m missing from keep_cols).
+  sigma_k_by_event = identical(Sys.getenv("CITIUS_SIGMA_K_BY_EVENT", "0"), "1"),
   athletes = ATHLETES, peak_gamma = PEAK_GAMMA,
   robust_location = ROBUST_LOCATION, decouple_peak = DECOUPLE_PEAK,
   # Without these two, a tier arm would read the control's cached meets back as
