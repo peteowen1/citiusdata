@@ -34,6 +34,21 @@ CAT_TBL <- {
   } else NULL
 }
 
+# Loaded once, like CAT_TBL, rather than per store. Missing file is a warning
+# and an NA column, not an abort: the elevation table is an enhancement, and a
+# fresh checkout that lacks it should still be able to build its stores.
+ALT_TBL <- local({
+  f <- file.path(here::here("citiusdata", "scripts"), "_venue_elevation.R")
+  if (!file.exists(f)) return(NULL)
+  source(f)
+  a <- tryCatch(venue_elevation(OUT, quiet = TRUE), error = function(e) NULL)
+  if (is.null(a) || !nrow(a)) {
+    cli::cli_alert_warning("No venue elevation table; stores will carry alt_m = NA.")
+    return(NULL)
+  }
+  unique(as.data.table(a)[, .(venue_city, alt_m)], by = "venue_city")
+})
+
 build <- function(src, dest, label, join_tier = FALSE, data = NULL) {
   if (is.null(data)) {
     f <- file.path(OUT, src)
@@ -105,9 +120,33 @@ build <- function(src, dest, label, join_tier = FALSE, data = NULL) {
   # -- the same silent-default failure as wind being dropped on corpus
   # promotion. It is low-cardinality (~200 codes) and the rows are already
   # sorted by event and date, so dictionary encoding keeps the cost small.
+  # ALTITUDE, joined here for the same reason meet_tier is: estimate_ability()
+  # reads the store, the store is what the model sees, and a venue property
+  # that never reaches the store cannot reach a prediction. venue_elevation
+  # covered 84.4% of corpus rows from 2026-08-19 and was read by two
+  # diagnostics and nothing else for a month.
+  #
+  # `venue_city` is the join key and is NOT itself kept -- the model wants the
+  # metres, not the name, and carrying a high-cardinality string into every
+  # partition would cost far more than the numeric it resolves to.
+  if (exists("ALT_TBL") && !is.null(ALT_TBL) && "venue_city" %in% names(d)) {
+    d <- merge(d, ALT_TBL, by = "venue_city", all.x = TRUE)
+    # Assert on the JOINABLE subset, not on all rows. Career-route corpus rows
+    # carry no venue_city at all, so an all-rows floor would either abort a
+    # healthy build or pass a broken join -- the same trap documented for
+    # meet_tier above.
+    has_city <- !is.na(d$venue_city) & nzchar(as.character(d$venue_city))
+    cov_all  <- 100 * mean(!is.na(d$alt_m))
+    cov_join <- if (any(has_city)) 100 * mean(!is.na(d$alt_m[has_city])) else NA_real_
+    cli::cli_alert_info("  {label}: alt_m on {round(cov_all, 1)}% of rows; of rows WITH a venue_city, {round(cov_join, 1)}% resolved.")
+    if (!is.na(cov_join) && cov_join < 60) cli::cli_abort(
+      "{label}: only {round(cov_join, 1)}% of rows carrying a venue_city resolved to an elevation -- the join is broken, not merely sparse.")
+  }
+
   keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "round",
             "race_code", "meet_tier", "competition_id", "comp_start", "place", "race_key",
-            "sex", "discipline", "wind", "indoor", "comp_name", "venue_country")
+            "sex", "discipline", "wind", "indoor", "comp_name", "venue_country",
+            "alt_m")
   present <- intersect(keep, names(d))
   dropped <- setdiff(names(d), present)
   d <- d[, ..present]

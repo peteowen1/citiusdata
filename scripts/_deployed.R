@@ -559,9 +559,14 @@ deployed_history <- function(dir, events, from, to) {
              it this store can only carry the feed's race_code, which is the wrong
              label set for those offsets."))
     }
+    # alt_m is here for the same reason meet_tier is: estimate_ability() applies
+    # a per-family altitude term when the calibration carries one, and a column
+    # the rescue rebuild drops is a term that silently stops firing on exactly
+    # the path taken when something has already gone wrong.
     keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "round",
               "race_code", "meet_tier", "competition_id", "comp_start", "place",
-              "race_key", "sex", "discipline", "wind", "indoor", "comp_name")
+              "race_key", "sex", "discipline", "wind", "indoor", "comp_name",
+              "alt_m")
     d <- d[, intersect(keep, names(d)), with = FALSE]
     data.table::setorderv(d, intersect(c("event_id", "date"), names(d)))
     write_results_store(d, file.path(dir, DEPLOYED$history_store))
