@@ -15,7 +15,7 @@
 #
 #   powershell -NoProfile -File citiusdata\scripts\_run_altitude_slice.ps1 ctrl
 #   powershell -NoProfile -File citiusdata\scripts\_run_altitude_slice.ps1 on
-param([ValidateSet("ctrl","on","noroad")][string]$Arm = "ctrl",
+param([ValidateSet("ctrl","on","noroad","midonly")][string]$Arm = "ctrl",
       [switch]$Placings)
 
 $ErrorActionPreference = "Continue"
@@ -41,6 +41,13 @@ switch ($Arm) {
   "ctrl"   { $env:CITIUS_BT_CALIBRATION = "calibration_corpus_wac_coast_0904_full2.rds" }
   "on"     { $env:CITIUS_BT_CALIBRATION = "calibration_corpus_wac_coast_0904_full2_altitude.rds" }
   "noroad" { $env:CITIUS_BT_CALIBRATION = "calibration_corpus_wac_coast_0904_full2_altitude_noroad.rds" }
+  # midonly zeroes EIGHT families to isolate the one with a measured marks gain:
+  # middle, -0.0283pp at t = -5.01. Those eight are excluded to isolate, NOT
+  # because their regressors are invalid the way road's is. The noroad arm
+  # improved marks and did not improve concordance (74.4484% -> 74.3762%,
+  # p = 0.26, 610 of 780 races identical), so the open question is whether the
+  # middle gain survives on its own or was part of the same level-only shift.
+  "midonly" { $env:CITIUS_BT_CALIBRATION = "calibration_corpus_wac_coast_0904_full2_altitude_midonly.rds" }
 }
 $env:CITIUS_BT_ADJUST_RACE   = "1"
 # MARKS_ONLY off for a placings arm. The two share an ABILITY CACHE -- marks_only

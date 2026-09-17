@@ -74,8 +74,15 @@ if (length(ZERO_FAM)) {
     "CITIUS_ALT_ZERO_FAMILIES names {length(unknown)} family/families not in the fit: {.val {unknown}}. A typo here silently zeroes nothing.")
   n_fam <- alt[family %chin% ZERO_FAM & beta != 0, .N]
   alt[family %chin% ZERO_FAM, beta := 0]
-  say("families zeroed BY NAME (invalid regressor, not significance): %s -- %d row(s) set to 0",
+  # Neutral wording on purpose. This said "(invalid regressor, not
+  # significance)", which is the reason ROAD is excluded and not the reason a
+  # family is excluded when the list is being used to ISOLATE one family -- the
+  # middle-only variant zeroes eight families whose regressors are perfectly
+  # valid. A log line that states a justification the caller did not give is a
+  # small lie that a later reader will take as a finding.
+  say("families zeroed BY NAME via CITIUS_ALT_ZERO_FAMILIES: %s -- %d row(s) set to 0",
       paste(ZERO_FAM, collapse = ", "), n_fam)
+  say("  (the REASON is the caller's; road is excluded for an invalid regressor, an isolation run is not)")
 }
 
 # Every (family, has_cr) cell must be present. fit_altitude_effect.R fits per
