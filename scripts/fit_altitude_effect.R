@@ -1,27 +1,51 @@
-# Per-family altitude coefficient, estimated WITHIN athlete-event.
+# Per-(family, sex) altitude effect, estimated WITHIN athlete-event, BANDED not
+# linear.
 #
-# WHY. venue_elevation.parquet has covered 84.4% of corpus rows since
-# 2026-08-19 and nothing in the model has ever read it -- two diagnostics and
-# no prediction path. Measured within-athlete on 2026-09-17, distance marks are
-# ~3.4% slower at altitude while sprints and jumps are FASTER: a real, large,
-# entirely unmodelled effect whose SIGN FLIPS by family, so a single global
-# coefficient would be worse than nothing.
+# WHY BANDED. A single linear slope was fitted and measured against its own
+# banded diagnostic on 2026-09-17, and the diagnostic said the slope was wrong
+# at both ends: <200m true effect +0.0012 (essentially zero), >2200m -0.0232 --
+# a linear fit through those five points over- corrects sea level by close to
+# its entire magnitude and under-corrects extreme altitude by roughly half.
+# Confirmed by isolating the add-back's own effect on 2026-09-18: it made 9,677
+# SEA-LEVEL (<200m) races significantly WORSE (t=4.36, p<1e-4) while doing
+# nothing useful above 2200m, where the road family (the only one with rows
+# there) had been zeroed for an unrelated reason. Full story in
+# docs/reviews/altitude-arm-2026-09-17.md.
 #
-# THE ESTIMATOR IS FIXED-EFFECTS, NOT A RAW REGRESSION. perf is demeaned
-# within (athlete_id, event_id) and altitude is demeaned in the same groups, so
-# the coefficient is identified only by an athlete's OWN variation in venue
-# altitude. A raw regression would mostly measure that altitude venues host
-# different athletes -- Kenyan distance fields at Eldoret against European ones
-# at sea level -- which is a population difference, not an altitude effect.
+# WHY NOT A GAM. The estimator below is within-athlete-event demeaning
+# (Frisch-Waugh-Lovell): demean y and demean the regressor(s), then OLS. FWL is
+# EXACT only for a linear term -- for a nonlinear f, mean(f(x)) over an
+# athlete's races is not f(mean(x)), so "smooth the demeaned residual" is a
+# different, wrong model. A correct GAM needs the athlete-event effects and the
+# smooth estimated JOINTLY (e.g. mgcv::bam with a random-effect smooth per
+# athlete-event), which is materially more infrastructure and carries its own
+# bias risk -- unbiased only if the random effect is uncorrelated with altitude
+# exposure, which it measurably is not (shift-vs-history correlation -0.940,
+# 2026-09-17).
 #
-# KNOWN ATTENUATION, recorded rather than ignored: this repo already documents
-# that a single within-athlete centring attenuates when exposure correlates
-# with ability, and it does here -- elite East Africans race altitude at home
-# and sea level abroad. The magnitudes below are therefore conservative. The
-# ORDERING and the SIGNS are what this is for.
+# BAND DUMMIES ARE STILL LINEAR. A 0/1 indicator for "is this row in band b" is
+# a linear regressor, so FWL applies exactly. Each non-reference band is fit as
+# its own two-band comparison against <200m (the reference), reusing fit_one()
+# UNCHANGED -- the same tested single-regressor estimator this file has used
+# since it was first written, just with a dummy in place of continuous km. This
+# is deliberately NOT one joint multi-dummy regression per cell: a pairwise
+# contrast against a fixed reference only requires an athlete to have raced in
+# EITHER band, not to have crossed several band boundaries at once, which is a
+# much weaker and more common pattern in the data.
+#
+# WHY family x SEX, not family alone. Sized 2026-09-18 before choosing: family
+# alone gives 9 cells (all powered); family x sex gives 18 (all powered,
+# thousands of athlete-events each); family x sex x band gives 90, 77 of which
+# (86%) clear a 200-athlete-event floor. Event-level was close (66 of 83) but
+# the failures are exactly the thin events (walks, combined disciplines) that
+# family x sex avoids gap-filling for. Sex matters mechanically, not just
+# plausibly: East African distance/middle fields are male-skewed relative to
+# women's in this corpus, and that population is exactly what drives the
+# shift-vs-history correlation above -- a family-only fit blends two different
+# selection effects into one number.
 #
 # Usage:  Rscript citiusdata/scripts/fit_altitude_effect.R
-#         CITIUS_ALT_MIN_PAIRS=200  minimum athlete-events per family
+#         CITIUS_ALT_MIN_PAIRS=200  minimum athlete-events per band contrast
 
 VERSE <- here::here()
 suppressMessages(devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE))
@@ -30,6 +54,10 @@ D <- file.path(VERSE, "citiusdata", "data")
 source(file.path(VERSE, "citiusdata", "scripts", "_venue_elevation.R"))
 say <- function(...) cat(sprintf(...), "\n", sep = "")
 MIN_PAIRS <- as.integer(Sys.getenv("CITIUS_ALT_MIN_PAIRS", "200"))
+
+BAND_BREAKS <- c(-Inf, 200, 800, 1500, 2200, Inf)
+BAND_LABS   <- c("<200", "200-800", "800-1500", "1500-2200", ">2200")
+REF_BAND    <- "<200"
 
 # Per-stage runtimes, appended to ~/.claude/runtime-log.csv so "what is slow"
 # is a query rather than a recollection. See the Long Runs section of
@@ -55,28 +83,35 @@ ch <- merge(ch, alt, by = "venue_city")
 say("outdoor rows with a known venue elevation: %s (%.1f%% of corpus)",
     format(nrow(ch), big.mark = ","), 100 * nrow(ch) / 5039647)
 
-reg <- as.data.table(citius_events())[, .(event_id, family)]
+# family AND sex from the event registry -- the authoritative source, not a
+# regex on event_id. citius_events() carries `sex` directly (used elsewhere as
+# `ev$sex == "W"`), so this reads the same column the model itself would.
+reg <- as.data.table(citius_events())[, .(event_id, family, sex)]
 ch <- merge(ch, reg, by = "event_id")
+ch <- ch[!is.na(sex)]
 ch[, alt_km := alt_m / 1000]
+ch[, band := cut(alt_m, BAND_BREAKS, labels = BAND_LABS)]
 
-# Within athlete-event demeaning. Groups with no altitude variation contribute
-# nothing (demeaned altitude is 0) and are dropped explicitly rather than left
-# to contribute zero rows to a denominator.
+# Within athlete-event demeaning, unchanged from the linear version. Groups
+# with no altitude variation contribute nothing (every dummy demeans to 0) and
+# are dropped explicitly rather than left to contribute zero rows silently.
 ch[, `:=`(n_g = .N, alt_sd = stats::sd(alt_km)), by = .(athlete_id, event_id)]
 use <- ch[n_g >= 2L & is.finite(alt_sd) & alt_sd > 0]
 say("athlete-events with genuine altitude variation: %s (%s rows)",
     format(uniqueN(use, by = c("athlete_id", "event_id")), big.mark = ","),
     format(nrow(use), big.mark = ","))
 
-use[, `:=`(y = perf - mean(perf), x = alt_km - mean(alt_km)),
-    by = .(athlete_id, event_id)]
+use[, `:=`(y = perf - mean(perf)), by = .(athlete_id, event_id)]
 
+# fit_one() UNCHANGED from the linear version: FWL-exact OLS of demeaned y on
+# a demeaned regressor. Here the regressor is a 0/1 band dummy instead of
+# continuous km, and that is the whole change -- band dummies are still linear
+# regressors, so the same estimator applies without modification.
 fit_one <- function(d) {
   sxx <- sum(d$x^2)
   if (!is.finite(sxx) || sxx <= 0) return(NULL)
   b   <- sum(d$x * d$y) / sxx
   res <- d$y - b * d$x
-  # df loses one per group (the within mean) plus one for the slope.
   dfree <- nrow(d) - uniqueN(d, by = c("athlete_id", "event_id")) - 1L
   if (dfree <= 0) return(NULL)
   se  <- sqrt(sum(res^2) / dfree / sxx)
@@ -85,64 +120,75 @@ fit_one <- function(d) {
              n_ath_ev = uniqueN(d, by = c("athlete_id", "event_id")))
 }
 
-fam <- use[, if (uniqueN(.SD, by = c("athlete_id","event_id")) >= MIN_PAIRS) fit_one(.SD),
-           by = family, .SDcols = c("x", "y", "athlete_id", "event_id")]
-setorder(fam, beta)
-fam[, scope := "gross"]
-# pct is the effect on the MARK of +1 km of altitude. perf is oriented so
-# higher is better, so a negative beta means altitude makes the mark worse.
-fam[, pct_per_km := round(100 * (exp(beta) - 1), 2)]
+# Fit one (family, sex) x (band vs REF_BAND) contrast, on a chosen y column
+# (either raw perf-demeaned, or the race-effect residual). `has_cr` labels
+# which scope produced `ycol` for the caller; it does not affect the fit.
+# .tband, NOT `band` -- the local is deliberately distinct from the `band`
+# COLUMN, the same convention ability.R's wind block scar established
+# ("Local names are deliberately distinct from any column in dt"). A first
+# version used the function parameter name `band` with data.table's `..`
+# prefix to disambiguate inside `d[band %in% c(REF_BAND, ..band)]`, and it
+# failed outright ("object '..band' not found") -- the `..` mechanism does not
+# reliably resolve inside a nested expression like `c(x, ..y)`, only as a bare
+# top-level reference. Renaming avoids the ambiguity rather than fighting it.
+fit_band_contrast <- function(d, .tband, ycol = "y") {
+  sub <- d[band %in% c(REF_BAND, .tband)]
+  if (!nrow(sub)) return(NULL)
+  sub[, n_bands_here := uniqueN(band), by = .(athlete_id, event_id)]
+  sub <- sub[n_bands_here >= 2L]
+  if (!nrow(sub)) return(NULL)
+  sub[, x := as.numeric(band == .tband) - mean(as.numeric(band == .tband)),
+      by = .(athlete_id, event_id)]
+  sub[, yv := get(ycol) - mean(get(ycol)), by = .(athlete_id, event_id)]
+  fit_one(sub[, .(x, y = yv, athlete_id, event_id)])
+}
 
-say("\n=== altitude effect per +1 km, by family ===")
-say("beta is on the oriented log scale (higher = better performance).")
-say("NEGATIVE beta = altitude HURTS that family.")
-print(fam[, .(family, beta = round(beta, 4), se = round(se, 4), t = round(t, 1),
-              pct_per_km, n_ath_ev, n_rows)])
+fit_family_sex_band <- function(d, ycol = "y") {
+  cells <- unique(d[, .(family, sex)])
+  rbindlist(lapply(seq_len(nrow(cells)), function(i) {
+    fam <- cells$family[i]; sx <- cells$sex[i]
+    dd <- d[family == fam & sex == sx]
+    rows <- lapply(setdiff(BAND_LABS, REF_BAND), function(b) {
+      r <- fit_band_contrast(dd, b, ycol = ycol)
+      if (is.null(r) || r$n_ath_ev < MIN_PAIRS) return(NULL)
+      r[, `:=`(family = fam, sex = sx, band = b)]
+      r
+    })
+    rbindlist(rows, fill = TRUE)
+  }), fill = TRUE)
+}
 
-# LINEARITY CHECK. The physiological response is not linear in metres -- it is
-# near-flat to ~1000 m then accelerates -- so a single slope fitted across
-# 0-3,640 m will under-correct high venues. Banded means say whether that
-# matters here before anyone commits to a functional form.
-use[, band := cut(alt_m, c(-Inf, 200, 800, 1500, 2200, Inf),
-                  labels = c("<200", "200-800", "800-1500", "1500-2200", ">2200"))]
-say("\n=== within-athlete mean demeaned perf by altitude band (distance only) ===")
-say("a linear-in-metres term assumes these step evenly; they do not have to.")
-print(use[family == "distance", .(rows = .N, mean_y = round(mean(y), 4)), by = band][order(band)])
+say("\n=== fitting gross altitude effect: family x sex x band ===")
+gross <- rt_stage("gross fit, family x sex x band", fit_family_sex_band(use, "y"))
+# Reference band explicit, not implicit. A downstream lookup that finds no row
+# for <200 must not be able to confuse "unfitted / unknown" with "known-zero
+# reference band" -- so every (family, sex) cell that produced ANY fitted band
+# also gets an explicit <200 row with beta = 0, t = Inf (a sentinel meaning
+# "not estimated, defined as the reference", not "insignificant and zeroed").
+ref_rows <- unique(gross[, .(family, sex)])[, `:=`(band = REF_BAND, beta = 0,
+                    se = NA_real_, t = Inf, n_rows = NA_integer_, n_ath_ev = NA_integer_)]
+gross <- rbind(gross, ref_rows, fill = TRUE)
+gross[, scope := "gross"]
+gross[, pct_effect := round(100 * (exp(beta) - 1), 2)]
+setorder(gross, family, sex, band)
+say("beta is the log-mark effect of this band vs <200m (higher = better performance).")
+say("NEGATIVE beta = this band is worse than sea level for this family/sex.")
+print(gross[, .(family, sex, band, beta = round(beta, 4), t = round(t, 1),
+                pct_effect, n_ath_ev)])
 
 # --- THE RESIDUAL FIT, which is the one a model can actually use ------------
 #
 # calibrate()'s per-race shared effect `c_r` ALREADY absorbs part of altitude,
-# because altitude is shared by the whole field exactly like wind is. Measured
-# 2026-09-17, c_r moves with altitude in the right direction for every family
-# but by very different fractions -- ~35% of the distance effect, ~82% of road,
-# and it OVERSHOOTS for jump.
-#
-# So neither obvious option is right. Copying the wind block (suppress wherever
-# c_r exists) leaves ~65% of the distance effect uncorrected on the 73% of rows
-# that have a race effect. Applying the gross beta everywhere double-counts
-# whatever c_r already took -- the "one lever at a time" incident in this
-# repo's own history.
-#
-# Fitted here instead on perf AFTER the strip estimate_ability() actually
-# applies, so the coefficient is by construction what the deployed model has
-# NOT already removed. Note the strip is (1 - beta_shock) * (c_r - e_cell),
-# NOT the full c_r -- replicating what the pipeline does rather than what it
-# looks like it does is the "harness must replicate the deployed pipeline"
-# rule, which has cost a wrong verdict here before.
-#
-# AND THE FIELD-SIZE SHRINK, added 2026-09-17 after review. The paragraph above
-# was written, and was still wrong, because it stopped one line short of the
-# pipeline it claimed to replicate: ability.R multiplies the strip by
-# wt = n_r/(n_r + k) before removing it, and sets has_cr from wt > 0, so a race
-# effect fitted on a small field is shrunk toward zero and a tiny one is not
-# applied at all. Fitting against the FULL strip got both halves wrong at once
-# -- the has_cr = TRUE population was a superset of production's (it included
-# races production shrinks to wt = 0), and the target itself was off by
-# (1 - wt) * strip on every partially-shrunk row. Citing the rule in a comment
-# is not the same as following it.
+# because altitude is shared by the whole field exactly like wind is. Fitted
+# here on perf AFTER the strip estimate_ability() actually applies, so the
+# coefficient is by construction what the deployed model has NOT already
+# removed -- including the field-size shrink (wt = n_r/(n_r+k)), replicated
+# exactly rather than approximated, per the "harness must replicate the
+# deployed pipeline" rule this file has gotten wrong before.
 CAL <- Sys.getenv("CITIUS_ALT_CAL", "calibration_corpus_wac_coast_0904_full2.rds")
 cal <- tryCatch(readRDS(file.path(D, CAL)), error = function(e) NULL)
 
+fam <- gross
 if (!is.null(cal) && !is.null(cal$race) && !is.null(cal$race_shock)) {
   rr <- as.data.table(cal$race)[is.finite(c_r)]
   rr[, .rcl := citius:::.round_class(if ("round" %in% names(rr)) round else NA_character_)]
@@ -150,7 +196,6 @@ if (!is.null(cal) && !is.null(cal$race) && !is.null(cal$race_shock)) {
   ex <- as.data.table(cal$race_shock$expected)
   rr[, e_cell := ex$e_cell[match(paste(event_id, .tcl, .rcl, sep = "|"),
                                  paste(ex$event_id, ex$tier_class, ex$round_class, sep = "|"))]]
-  # Same fallback ladder ability.R uses when a cell is missing.
   evm <- rr[, .(m = mean(c_r, na.rm = TRUE)), by = event_id]
   rr[!is.finite(e_cell), e_cell := evm$m[match(event_id, evm$event_id)]]
   rr[!is.finite(e_cell), e_cell := 0]
@@ -159,11 +204,8 @@ if (!is.null(cal) && !is.null(cal$race) && !is.null(cal$race_shock)) {
   rr[!is.finite(beta_s), beta_s := cal$race_shock$beta]
   rr[, strip := (1 - beta_s) * (c_r - e_cell)]
 
-  # n_in_race and the per-event precision ratio are what the shrink is built
-  # from. Both must be present: falling back to an unshrunk strip would silently
-  # reproduce the exact defect this block exists to fix, so it aborts instead.
   if (!"n_in_race" %in% names(rr))
-    cli::cli_abort("cal$race has no n_in_race -- cannot replicate estimate_ability()'s field-size shrink, and fitting without it gives a coefficient the model cannot use.")
+    cli::cli_abort("cal$race has no n_in_race -- cannot replicate estimate_ability()'s field-size shrink.")
   evt <- as.data.table(cal$events)
   if (!all(c("sigma_within", "condition_sd") %in% names(evt)))
     cli::cli_abort("cal$events lacks sigma_within/condition_sd -- same reason.")
@@ -171,10 +213,6 @@ if (!is.null(cal) && !is.null(cal$race) && !is.null(cal$race_shock)) {
   u2 <- merge(use, rr[, .(race_key, strip, n_in_race)], by = "race_key", all.x = TRUE)
   u2 <- merge(u2, evt[, .(event_id, sigma_within, condition_sd)],
               by = "event_id", all.x = TRUE)
-
-  # Identical arithmetic to ability.R lines ~1161-1181, deliberately spelled out
-  # the same way rather than tidied: an unknown k resolves to Inf, i.e. weight 0,
-  # i.e. no race correction -- fail closed rather than apply an unshrunk one.
   u2[, k := fifelse(is.finite(sigma_within) & is.finite(condition_sd) & condition_sd > 0,
                     (sigma_within / condition_sd)^2, Inf)]
   u2[, n_r := fifelse(is.finite(n_in_race), as.numeric(n_in_race), 0)]
@@ -183,28 +221,30 @@ if (!is.null(cal) && !is.null(cal$race) && !is.null(cal$race_shock)) {
   u2[, strip_applied := fifelse(is.finite(strip), strip, 0) * wt]
   u2[, has_cr := is.finite(strip) & wt > 0]
   say("\nrows with a fitted race effect ACTUALLY applied (wt > 0): %.1f%%", 100 * mean(u2$has_cr))
-  say("  rows with a strip available before shrink:               %.1f%%", 100 * mean(is.finite(u2$strip)))
-  say("  mean shrink weight where applied:                        %.3f",
-      u2[(has_cr), mean(wt)])
 
-  # Re-demean AFTER the strip: the within-athlete mean moves once perf changes.
   u2[, perf_adj := perf - strip_applied]
-  u2[, `:=`(y = perf_adj - mean(perf_adj), x = alt_km - mean(alt_km)),
-     by = .(athlete_id, event_id, has_cr)]
-  u2 <- u2[is.finite(y) & is.finite(x)]
+  # Note: perf_adj replaces perf; the per-group re-demeaning happens INSIDE
+  # fit_band_contrast(), separately for has_cr TRUE and FALSE, since they are
+  # different populations with different reference means.
+  u2[, y := perf_adj]
 
-  res_fam <- rt_stage("residual fit per (family, has_cr)",
-    u2[, if (uniqueN(.SD, by = c("athlete_id","event_id")) >= MIN_PAIRS) fit_one(.SD),
-       by = .(family, has_cr), .SDcols = c("x","y","athlete_id","event_id")])
-  res_fam[, pct_per_km := round(100 * (exp(beta) - 1), 2)]
+  res_list <- lapply(c(TRUE, FALSE), function(hc) {
+    d <- u2[has_cr == hc]
+    r <- rt_stage(sprintf("residual fit has_cr=%s, family x sex x band", hc),
+                  fit_family_sex_band(d, "y"))
+    if (nrow(r)) r[, has_cr := hc]
+    r
+  })
+  res_fam <- rbindlist(res_list, fill = TRUE)
   res_fam[, scope := fifelse(has_cr, "residual (race effect applied)",
                              "gross (no race effect)")]
-  setorder(res_fam, has_cr, beta)
-  say("\n=== residual altitude effect, split by whether a race effect was applied ===")
-  say("the `has_cr = TRUE` rows are what a model can still gain from.")
-  print(res_fam[, .(family, has_cr, beta = round(beta, 4), se = round(se, 4),
-                    t = round(t, 1), pct_per_km, n_ath_ev)])
-  fam <- rbind(fam, res_fam, fill = TRUE)
+  res_fam[, pct_effect := round(100 * (exp(beta) - 1), 2)]
+  setorder(res_fam, has_cr, family, sex, band)
+  say("\n=== residual altitude effect, family x sex x band, split by has_cr ===")
+  say("the has_cr = TRUE rows are what a model can still gain from.")
+  print(res_fam[, .(family, sex, has_cr, band, beta = round(beta, 4),
+                    t = round(t, 1), pct_effect, n_ath_ev)])
+  fam <- rbind(gross, res_fam, fill = TRUE)
 }
 
 out <- file.path(D, "altitude_effect.parquet")
