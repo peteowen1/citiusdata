@@ -73,6 +73,27 @@ dir.create(file.path(OUT, STAMP), recursive = TRUE, showWarnings = FALSE)
 calibration <- deployed_calibration(D)
 aging <- deployed_aging(D)
 
+# THE CONFIG STAMP DOES NOT NAME THE DATA, and the directory is named after the
+# config stamp. So re-running a meet under an unchanged config but a CHANGED
+# corpus silently overwrites the earlier forecast with a different number and
+# leaves nothing to tell them apart. Found 2026-09-17: zurich2026 was rebuilt
+# into the 2026-09-09 directory after the corpus grew 4.77M -> 5.04M rows that
+# morning.
+#
+# Recorded as a COLUMN rather than by restructuring the path: changing the
+# directory scheme would orphan the forecasts already written under the old
+# one, and the question this needs to answer ("which data produced this row?")
+# is a property of the row. Same cheap fingerprint _score_weights.R uses --
+# mtime and size, enough to catch a rebuild without hashing millions of rows.
+HISTORY_VINTAGE <- local({
+  p <- file.path(D, DEPLOYED$history_store)
+  fs <- list.files(p, recursive = TRUE, full.names = TRUE)
+  if (!length(fs)) return(NA_character_)
+  i <- file.info(fs)
+  sprintf("%s_%.0f", format(max(i$mtime), "%Y%m%d%H%M%S"), sum(i$size))
+})
+cli::cli_alert_info("history vintage: {.val {HISTORY_VINTAGE}}")
+
 # Parameter is `mid`, not `meet_id`: a param named after the column it filters
 # on shadows that column inside `[...]` and the filter silently self-joins or
 # fails to resolve. Documented gotcha in C:\dev\.claude\rules.
@@ -162,6 +183,7 @@ one_meet <- function(mid) {
 
   out[, `:=`(meet_id = mid, competition_id = COMP, cutoff = CUT,
              config = DEPLOYED$stamp, n_sims = N_SIMS, seed = SEED,
+             history_vintage = HISTORY_VINTAGE,
              generated_at = Sys.time())]
   setnames(out, paste0("p_top", K_POS), "p_top8", skip_absent = TRUE)
   setcolorder(out, c("config", "competition_id", "event_id", "round",

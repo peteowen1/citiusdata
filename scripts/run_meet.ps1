@@ -156,6 +156,25 @@ $STEPS = switch ($MeetId) {
   }
 }
 
+# PERSIST THE FORECAST, for every meet shape, appended here rather than added
+# to each of the six step lists above -- one place to change, and a future
+# meet gets it without anyone remembering to.
+#
+# LAST, and deliberately so. Every card run simulates a full field and keeps
+# three numbers from it; build_forecast_store.R re-runs the simulation and
+# writes the whole per-position distribution, which is the only route to
+# "what were his odds of finishing 4th" (the backtest caches never recorded
+# it -- see build_forecast_archive.R's header). Running it AFTER
+# export + publish means a forecast is archived only for a card that actually
+# shipped, and -- more importantly -- a failure here can never block a publish
+# that has already succeeded.
+#
+# nonfatal for the same reason. Persisting a forecast is valuable; it is not
+# worth painting a red FAILED on a run whose card went out correctly. This
+# file's own header is about operators learning to distrust the runner's
+# output, and a scary colour on a successful publish is exactly that.
+$STEPS += @{ n = "forecast store"; f = "build_forecast_store.R"; a = @($MeetId); nonfatal = $true }
+
 Write-Host ""
 Write-Host "  $($meet.name)" -ForegroundColor Cyan
 Write-Host "  $($meet.city), $($meet.country)  ·  $($meet.date_start) to $($meet.date_end)"
@@ -205,6 +224,15 @@ try {
     $code = $LASTEXITCODE
     $sec = [math]::Round(((Get-Date) - $st).TotalSeconds, 1)
     if ($code -ne 0) {
+      # A nonfatal step is one whose failure must not invalidate work already
+      # done -- currently only the forecast-store append, which runs after the
+      # card has published. It still prints in red and still shows its tail:
+      # "nonfatal" means "do not abort the run", never "do not tell anyone".
+      if ($s.nonfatal) {
+        Write-Host ("`r  {0,-20} FAILED after {1}s (nonfatal, continuing)" -f $s.n, $sec) -ForegroundColor Red
+        $out | Select-Object -Last 15 | ForEach-Object { Write-Host "    $_" }
+        continue
+      }
       Write-Host ("`r  {0,-20} FAILED after {1}s" -f $s.n, $sec) -ForegroundColor Red
       Write-Host ""
       $out | Select-Object -Last 25 | ForEach-Object { Write-Host "    $_" }
