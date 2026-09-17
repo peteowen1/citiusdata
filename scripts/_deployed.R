@@ -26,7 +26,13 @@ DEPLOYED <- list(
   # stamp is the only thing a reader of a published card can use to tell which
   # model produced it. Dropping the `_0904` made the stamp name a different arm
   # from the file it actually loads.
-  stamp = "2026-09-09 wac_coast_0904_full2 ctxsd strip4fam evparams5 (debias OFF, blend OFF)",
+  # The wiring test extracts `arm` as the filename minus prefix/suffix, VERBATIM
+  # with its underscores intact, and demands it appear as one contiguous fixed
+  # substring of the stamp -- not just "the same words somewhere". Splitting it
+  # with other tags in between (my first attempt) failed the check even though
+  # every token was present, because the check is on the literal filename
+  # remainder, not on token membership.
+  stamp = "2026-09-18 wac_coast_0904_full2_altitude_banded_noroad (ctxsd strip4fam evparams5, debias OFF, blend OFF)",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -114,7 +120,27 @@ DEPLOYED <- list(
   # arm vs the control: medal logloss pooled -0.41% (sprint -1.93%, throw
   # -0.29%, jump +0.40%, hurdles +0.10%), marks MAE pooled -0.27% (sprint
   # -0.85%, jump -1.08%, throw -1.12%). Jumps are the watch item.
-  calibration = "calibration_corpus_wac_coast_0904_full2.rds",
+  #
+  # PROMOTED 2026-09-18: _altitude_banded_noroad adds $altitude
+  # (compose_altitude_calibration.R), a per-(family, sex, band) correction, road
+  # zeroed. A LINEAR per-km fit was tried first and rejected: it made 9,677
+  # sea-level races significantly worse (t=4.36) because a slope predicts a
+  # shift where the true effect is ~0 -- the fit's own banded diagnostic had
+  # already shown this and it was read past twice. Refit as a step function,
+  # <200m the reference band, beta=0 there by construction. Full-simulation arm
+  # vs the control, same 120-meet pool, 748 races: marks significantly better
+  # (pooled -0.0027pp, t=-4.14, p<0.0001; MAE -0.0028pp, p=0.0037), concordance
+  # flat (+0.0161pp, p=0.685), gold Brier flat (-0.09%, p=0.336), medal Brier
+  # flat (+0.05%, p=0.539). Road excluded throughout: its regressor is invalid
+  # for the family (alt_m is a start-city point elevation; a road course climbs
+  # and descends away from it), confirmed by the >2200m band staying
+  # significantly damaged (t=3.46) under banding alone and vanishing exactly
+  # (0.0000) only once road was also zeroed.
+  # HONEST LIMIT: does not clear the pre-registered gold<=-1% relative
+  # threshold that promoted the race-shock strip above -- this is a marks
+  # improvement with no measured placings cost, not a placings win. Full
+  # evidence: docs/reviews/altitude-arm-2026-09-17.md, DECISIONS.md 2026-09-18.
+  calibration = "calibration_corpus_wac_coast_0904_full2_altitude_banded_noroad.rds",
 
   # AGING -- the blended curve, adopted 2026-07-29.
   aging = "aging.rds",
