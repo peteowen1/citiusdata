@@ -127,3 +127,34 @@ say("wrote %s: %s rows, %d arms, %s races, %s athletes",
 
 say("by meet_tier:")
 print(all[, .(rows = .N, races = uniqueN(race_id), arms = uniqueN(arm)), by = meet_tier][order(-rows)])
+
+# PER-ARM MEET COUNTS, AND A FLAG FOR THE PARTIAL ONES.
+#
+# This archive is structurally immune to the "newest file wins" trap -- it reads
+# EVERY cache and tags every row with its arm, so nothing is pooled and there is
+# no selection step to get wrong. (The auspol session hit that trap the hard way
+# on 2026-09-17: a genuinely newer file existed for two of its pairs only
+# because a rerun had been restricted to fewer pairs, so "newest overall"
+# silently orphaned the pairs it did not cover.)
+#
+# The hole it DOES have is one level along: a partially-run arm lands here as a
+# perfectly legitimate arm, and nothing says it holds 8 meets while the arm
+# someone wants to compare it against holds 120. Three such caches existed side
+# by side today (8, 40 and 120 meets) during optimisation work. A comparison
+# across them would be wrong and would look fine.
+#
+# So print the meet count per arm and name the short ones. The bar is relative
+# to the median arm, not absolute, because a deliberately small pool is a valid
+# thing to run -- what matters is that it is not silently mixed with a big one.
+.arm_n <- all[, .(meets = uniqueN(competition_id), races = uniqueN(race_id),
+                  rows = .N), by = arm][order(meets)]
+.med <- stats::median(.arm_n$meets)
+say("\nper-arm coverage (median arm has %d meets):", .med)
+print(.arm_n)
+.short <- .arm_n[meets < 0.5 * .med]
+if (nrow(.short)) {
+  cli::cli_warn(c(
+    "{nrow(.short)} arm{?s} hold{?s/} fewer than half the median arm's meets.",
+    "!" = "{paste(.short$arm, .short$meets, sep = ': ', collapse = '; ')}",
+    "i" = "These are PARTIAL runs. Comparing one against a full arm compares different meet sets, which no fingerprint check catches because the history is identical either way."))
+}
