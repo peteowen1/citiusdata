@@ -892,7 +892,23 @@ outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
 # the same trap the `wind` and `indoor` notes above describe.
 keep_cols <- c("athlete_id", "event_id", "date", "perf", "age", "round", "race_code",
                "meet_tier", "competition_id", "comp_start", "place", "race_key",
-               "wind", "momentum", "indoor", "venue_country")
+               "wind", "momentum", "indoor", "venue_country",
+               # alt_m added 2026-09-17, and its absence is exactly the trap the
+               # paragraph above describes. The altitude arm ran to completion,
+               # scored cleanly, and produced predictions BYTE-IDENTICAL to its
+               # control -- diff 0.0000pp in every altitude band, t = NaN --
+               # because estimate_ability() gates its altitude block on
+               # `"alt_m" %in% names(dt)` and this list had narrowed it away.
+               # A no-op that is indistinguishable from "the mechanism does
+               # nothing" is the worst possible failure for an A/B, and it was
+               # caught only by checking that the two arms DIFFERED at all
+               # before reading their numbers.
+               #
+               # Three places must carry a new history column, not one:
+               # build_stores.R's keep (into the store), _deployed.R's rescue
+               # keep list, and HERE (into the model). Getting two of three
+               # ships a term that cannot fire.
+               "alt_m")
 if (!is.null(clean)) clean <- clean[, intersect(keep_cols, names(clean)), with = FALSE]
 outcome_rows <- outcome_rows[, intersect(keep_cols, names(outcome_rows)), with = FALSE]
 
