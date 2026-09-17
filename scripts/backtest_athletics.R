@@ -955,7 +955,22 @@ if (ALT_ADDBACK && !"alt_m" %in% names(outcome_rows) &&
       "x" = "{.envvar CITIUS_BT_ALT_ADDBACK} is on but venue_elevation is unavailable.",
       "i" = "Without it every race has an unknown venue altitude and the add-back is inert."))
   }
-  outcome_rows <- merge(outcome_rows, .ve, by = "venue_city", all.x = TRUE)
+  # sort = FALSE IS LOAD-BEARING. merge() sorts by the join key by default,
+  # which reorders outcome_rows; `finals` and then `pool` inherit that order,
+  # and `setorder(pool, comp_start)` leaves TIES in whatever order the input
+  # had. The pool is an evenly spaced subsample, so a different tie-break picks
+  # DIFFERENT MEETS -- measured: turning this merge on made an arm share only 87
+  # of 120 meets with its control, while both caches looked complete and no
+  # guard fired. The meet_tier merge a few hundred lines down already passes
+  # sort = FALSE for the same reason; I did not copy it.
+  .n_before <- nrow(outcome_rows)
+  outcome_rows <- merge(outcome_rows, .ve, by = "venue_city", all.x = TRUE,
+                        sort = FALSE)
+  # venue_city is unique in venue_elevation (3,110 of 3,110 as at 2026-09-18),
+  # so this join must not change the row count. Asserted rather than assumed: a
+  # future duplicate would multiply history rows silently.
+  if (nrow(outcome_rows) != .n_before) cli::cli_abort(
+    "joining venue elevation changed the outcome row count ({.n_before} -> {nrow(outcome_rows)}) -- venue_city is not unique in venue_elevation.")
   .has_city <- !is.na(outcome_rows$venue_city) & nzchar(as.character(outcome_rows$venue_city))
   .cov <- if (any(.has_city)) 100 * mean(!is.na(outcome_rows$alt_m[.has_city])) else NA_real_
   cli::cli_alert_info(
