@@ -15,7 +15,7 @@
 #
 #   powershell -NoProfile -File citiusdata\scripts\_run_altitude_slice.ps1 ctrl
 #   powershell -NoProfile -File citiusdata\scripts\_run_altitude_slice.ps1 on
-param([ValidateSet("ctrl","on")][string]$Arm = "ctrl")
+param([ValidateSet("ctrl","on","noroad")][string]$Arm = "ctrl")
 
 $ErrorActionPreference = "Continue"
 Set-Location "C:\dev\citiusverse"
@@ -25,10 +25,21 @@ $stale = @("CITIUS_BT_SHOCK_ADDBACK","CITIUS_BT_TRAIN_TIERS","CITIUS_BT_FAMILY_D
            "CITIUS_SIGMA_SCALE","CITIUS_BT_COND_CONTEXT")
 foreach ($v in $stale) { if (Test-Path "Env:\$v") { Remove-Item "Env:\$v" } }
 
-if ($Arm -eq "ctrl") {
-  $env:CITIUS_BT_CALIBRATION = "calibration_corpus_wac_coast_0904_full2.rds"
-} else {
-  $env:CITIUS_BT_CALIBRATION = "calibration_corpus_wac_coast_0904_full2_altitude.rds"
+# noroad = the altitude calibration with road's beta zeroed. Road is excluded
+# because its REGRESSOR is invalid for the family -- alt_m is the venue city's
+# point elevation and a road course climbs and descends away from it -- not
+# because its coefficient is small. It is the strongest coefficient in the fit
+# (t = -17.7) and the one family the 2026-09-17 arm showed significantly worse
+# out of sample. See docs/reviews/altitude-arm-2026-09-17.md.
+#
+# The CONTROL IS REUSED across both altitude arms: its calibration is the
+# deployed one, unchanged, so bt_cache_alt_ctrl is valid for this comparison
+# too and does not need re-running. That is only safe because the pool target
+# is pinned below -- a different CITIUS_BT_TARGET would select different meets.
+switch ($Arm) {
+  "ctrl"   { $env:CITIUS_BT_CALIBRATION = "calibration_corpus_wac_coast_0904_full2.rds" }
+  "on"     { $env:CITIUS_BT_CALIBRATION = "calibration_corpus_wac_coast_0904_full2_altitude.rds" }
+  "noroad" { $env:CITIUS_BT_CALIBRATION = "calibration_corpus_wac_coast_0904_full2_altitude_noroad.rds" }
 }
 $env:CITIUS_BT_ADJUST_RACE   = "1"
 $env:CITIUS_BT_MARKS_ONLY    = "1"

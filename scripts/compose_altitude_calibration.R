@@ -50,6 +50,34 @@ n_zeroed <- alt[abs(t) < MIN_T, .N]
 alt[abs(t) < MIN_T, beta := 0]
 say("families zeroed for |t| < %.1f: %d of %d rows", MIN_T, n_zeroed, nrow(alt))
 
+# ZERO A FAMILY ON GROUNDS OTHER THAN SIGNIFICANCE.
+#
+# |t| is the wrong filter for a family whose REGRESSOR is invalid, and road is
+# exactly that. alt_m is the venue city's point elevation; a marathon or half
+# climbs and descends away from it, so for road the variable does not measure
+# what the coefficient assumes it measures. Its fit significance is among the
+# strongest in the table (-1.42%/km, t = -17.7) and it was the one family the
+# 2026-09-17 arm showed to be significantly WORSE out of sample: +0.0128pp
+# (t = +3.53) overall, and +0.6234pp (t = 5.97) in the >2200m band, a 10%
+# relative degradation on exactly the races the term exists for. The fit most
+# likely picks up that high-altitude road races are disproportionately run by
+# altitude-resident East African fields, and attributes that to metres.
+#
+# So this is not tuning. A family listed here is excluded because the
+# measurement is not valid for it, and no coefficient value would fix that.
+# Full evidence: docs/reviews/altitude-arm-2026-09-17.md
+ZERO_FAM <- trimws(strsplit(Sys.getenv("CITIUS_ALT_ZERO_FAMILIES", ""), ",")[[1]])
+ZERO_FAM <- ZERO_FAM[nzchar(ZERO_FAM)]
+if (length(ZERO_FAM)) {
+  unknown <- setdiff(ZERO_FAM, unique(alt$family))
+  if (length(unknown)) cli::cli_abort(
+    "CITIUS_ALT_ZERO_FAMILIES names {length(unknown)} family/families not in the fit: {.val {unknown}}. A typo here silently zeroes nothing.")
+  n_fam <- alt[family %chin% ZERO_FAM & beta != 0, .N]
+  alt[family %chin% ZERO_FAM, beta := 0]
+  say("families zeroed BY NAME (invalid regressor, not significance): %s -- %d row(s) set to 0",
+      paste(ZERO_FAM, collapse = ", "), n_fam)
+}
+
 # Every (family, has_cr) cell must be present. fit_altitude_effect.R fits per
 # cell behind a MIN_PAIRS gate, so one scope of a family can drop out while
 # nrow(alt) stays comfortably positive. A missing cell never matches at runtime,
