@@ -1155,6 +1155,42 @@ setorder(pool, comp_start)
 TARGET <- .env_int("CITIUS_BT_TARGET", "900")
 if (nrow(pool) > TARGET) pool <- pool[round(seq(1, .N, length.out = TARGET))]
 
+# ---- ABILITY CACHE -----------------------------------------------------------
+# estimate_ability() is 93% of an arm's runtime (measured: ability 336s, simulate
+# 19s, read 8s on 25 meets) and NOTHING cached it. On 2026-09-17 three 120-meet
+# arms each recomputed it from scratch and discarded it -- 180 minutes by the
+# runtime log, 61% of everything logged that day.
+#
+# THE KEY IS THE ARM FINGERPRINT MINUS THE FIELDS THAT CANNOT CHANGE AN ABILITY.
+# An EXCLUSION list, deliberately, not an inclusion list: a field added to the
+# fingerprint later is then cached-on by default, so the failure mode of
+# forgetting to update this is a missed cache HIT (slow, correct) rather than a
+# wrong cache HIT (fast, silently wrong). The reverse choice is how an A/B comes
+# home a dead heat.
+#
+# The excluded four are simulation and projection settings applied AFTER ability
+# exists, which is what makes a marks-only arm and its full-simulation twin share
+# one cache -- the case that motivated this.
+ABIL_EXCLUDE <- c("n_sims", "marks_only", "project_tier", "project_round")
+ABIL_KEY <- substr(digest::digest(
+  arm_fingerprint[setdiff(names(arm_fingerprint), ABIL_EXCLUDE)], algo = "md5"), 1, 16)
+ABIL_DIR <- file.path(OUT, "ability_cache", ABIL_KEY)
+ABIL_ON  <- !identical(Sys.getenv("CITIUS_BT_ABILITY_CACHE", "1"), "0")
+if (ABIL_ON) {
+  dir.create(ABIL_DIR, recursive = TRUE, showWarnings = FALSE)
+  # NB the variable is NOT dot-prefixed. cli reads a leading dot inside braces
+  # as an inline style tag, so `{.n_hit}` is parsed as an unknown style and
+  # throws -- the same trap this file already documents for `{tier_src}` a few
+  # hundred lines down. A dot-prefixed local is fine everywhere EXCEPT inside a
+  # cli string.
+  n_abil_cached <- length(list.files(ABIL_DIR, pattern = "\\.rds$"))
+  cli::cli_alert_info("Ability cache {ABIL_KEY}: {n_abil_cached} meet{?s} already cached.")
+}
+# Counted by FILE, not by an env counter. A PSOCK worker gets its own copy of
+# any environment, so increments inside run_meet() never come back to the parent
+# -- the count would read 0 in exactly the parallel mode this cache exists for.
+.abil_before <- if (ABIL_ON) length(list.files(ABIL_DIR, pattern = "\\.rds$")) else 0L
+
 todo <- pool[!file.exists(file.path(BT_CACHE, paste0(competition_id, ".rds")))]
 cli::cli_alert_info("{nrow(todo)} of {nrow(pool)} meet{?s} remaining.")
 
@@ -1388,7 +1424,23 @@ run_meet <- function(i) {
   # The event-params table drives the single-call path: it carries a half-life
   # per event, so the per-family split has nothing to add.
   if (!is.null(EVENT_PARAMS)) hl_map <- NULL
-  ability <- if (is.null(hl_map)) {
+  # `only` is part of the key: the same meet scored for a different entrant set
+  # is a different computation, and estimate_ability(only=) changes what is
+  # returned. Hashing it is cheaper than being wrong about it.
+  # The entrant set is taken from `block` directly, NOT from `only_ids`, which
+  # is defined further down inside the per-family branch and does not exist at
+  # this point -- every parallel worker died on "object 'only_ids' not found"
+  # the first time this ran. This is the same expression the single-call branch
+  # passes to estimate_ability(only=).
+  .abil_only <- unique(as.character(block$athlete_id))
+  .abil_f <- if (ABIL_ON) file.path(
+    ABIL_DIR, sprintf("%s-%s.rds", cid,
+                      substr(digest::digest(list(sort(.abil_only),
+                                                 as.character(cut_date)), algo = "md5"), 1, 8))) else ""
+  .abil_cached <- ABIL_ON && file.exists(.abil_f)
+  ability <- if (.abil_cached) {
+    readRDS(.abil_f)
+  } else if (is.null(hl_map)) {
     tick("ability", estimate_ability(past, as_of = cut_date,
                                      half_life = if (is.null(EVENT_PARAMS)) half_life else
                                        EVENT_PARAMS[, .(event_id, family, half_life)],
@@ -1485,6 +1537,16 @@ run_meet <- function(i) {
                        robust_location = ROBUST_LOCATION,
                        decouple_peak = DECOUPLE_PEAK)
     }), fill = TRUE))
+  }
+  if (ABIL_ON && !.abil_cached) {
+    {
+      # Write via a temp file and rename: a killed run must never leave a
+      # half-written .rds that a later run reads back as a valid ability table.
+      # This machine kills long jobs routinely, so that is a when, not an if.
+      .tmp <- paste0(.abil_f, ".tmp", Sys.getpid())
+      tryCatch({ saveRDS(ability, .tmp); file.rename(.tmp, .abil_f) },
+               error = function(e) { unlink(.tmp); invisible(NULL) })
+    }
   }
 
   # Cross-event ability transfer, gated by NEIGHBOUR_TRANSFER (see the flag
@@ -1986,6 +2048,12 @@ if (N_WORKERS > 1L) {
   # selection-shrinkage call. Caught before running this time, not after a
   # crashed parallel arm -- the pattern from earlier today generalises.
   export_vars <- c(export_vars, "SEL_SHRINK", "SEL_SIGMA")
+  # The ability cache must reach the workers. run_meet() reads ABIL_ON and
+  # ABIL_DIR unconditionally, so without these every parallel worker dies on
+  # "object 'ABIL_ON' not found" -- the conditional-export trap this file has
+  # already hit four times (FAMILY_DEBIAS, TRAIN_TIERS, shock_tbl, NEIGHBOUR_*).
+  # Caught before running this time, by reading the patch rather than the diff.
+  export_vars <- c(export_vars, "ABIL_ON", "ABIL_DIR")
   # Same TIER_SHRINK trap, same day: run_meet() calls family_pool_offset(),
   # whose closure reads `.fp`/`.fp_fs_by_event` from this script's top-level
   # environment. clusterExport() re-homes an exported function's environment
