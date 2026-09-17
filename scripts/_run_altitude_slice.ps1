@@ -16,7 +16,8 @@
 #   powershell -NoProfile -File citiusdata\scripts\_run_altitude_slice.ps1 ctrl
 #   powershell -NoProfile -File citiusdata\scripts\_run_altitude_slice.ps1 on
 param([ValidateSet("ctrl","on","noroad","midonly")][string]$Arm = "ctrl",
-      [switch]$Placings)
+      [switch]$Placings,
+      [switch]$AddBack)
 
 $ErrorActionPreference = "Continue"
 Set-Location "C:\dev\citiusverse"
@@ -49,6 +50,13 @@ switch ($Arm) {
   # middle gain survives on its own or was part of the same level-only shift.
   "midonly" { $env:CITIUS_BT_CALIBRATION = "calibration_corpus_wac_coast_0904_full2_altitude_midonly.rds" }
 }
+# The COMPLETE altitude design: history subtraction (from the calibration) plus
+# the target-venue add-back. Shipping only the first half is a known defect --
+# ability is made altitude-neutral and nothing puts the venue back, so a race AT
+# altitude is predicted from sea-level-neutral ability. The three arms measured
+# on 2026-09-17 all ran the half-design.
+if ($AddBack) { $env:CITIUS_BT_ALT_ADDBACK = "1" }
+else { Remove-Item Env:\CITIUS_BT_ALT_ADDBACK -ErrorAction SilentlyContinue }
 $env:CITIUS_BT_ADJUST_RACE   = "1"
 # MARKS_ONLY off for a placings arm. The two share an ABILITY CACHE -- marks_only
 # is in backtest_athletics.R's ABIL_EXCLUDE list precisely because it cannot
@@ -88,6 +96,7 @@ $env:CITIUS_HALF_LIFE_FAMILY = "road=1095,walk=730,hurdles=180"
 # and report a dead heat. The ability cache is deliberately shared; this one is
 # deliberately not.
 $suffix = if ($Placings) { "$($Arm)_sim" } else { $Arm }
+if ($AddBack) { $suffix = "$($suffix)_ab" }
 $env:CITIUS_BT_CACHE         = "bt_cache_alt_$suffix"
 $env:CITIUS_BT_OUT           = "backtest_alt_$suffix.rds"
 
@@ -116,7 +125,7 @@ while ($true) {
 # useful line it can print, and an earlier version of this filter swallowed it
 # and reported a bare "Error:".
 & Rscript "citiusdata\scripts\backtest_athletics.R" 2>&1 |
-  Select-String -Pattern "remaining|chunking|SKIPPED|meet_tier:|Loop wall|Error|available|floor|wrote|brier" |
+  Select-String -Pattern "remaining|chunking|SKIPPED|meet_tier:|Loop wall|Error|available|floor|wrote|brier|add-back" |
   Select-Object -Last 12
 $after = (Get-ChildItem "citiusdata\data\bt_cache_alt_$suffix" -ErrorAction SilentlyContinue).Count
 $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
