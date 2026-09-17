@@ -856,7 +856,37 @@ deployed_debias <- function(ab, offsets = deployed_debias_offsets()) {
 #' @param entrants ability rows for this field, in the order to simulate in
 #' @param ages named vector or data.table of athlete_id -> age on the day, or
 #'   NULL to skip the aging projection
-deployed_field <- function(entrants, aging = NULL, ages = NULL) {
+#' @param venue_alt_m Venue altitude in metres for the race being predicted, or
+#'   NULL. Supplying it applies the ALTITUDE ADD-BACK: the counterpart of the
+#'   subtraction `estimate_ability()` performs on history.
+#'
+#'   Two halves, and shipping only the first is a known defect. History is made
+#'   altitude-neutral so a Kenyan's Eldoret marks stop reading as slow; without
+#'   putting the target venue's altitude back, a race AT altitude is then
+#'   predicted from sea-level-neutral ability and comes out systematically fast.
+#'   `backtest_athletics.R` documents the identical asymmetry for the race shock
+#'   ("nothing put it back for the race being forecast"), which is the same bug
+#'   found twice in two different terms.
+#'
+#'   UNIFORM ACROSS THE FIELD. Venue altitude is a property of the race, so every
+#'   entrant shifts by the same amount and the ordering cannot change -- placings
+#'   are bit-identical by construction, the property the family-pool debias also
+#'   relies on. The per-ATHLETE part of altitude already happened in history.
+#'
+#'   Inert unless the calibration carries `$altitude`, so passing it against the
+#'   deployed calibration changes nothing.
+#' @param calibration Required only when `venue_alt_m` is supplied; the add-back
+#'   reads `$altitude` from it. Defaults to NULL rather than to
+#'   `deployed_calibration()`, which takes a `dir` argument and would error the
+#'   moment it was evaluated -- surviving only on R's lazy defaults, which is a
+#'   trap rather than a design.
+deployed_field <- function(entrants, aging = NULL, ages = NULL,
+                           venue_alt_m = NULL, calibration = NULL) {
+  if (!is.null(venue_alt_m) && is.null(calibration)) {
+    cli::cli_abort(c(
+      "x" = "{.arg venue_alt_m} was supplied without a {.arg calibration}.",
+      "i" = "The add-back reads {.field $altitude} from the calibration; without it the call would silently do nothing."))
+  }
   entrants <- data.table::as.data.table(entrants)
   if (DEPLOYED$prior_weight > 0) {
     entrants <- condition_prior(entrants, field = entrants$athlete_id,
@@ -876,6 +906,33 @@ deployed_field <- function(entrants, aging = NULL, ages = NULL) {
     if (nrow(ok)) {
       proj <- suppressWarnings(project_ability(ok, aging))
       entrants[proj, on = "athlete_id", ability := i.ability]
+    }
+  }
+
+  # ALTITUDE ADD-BACK, after aging and the prior, immediately before the caller
+  # simulates -- the same position the backtest applies it, so the two paths
+  # cannot drift.
+  if (!is.null(venue_alt_m) && is.finite(venue_alt_m) &&
+      !is.null(calibration$altitude) && NROW(calibration$altitude) &&
+      "event_id" %in% names(entrants)) {
+    .at <- data.table::as.data.table(calibration$altitude)
+    .fam <- citius::citius_events()
+    .fv <- .fam$family[match(entrants$event_id, .fam$event_id)]
+    # has_cr = TRUE is the regime the deployed ability is built in: the deployed
+    # calibration carries $race and $race_shock, so estimate_ability() applies
+    # the field-size-shrunk race strip. Using the other scope would add back a
+    # coefficient fitted against a different quantity.
+    .b <- .at$beta[match(paste(.fv, "TRUE"), paste(.at$family, .at$has_cr))]
+    .b[!is.finite(.b)] <- 0
+    if (any(.b != 0)) {
+      entrants[, ability := ability + .b * (as.numeric(venue_alt_m) / 1000)]
+      cli::cli_alert_info(
+        "altitude add-back: {venue_alt_m} m applied to {sum(.b != 0)} of {nrow(entrants)} entrant{?s} ({length(unique(.fv[.b != 0]))} famil{?y/ies}).")
+    } else {
+      # Loud, because a calibration WITH $altitude that moves nothing is the
+      # silently-inert shape that cost two arms on 2026-09-17.
+      cli::cli_alert_warning(
+        "altitude add-back requested at {venue_alt_m} m but every family coefficient is zero -- nothing applied.")
     }
   }
   entrants[]
