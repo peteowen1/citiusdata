@@ -505,7 +505,16 @@ who <- who[!is.na(who)]
 # would fail. The ratings table is model-facing and joins on athlete_id, which
 # is why it moved to the corpus and this did not.
 hist <- tryCatch(
-  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  # Exactly HIST_COLS, which the rows are narrowed to four lines below anyway
+  # -- without `columns=` this paid for all 33 columns first.
+  #
+  # NOTE this makes the NA-fill loop below unreachable on the DuckDB path:
+  # load_championship_results() validates `columns` against CITIUS_DB_SCHEMA
+  # and aborts naming the unknown one, so a HIST_COLS entry the table lacks now
+  # fails loudly here instead of arriving as a silent all-NA column. That is
+  # the better failure, and the loop still guards the .rds fallback path below.
+  with_citius_db_connection(function(conn) load_championship_results(
+    conn, columns = HIST_COLS), read_only = TRUE),
   error = function(e) {
     cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
     NULL
@@ -680,7 +689,9 @@ names_src <- if ("athlete_name" %in% names(clean_all)) clean_all else {
   # lookup needs every athlete who can reach a rating. Do not "simplify" this
   # into a reuse of `hist` -- it would blank the name of anyone outside that meet.
   d2 <- tryCatch(
-    with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+    # This lookup is only ever athlete_id -> athlete_name: 2 columns of 33.
+    with_citius_db_connection(function(conn) load_championship_results(
+      conn, columns = c("athlete_id", "athlete_name")), read_only = TRUE),
     error = function(e) {
       cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
       NULL
@@ -745,7 +756,12 @@ ratings[, orientation := NULL]
 # to Glasgow participants and would blank every rated athlete who wasn't there.
 rated_ids <- unique(ratings$athlete_id)
 marks_src <- tryCatch(
-  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  # The six columns mk_all selects below. `legal` and `mark_string` are load
+  # bearing here: a DNF/DQ/NM row has no parseable mark but is still an honest
+  # "what did they last run", so this deliberately does not narrow to perf.
+  with_citius_db_connection(function(conn) load_championship_results(
+    conn, columns = c("athlete_id", "event_id", "date", "perf",
+                      "mark_string", "legal")), read_only = TRUE),
   error = function(e) {
     cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
     NULL
