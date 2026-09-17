@@ -40,14 +40,20 @@ $env:CITIUS_BT_MARKS_ONLY    = "1"
 $env:CITIUS_BT_STORE         = "athletics_corpus_store"
 $env:CITIUS_BT_TIER          = "M1"
 $env:CITIUS_BT_MEET_TIER     = "1"
-# 150, cut from 450 on 2026-09-17 while the control arm was running. The
-# architecture queue's own profile says a 200-meet arm is ~70 min, so 450 was
-# ~2.5h per arm and ~5h for the pair. 150 is enough to separate an effect this
-# size: the family coefficients are t = -66.6 (distance), -38.8 (middle) and
-# -17.7 (road) on the fit, and the marks-MAE question is a family-level
-# comparison, not a per-event one. If a family comes back ambiguous at 150, that
-# is itself informative -- widen only that family rather than paying for 450
-# meets across all nine.
+# POOL SIZE. Not the same thing as CITIUS_BT_MEETS, which is meets per
+# INVOCATION. Unset, CITIUS_BT_TARGET defaults to 900, which backtest_athletics.R
+# itself prices at ~7.5 hours per arm -- and an A/B is two of those. This ran
+# unset for hours on 2026-09-17 while the logs said "150", because 150 was the
+# per-run cap and the cache quietly passed 151 meets. CITIUS_BT_MEETS below is
+# deliberately larger than the target so it never binds: the slice runner caps
+# work by wall-clock, not by meet count.
+#
+# BOTH ARMS MUST SHARE THIS NUMBER. The pool is an evenly spaced sample of the
+# meet list, so a different target selects DIFFERENT MEETS and the arms stop
+# being comparable -- which score_arm.R's vintage guard does NOT catch, because
+# the history is identical either way. 120 is the documented sensible size:
+# ~1,500 finals, and about 36 min per arm at the 18s/meet measured today.
+$env:CITIUS_BT_TARGET        = "120"
 $env:CITIUS_BT_MEETS         = "150"
 $env:CITIUS_BT_WORKERS       = "2"
 $env:CITIUS_HALF_LIFE_FAMILY = "road=1095,walk=730,hurdles=180"
@@ -95,7 +101,7 @@ foreach ($a in $ARMS) {
   $secs = [int]((Get-Date) - $t0).TotalSeconds
   $csv  = Join-Path $env:USERPROFILE ".claude\runtime-log.csv"
   if (-not (Test-Path $csv)) { "ts_end,secs,repo,tool,source,label" | Out-File -Encoding utf8 $csv }
-  "$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')),$secs,citiusdata,PowerShell,arm,backtest_athletics.R / $tag (450 M1 meets, marks-only)" |
+  "$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')),$secs,citiusdata,PowerShell,arm,backtest_athletics.R / $tag (target $env:CITIUS_BT_TARGET M1 meets, marks-only)" |
     Out-File -Append -Encoding utf8 $csv
 
   if (-not (Test-Path $out)) {
