@@ -75,9 +75,20 @@ ape <- function(p) {
     , ape := abs(median_mark - actual) / actual][]
 }
 ma <- ape(pa); mb <- ape(pb)
-m <- merge(ma[, .(race_id, athlete_id, ape_a = ape, family, alt_m)],
-           mb[, .(race_id, athlete_id, ape_b = ape)],
+m <- merge(ma[, .(race_id, athlete_id, ape_a = ape, mark_a = median_mark, family, alt_m)],
+           mb[, .(race_id, athlete_id, ape_b = ape, mark_b = median_mark)],
            by = c("race_id", "athlete_id"))
+# How much the prediction actually MOVED. This is the sharp cut, and banding by
+# the predicted race's altitude is not.
+#
+# The correction is applied to an athlete's HISTORY marks, so it changes their
+# estimated ability and therefore their prediction EVERYWHERE -- including at
+# sea level. An athlete who trains and races at Eldoret and then runs in Zurich
+# is exactly the case the term exists for, and the Zurich race has alt_m ~ 400.
+# Splitting by the race's own altitude misses that entirely, which is why the
+# first run of this script showed movement in the "unknown" and "<200m" bands
+# and nothing above 1000 m: the altitude was in the HISTORY, not the venue.
+m[, moved := abs(mark_b - mark_a) / pmax(mark_a, 1e-9)]
 if (!nrow(m)) stop("no paired rows -- do the two arms share any meets yet?")
 
 cat(sprintf("\npaired rows: %s across %s races\n",
@@ -111,6 +122,36 @@ if (nrow(hi) < 30) {
   cat(sprintf("only %d paired rows above 800 m -- not enough to split by family yet.\n", nrow(hi)))
 } else {
   print(rbindlist(lapply(sort(unique(hi$family)), function(f) rep_block(hi[family == f], f)))[
+    , lapply(.SD, function(x) if (is.numeric(x)) round(x, 4) else x)])
+}
+
+cat("\n=== BY HOW MUCH THE PREDICTION MOVED — the sharpest cut ===\n")
+cat("A row the term did not touch cannot carry evidence either way; including\n")
+cat("those rows only dilutes. `moved` is |B - A| / A on the predicted mark.\n")
+cat(sprintf("rows the term moved at all (>0.01%%): %s of %s (%.1f%%)\n",
+            format(m[moved > 1e-4, .N], big.mark = ","), format(nrow(m), big.mark = ","),
+            100 * mean(m$moved > 1e-4)))
+mv <- rbindlist(list(
+  # EXACTLY zero, not "below a threshold". A bucket defined as <=0.01% contains
+  # rows that genuinely moved a little, so a nonzero diff there is expected and
+  # says nothing -- the invariance check needs rows the term provably did not
+  # touch. Getting this wrong made a healthy run look like it had failed its own
+  # guard (t = 4.53 on the <=0.01% bucket, which was real movement, not a leak).
+  rep_block(m[moved == 0], "UNTOUCHED (exactly 0)"),
+  rep_block(m[moved > 0 & moved <= 1e-4], "moved <0.01%"),
+  rep_block(m[moved > 1e-4 & moved <= 1e-3], "moved 0.01-0.1%"),
+  rep_block(m[moved > 1e-3 & moved <= 5e-3], "moved 0.1-0.5%"),
+  rep_block(m[moved > 5e-3], "moved >0.5%")))
+print(mv[, lapply(.SD, function(x) if (is.numeric(x)) round(x, 4) else x)])
+cat("\nThe untouched row should read diff_pp = 0 exactly. If it does not, the two\n")
+cat("arms differ somewhere other than the mechanism and nothing below is safe.\n")
+
+cat("\n=== BY FAMILY, rows the term actually moved ===\n")
+tm <- m[moved > 1e-4]
+if (nrow(tm) < 30) {
+  cat(sprintf("only %d moved rows -- not enough to split by family yet.\n", nrow(tm)))
+} else {
+  print(rbindlist(lapply(sort(unique(tm$family)), function(f) rep_block(tm[family == f], f)))[
     , lapply(.SD, function(x) if (is.numeric(x)) round(x, 4) else x)])
 }
 
