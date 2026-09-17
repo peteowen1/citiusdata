@@ -1942,17 +1942,39 @@ if (N_WORKERS > 1L) {
   if (FAMILY_DEBIAS) export_vars <- c(export_vars, "family_pool_offset",
                                       ".fp", ".fp_fs_by_event")
   parallel::clusterExport(cl, export_vars, envir = environment())
-  # parLapply schedules statically -- a worker's whole chunk runs before ANY of
-  # its results come back, so there is no way to print per-meet as it happens.
-  # Silence here is expected; it was NOT expected on the serial path below,
-  # which is why that one stays a plain for-loop instead of reusing this batch
-  # shape for both.
-  results <- tryCatch(parallel::parLapply(cl, seq_len(n), run_meet),
-                      finally = parallel::stopCluster(cl))
+  # CHUNKED, so an interrupted run keeps the work it has already done.
+  #
+  # parLapply collects the WHOLE batch before returning, so a single call over
+  # every meet wrote NOTHING to the cache until the last meet finished. This
+  # file's header advertises "the script is resumable" and that was only ever
+  # true BETWEEN complete runs: a 2.5h arm killed at 2.4h lost all 2.4h.
+  # Measured 2026-09-17 -- a run stopped after 30 minutes had two workers at
+  # ~1,500 CPU-seconds each and left exactly one file behind, `_arm.rds`, the
+  # fingerprint. Roughly 50 CPU-minutes, unrecoverable, with nothing to resume
+  # from. This repo kills arms often enough (OOM, the memory watchdog, a
+  # deliberate stop) that "loses everything on interruption" is a routine cost,
+  # not a tail risk.
+  #
+  # The chunk size trades two things. Smaller loses less when a run dies but
+  # pays parLapply's static-scheduling tail more often, because every chunk
+  # waits for its slowest worker. N_WORKERS * 4 keeps each worker holding ~4
+  # meets per round while capping the loss at about one chunk's wall time.
+  # Override with CITIUS_BT_CHUNK when meets are unusually uneven in size.
+  #
+  # Progress still cannot print per meet WITHIN a chunk -- that limit is
+  # parLapply's, not this loop's -- but it now prints once per chunk instead of
+  # once at the very end, so a long parallel run stops reading like a hang.
+  BT_CHUNK <- .env_int("CITIUS_BT_CHUNK", as.character(max(1L, N_WORKERS * 4L)))
+  chunks <- split(seq_len(n), ceiling(seq_len(n) / BT_CHUNK))
   cli::cli_alert_info(
-    "Loop wall time: {round(as.numeric(difftime(Sys.time(), t_loop0, units = 'secs')))}s for {n} meet{?s}.")
-  for (i in seq_len(n)) {
-    r <- results[[i]]
+    "Parallel chunking: {length(chunks)} chunk{?s} of up to {BT_CHUNK} meet{?s}; the cache is written after each.")
+  i <- 0L
+  tryCatch({
+  for (.ch in chunks) {
+  results <- parallel::parLapply(cl, .ch, run_meet)
+  for (.k in seq_along(.ch)) {
+    i <- i + 1L
+    r <- results[[.k]]
     saveRDS(r$out, file.path(BT_CACHE, paste0(r$cid, ".rds")))
     TIMING$rows <- TIMING$rows + r$rows
     TIMING$read <- TIMING$read + r$timing$read
@@ -1971,6 +1993,10 @@ if (N_WORKERS > 1L) {
     }
     cli::cli_alert("  {i}/{n}: {r$cid} -> {length(r$out)} race{?s}")
   }
+  }
+  }, finally = parallel::stopCluster(cl))
+  cli::cli_alert_info(
+    "Loop wall time: {round(as.numeric(difftime(Sys.time(), t_loop0, units = 'secs')))}s for {n} meet{?s}.")
 } else {
   # Serial path stays a plain for-loop, printing as each meet finishes -- byte-
   # for-byte the original script's live feedback, just calling run_meet() for
