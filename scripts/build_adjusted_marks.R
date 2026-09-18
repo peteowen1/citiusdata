@@ -153,8 +153,25 @@ for (it in seq_len(N_ITER)) {
   # forecastable before the gun; the shrinkage denominator's var_race term is
   # what accounts for race-level noise, so subtracting the shock first
   # double-shrinks (v4 did, and left middle distance 1.2% behind the August file)
-  vr <- c0[covered == TRUE & is.finite(resid) & is.finite(var_race_emp) & var_venue > 0 & !is.na(venue_city),
-           .(m = mean(resid), n = .N, family = family[1], venue_stadium = venue_stadium[1]),
+  # TIER_DEMEAN=1 (arm v8): subtract the (event, race_code) "occasion" mean
+  # before estimating the venue, LEAVING THE VENUE ITSELF OUT of that mean so a
+  # venue that dominates a tier (Zurich is half of every Diamond League Final)
+  # cannot demean away its own effect. Exactly the August build's step; the
+  # last of its ingredients not yet tried against middle distance. The tier
+  # mean is used only to purify the venue estimate, never subtracted from the
+  # adjusted mark itself -- the engine weights tiers on its own.
+  c0[, resid_v := resid]
+  if (Sys.getenv("TIER_DEMEAN", "0") == "1") {
+    c0[is.na(race_code) | !nzchar(race_code), race_code := "unknown"]
+    ok <- c0[, covered == TRUE & is.finite(resid)]
+    c0[ok, `:=`(t_sum = sum(resid), t_n = .N), by = .(event_id, race_code)]
+    c0[ok, `:=`(vt_sum = sum(resid), vt_n = .N), by = .(event_id, race_code, venue_city)]
+    c0[ok, t_mean := fifelse(t_n - vt_n >= 30L, (t_sum - vt_sum) / pmax(t_n - vt_n, 1L), t_sum / t_n)]
+    c0[ok, resid_v := resid - t_mean]
+    c0[, c("t_sum", "t_n", "vt_sum", "vt_n", "t_mean") := NULL]
+  }
+  vr <- c0[covered == TRUE & is.finite(resid_v) & is.finite(var_race_emp) & var_venue > 0 & !is.na(venue_city),
+           .(m = mean(resid_v), n = .N, family = family[1], venue_stadium = venue_stadium[1]),
            by = .(event_id, venue_city, race_key)]
   # one row per event, finite components only: an event with no empirical
   # variance (too thin) must not turn its whole family's pooled variance NA --
