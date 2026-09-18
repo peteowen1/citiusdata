@@ -22,8 +22,16 @@ D <- here::here("citiusdata", "data")
 DIR <- file.path(D, Sys.getenv("FIT_DIR", "gamm4_events_venue")); dir.create(DIR, showWarnings = FALSE)
 TARGET_ATHLETES <- 1800L; PER_STRATUM <- 300L
 
-vc <- setDT(read_parquet(file.path(D, "athletics_corpus.parquet"), col_select = c("race_key", "venue_city")))
-vc <- unique(vc[!is.na(venue_city) & nzchar(venue_city)], by = "race_key")
+# race -> venue map, cached: the corpus parquet is 4.6M rows and this needs one
+# row per race. Rebuilt when the corpus is newer than the cache.
+vmap_f <- file.path(D, "venue_by_race.parquet"); corpus_f <- file.path(D, "athletics_corpus.parquet")
+if (!file.exists(vmap_f) || file.mtime(vmap_f) < file.mtime(corpus_f)) {
+  vc <- setDT(read_parquet(corpus_f, col_select = c("race_key", "venue_city")))
+  vc <- unique(vc[!is.na(venue_city) & nzchar(venue_city)], by = "race_key")
+  write_parquet(vc, vmap_f); rm(vc); invisible(gc())
+}
+vc <- setDT(read_parquet(vmap_f))
+cat(sprintf("race -> venue map: %s races\n", format(nrow(vc), big.mark = ",")))
 
 store_events <- sub("^event_id=", "", grep("^event_id=AT-", list.files(file.path(D, "athletics_corpus_store")), value = TRUE))
 want <- Sys.getenv("FIT_EVENTS", "")
