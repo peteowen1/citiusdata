@@ -26,7 +26,10 @@ all_params <- list()
 # again to fold the offsets into the JSON the site reads. Absent = no lookup.
 vo_f <- file.path(OUT, "venue_offsets.parquet")
 VENUES <- if (file.exists(vo_f)) { v <- setDT(arrow::read_parquet(vo_f)); split(v, by = "event_id", keep.by = FALSE) } else list()
-cat(sprintf("venue offsets on disk: %s (event, venue) pairs\n", format(sum(vapply(VENUES, nrow, 1L)), big.mark = ",")))
+st_f <- file.path(OUT, "stadium_offsets.parquet")
+STADIUMS <- if (file.exists(st_f)) { s <- setDT(arrow::read_parquet(st_f)); s[, key := paste(venue_city, venue_stadium, sep = "|")]; split(s, by = "event_id", keep.by = FALSE) } else list()
+cat(sprintf("venue offsets on disk: %s (event, city) and %s (event, city, stadium) cells\n",
+            format(sum(vapply(VENUES, nrow, 1L)), big.mark = ","), format(sum(vapply(STADIUMS, nrow, 1L)), big.mark = ",")))
 
 for (EV in ids) {
   r <- readRDS(file.path(DIR, paste0(EV, ".rds")))
@@ -68,7 +71,8 @@ for (EV in ids) {
     var_race = unname(sdv["race"])^2, var_resid = unname(sdv["resid"])^2,
     var_athlete = unname(sdv["athlete"])^2,
     var_venue = if (is.finite(sdv["venue"])) unname(sdv["venue"])^2 else NULL,
-    venues = if (!is.null(VENUES[[EV]])) as.list(setNames(round(VENUES[[EV]]$venue_off, 6), VENUES[[EV]]$venue_city)) else NULL
+    venues = if (!is.null(VENUES[[EV]])) as.list(setNames(round(VENUES[[EV]]$venue_off, 6), VENUES[[EV]]$venue_city)) else NULL,
+    stadiums = if (!is.null(STADIUMS[[EV]])) as.list(setNames(round(STADIUMS[[EV]]$venue_off, 6), STADIUMS[[EV]]$key)) else NULL
   )
   write_json(params, file.path(OUT, paste0(EV, ".json")), auto_unbox = TRUE, digits = 8, null = "null")
   all_params[[EV]] <- params
