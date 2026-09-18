@@ -208,10 +208,16 @@ for (it in seq_len(N_ITER)) {
 }
 cat(sprintf("stage 2 in %.1fs\n", as.numeric(Sys.time()-t0, units="secs")))
 c0[, venue_adj := alt_adj + venue_off]
-write_parquet(vo, file.path(D, "conditions_params", "venue_offsets.parquet"))
-write_parquet(vs, file.path(D, "conditions_params", "stadium_offsets.parquet"))
-cat(sprintf("venue offsets: %s (event, city) and %s (event, city, stadium) cells written to conditions_params/\n",
-            format(nrow(vo), big.mark=","), format(nrow(vs), big.mark=",")))
+# Offsets are written under the OUTPUT FILE's tag so a later candidate build
+# cannot silently replace the cells the site's JSON was exported from -- on
+# 2026-09-19 the JSON carried v6's Zurich 1500m offset (-0.48%), the parquet
+# v8's (-0.29%), and the chosen v7 said +0.11%. export_conditions_params.R
+# reads the tag it is told (OFFSETS_TAG).
+OUT_TAG <- sub("[.]parquet$", "", Sys.getenv("ADJ_OUT", "adjusted_marks"))
+write_parquet(vo, file.path(D, "conditions_params", sprintf("venue_offsets_%s.parquet", OUT_TAG)))
+write_parquet(vs, file.path(D, "conditions_params", sprintf("stadium_offsets_%s.parquet", OUT_TAG)))
+cat(sprintf("venue offsets [%s]: %s (event, city) and %s (event, city, stadium) cells written to conditions_params/\n",
+            OUT_TAG, format(nrow(vo), big.mark=","), format(nrow(vs), big.mark=",")))
 
 c0[, adj_perf := cleaned - venue_off - race_shock]
 c0[, adj_mark := perf_to_mark(adj_perf, orientation)]

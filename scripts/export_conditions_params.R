@@ -24,9 +24,16 @@ all_params <- list()
 # (closed form, using var_venue from these fits) and written beside the params.
 # Order is therefore: export (curves + variances) -> build (offsets) -> export
 # again to fold the offsets into the JSON the site reads. Absent = no lookup.
-vo_f <- file.path(OUT, "venue_offsets.parquet")
-VENUES <- if (file.exists(vo_f)) { v <- setDT(arrow::read_parquet(vo_f)); split(v, by = "event_id", keep.by = FALSE) } else list()
-st_f <- file.path(OUT, "stadium_offsets.parquet")
+# OFFSETS_TAG names the build whose venue cells go into the JSON (the output
+# tag of build_adjusted_marks.R, e.g. adjusted_marks_v7). Required to be
+# explicit: an unsuffixed default once shipped one build's curves with
+# another build's venues.
+OFF_TAG <- Sys.getenv("OFFSETS_TAG", "")
+if (!nzchar(OFF_TAG)) stop("OFFSETS_TAG is not set - name the build whose venue offsets this export should carry (e.g. OFFSETS_TAG=adjusted_marks_v7)")
+vo_f <- file.path(OUT, sprintf("venue_offsets_%s.parquet", OFF_TAG))
+if (!file.exists(vo_f)) stop(sprintf("no venue offsets for OFFSETS_TAG=%s (%s missing); run build_adjusted_marks.R with ADJ_OUT=%s.parquet first", OFF_TAG, basename(vo_f), OFF_TAG))
+VENUES <- { v <- setDT(arrow::read_parquet(vo_f)); split(v, by = "event_id", keep.by = FALSE) }
+st_f <- file.path(OUT, sprintf("stadium_offsets_%s.parquet", OFF_TAG))
 STADIUMS <- if (file.exists(st_f)) { s <- setDT(arrow::read_parquet(st_f)); s[, key := paste(venue_city, venue_stadium, sep = "|")]; split(s, by = "event_id", keep.by = FALSE) } else list()
 cat(sprintf("venue offsets on disk: %s (event, city) and %s (event, city, stadium) cells\n",
             format(sum(vapply(VENUES, nrow, 1L)), big.mark = ","), format(sum(vapply(STADIUMS, nrow, 1L)), big.mark = ",")))
@@ -62,7 +69,7 @@ for (EV in ids) {
   }
   ref_mark <- exp(abs(median(cs$perf)))   # perf = orientation * log(mark); sign carries the orientation
   params <- list(
-    event_id = EV, ref_mark = round(ref_mark, 2),
+    event_id = EV, ref_mark = round(ref_mark, 2), offsets_tag = OFF_TAG, exported_at = format(Sys.time(), "%Y-%m-%d %H:%M"),
     fitted_on = list(n_rows = nrow(cs), n_athletes = uniqueN(cs$athlete_id), n_races = uniqueN(cs$race_key),
                      n_venues = if ("venue_city" %in% names(cs)) uniqueN(cs$venue_city) else NA),
     wind = if (has_wind) list(grid = wind_grid, curve = wind_curve) else NULL,
