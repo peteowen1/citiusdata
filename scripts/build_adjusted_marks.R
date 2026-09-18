@@ -117,7 +117,14 @@ c0 <- merge(c0, vv, by = "event_id", all.x = TRUE)
 t0 <- Sys.time()
 for (it in seq_len(N_ITER)) {
   c0[, adj0 := cleaned - venue_off - race_shock]
-  c0[, `:=`(n_ae = .N, sum_ae = sum(adj0)), by = .(athlete_id, event_id, season)]
+  # LEVEL_BY=season (default) or career: what "the athlete's own level" means
+  # for the residual. Season is the safer default for careers that move;
+  # career is what the August build used and is tested as an arm (v7).
+  if (Sys.getenv("LEVEL_BY", "season") == "career") {
+    c0[, `:=`(n_ae = .N, sum_ae = sum(adj0)), by = .(athlete_id, event_id)]
+  } else {
+    c0[, `:=`(n_ae = .N, sum_ae = sum(adj0)), by = .(athlete_id, event_id, season)]
+  }
   c0[, level := fifelse(n_ae >= 3L, (sum_ae - adj0) / (n_ae - 1L), NA_real_)]
   c0[, resid := cleaned - level]
   if (it == 1L) {
