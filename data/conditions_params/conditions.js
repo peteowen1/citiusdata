@@ -17,13 +17,16 @@
     return curve[i - 1] + t * (curve[i] - curve[i - 1])
   }
 
-  // params: one event's entry from _all.json. wind: m/s or null. alt_m: metres or null.
-  function adjustConditions(params, wind, alt_m, indoor) {
+  // params: one event's entry from _all.json. wind: m/s or null. alt_m: metres
+  // or null. venue: the corpus venue_city string or null -- an offset is added
+  // when params.venues has it (a course or a track, beyond its altitude).
+  function adjustConditions(params, wind, alt_m, indoor, venue) {
     const wind_adj = params.wind ? interp(params.wind.grid, params.wind.curve, wind) : 0
-    const venue_adj = interp(params.altitude.grid_m, params.altitude.curve,
-                             Number.isFinite(alt_m) ? Math.max(alt_m, 0) : NaN)
+    const alt_adj = interp(params.altitude.grid_m, params.altitude.curve,
+                           Number.isFinite(alt_m) ? Math.max(alt_m, 0) : NaN)
+    const venue_off = (venue != null && params.venues && Number.isFinite(params.venues[venue])) ? params.venues[venue] : 0
     const indoor_adj = params.has_indoor && indoor === true ? params.indoor_coef : 0
-    return { wind_adj, venue_adj, indoor_adj }
+    return { wind_adj, venue_adj: alt_adj + venue_off, indoor_adj, alt_adj, venue_off }
   }
 
   // resid: array of (cleaned perf - expected perf), one per athlete; null/NaN
@@ -58,7 +61,7 @@
   // athlete the field's shock excluding themselves.
   function adjustRace(params, rows, var_resid = params.var_resid, loo = true) {
     const out = rows.map(r => {
-      const a = adjustConditions(params, r.wind, r.alt_m, r.indoor)
+      const a = adjustConditions(params, r.wind, r.alt_m, r.indoor, r.venue)
       const cleaned = r.perf - a.wind_adj - a.venue_adj - a.indoor_adj
       return { ...r, ...a, cleaned, resid: Number.isFinite(r.expected) ? cleaned - r.expected : NaN }
     })

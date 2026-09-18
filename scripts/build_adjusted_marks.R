@@ -89,11 +89,22 @@ c0[, cleaned := perf - wind_adj - venue_adj - indoor_adj]
 # variance of field means minus its sampling part. Printed against the gamm4
 # fit's values as a check; the empirical ones are what the shrinkage uses,
 # because the level here is a leave-one-out season mean, not a fitted effect.
+#
+# VENUE (2026-09-19): a per-(event, venue_city) offset beside the altitude
+# curve -- a course or a track, not its height. Closed form like the shock: the
+# shrunk mean of the venue's race-level residual means, n_races * var_venue /
+# (n_races * var_venue + var_race + var_resid / mean field), var_venue from the
+# gamm4 fit. The form-engine A/B of 2026-09-18 showed the August file's per-city
+# offsets beat an altitude-only v2 (t = 25.5); the pilot measured venue at
+# 1.36% sd on the marathon. Written into venue_adj (= alt_adj + venue_off) so
+# form_ratings.R's wind+venue+indoor sum carries it unchanged.
 c0[, season := as.integer(format(as.Date(date), "%Y"))]
-c0[, race_shock := 0]
+c0[, `:=`(race_shock = 0, venue_off = 0, alt_adj = venue_adj)]
+vv <- rbindlist(lapply(params, function(p) data.table(event_id = p$event_id, var_venue = if (is.null(p$var_venue)) 0 else p$var_venue)))
+c0 <- merge(c0, vv, by = "event_id", all.x = TRUE)
 t0 <- Sys.time()
 for (it in seq_len(N_ITER)) {
-  c0[, adj0 := cleaned - race_shock]
+  c0[, adj0 := cleaned - venue_off - race_shock]
   c0[, `:=`(n_ae = .N, sum_ae = sum(adj0)), by = .(athlete_id, event_id, season)]
   c0[, level := fifelse(n_ae >= 3L, (sum_ae - adj0) / (n_ae - 1L), NA_real_)]
   c0[, resid := cleaned - level]
@@ -110,35 +121,49 @@ for (it in seq_len(N_ITER)) {
                                         sd_resid_emp = round(100*sqrt(var_resid_emp), 2), sd_resid_fit = round(100*sqrt(var_resid_fit), 2))])
     c0 <- merge(c0, vc[, .(event_id, var_race_emp, var_resid_emp)], by = "event_id", all.x = TRUE)
   }
+  # venue offset from race-level means of the residual net of the current shock
+  vr <- c0[covered == TRUE & is.finite(resid) & is.finite(var_race_emp) & var_venue > 0 & !is.na(venue_city),
+           .(m = mean(resid - race_shock), n = .N), by = .(event_id, venue_city, race_key)]
+  vo <- vr[, .(n_races = .N, m = mean(m), nbar = mean(n)), by = .(event_id, venue_city)]
+  vo <- merge(vo, unique(c0[, .(event_id, var_venue, var_race_emp, var_resid_emp)]), by = "event_id")
+  vo[, venue_off := m * n_races * var_venue / (n_races * var_venue + var_race_emp + var_resid_emp / nbar)]
+  c0[, venue_off := NULL]
+  c0 <- merge(c0, vo[, .(event_id, venue_city, venue_off)], by = c("event_id", "venue_city"), all.x = TRUE, sort = FALSE)
+  c0[is.na(venue_off), venue_off := 0]
   c0[covered == TRUE & is.finite(var_race_emp),
-     race_shock := race_shock_loo(resid, var_race_emp[1], var_resid_emp[1]), by = race_key]
-  cat(sprintf("iter %d: sd(race_shock) %.5f, rows with an expectation %.1f%%\n",
-              it, sd(c0[covered == TRUE]$race_shock), 100*mean(is.finite(c0[covered == TRUE]$resid))))
+     race_shock := race_shock_loo(resid - venue_off, var_race_emp[1], var_resid_emp[1]), by = race_key]
+  cat(sprintf("iter %d: sd(venue_off) %.5f over %s venues, sd(race_shock) %.5f, rows with an expectation %.1f%%\n",
+              it, sd(vo$venue_off), format(nrow(vo), big.mark=","), sd(c0[covered == TRUE]$race_shock),
+              100*mean(is.finite(c0[covered == TRUE]$resid))))
 }
 cat(sprintf("stage 2 in %.1fs\n", as.numeric(Sys.time()-t0, units="secs")))
+c0[, venue_adj := alt_adj + venue_off]
+write_parquet(vo[, .(event_id, venue_city, n_races, venue_off)], file.path(D, "conditions_params", "venue_offsets.parquet"))
+cat(sprintf("venue offsets: %s (event, venue) pairs written to conditions_params/venue_offsets.parquet\n", format(nrow(vo), big.mark=",")))
 
-c0[, adj_perf := cleaned - race_shock]
+c0[, adj_perf := cleaned - venue_off - race_shock]
 c0[, adj_mark := perf_to_mark(adj_perf, orientation)]
 c0[, adj_delta := adj_mark - mark]
 
 # ---- does each stage help? within-athlete scatter, 4+ marks -----------------
 cat("\n=== within-athlete sd of perf (log units), athlete-events with 4+ covered marks; lower is better ===\n")
 c0[, n_ath := 0L][covered == TRUE, n_ath := .N, by = .(athlete_id, event_id)]
-sc <- c0[covered == TRUE & n_ath >= 4, .(sd_raw = sd(perf), sd_s1 = sd(cleaned), sd_s2 = sd(adj_perf)),
+sc <- c0[covered == TRUE & n_ath >= 4, .(sd_raw = sd(perf), sd_s1 = sd(cleaned), sd_sv = sd(cleaned - venue_off), sd_s2 = sd(adj_perf)),
          by = .(athlete_id, event_id, family)]
 sc <- sc[is.finite(sd_raw) & is.finite(sd_s2)]
 res <- sc[, .(athlete_events = .N, sd_raw = round(mean(sd_raw), 5),
               conditions_pct = round(100*(mean(sd_s1)/mean(sd_raw) - 1), 2),
+              plus_venue_pct = round(100*(mean(sd_sv)/mean(sd_raw) - 1), 2),
               plus_shock_pct = round(100*(mean(sd_s2)/mean(sd_raw) - 1), 2)), by = family]
 print(res[order(plus_shock_pct)])
-ov <- sc[, .(r = mean(sd_raw), s1 = mean(sd_s1), s2 = mean(sd_s2))]
-cat(sprintf("OVERALL: raw %.5f -> conditions %.5f (%+.2f%%) -> +shock %.5f (%+.2f%%)\n",
-            ov$r, ov$s1, 100*(ov$s1/ov$r-1), ov$s2, 100*(ov$s2/ov$r-1)))
-stopifnot("race shock made athletes LESS self-consistent" = ov$s2 < ov$s1)
+ov <- sc[, .(r = mean(sd_raw), s1 = mean(sd_s1), sv = mean(sd_sv), s2 = mean(sd_s2))]
+cat(sprintf("OVERALL: raw %.5f -> conditions %.5f (%+.2f%%) -> +venue %.5f (%+.2f%%) -> +shock %.5f (%+.2f%%)\n",
+            ov$r, ov$s1, 100*(ov$s1/ov$r-1), ov$sv, 100*(ov$sv/ov$r-1), ov$s2, 100*(ov$s2/ov$r-1)))
+stopifnot("race shock made athletes LESS self-consistent" = ov$s2 < ov$sv)
 
 keep <- c("race_key","athlete_id","event_id","discipline","sex","family","date","season","comp_name",
           "venue_city","place","mark","adj_mark","adj_delta","perf","adj_perf","wind","alt_m","indoor",
-          "wind_adj","venue_adj","indoor_adj","race_shock","level","legal","unit","covered")
+          "wind_adj","venue_adj","alt_adj","venue_off","indoor_adj","race_shock","level","legal","unit","covered")
 c0[, setdiff(names(c0), keep) := NULL]; setcolorder(c0, keep)
 rm(sc, alt, vc, fit); invisible(gc())        # the write copies; drop everything else first
 OUT_PATH <- file.path(D, Sys.getenv("ADJ_OUT", "adjusted_marks.parquet"))
