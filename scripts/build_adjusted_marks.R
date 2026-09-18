@@ -42,26 +42,34 @@ N_ITER <- 3L
 reg <- as.data.table(citius_events())[, .(event_id, discipline, sex, family, orientation, unit)]
 
 t_all <- Sys.time()
-c0 <- setDT(read_parquet(file.path(D, "athletics_corpus.parquet"),
-                         col_select = c("athlete_id","event_id","race_key","mark","perf",
-                                        "date","wind","legal","indoor","scoreable",
-                                        "venue_city","venue_stadium","race_code","place","comp_name")))
-c0[, athlete_id := as.character(athlete_id)]
-.fill <- function(x) { u <- unique(x[!is.na(x) & nzchar(x)]); if (length(u) == 1L) u else x }
-c0[, venue_city    := .fill(venue_city),    by = race_key]
-c0[, venue_stadium := .fill(venue_stadium), by = race_key]
-c0 <- c0[scoreable == TRUE & is.finite(perf) & is.finite(mark) & mark > 0]
-.n_pre <- nrow(c0)
-c0 <- merge(c0, reg, by = "event_id")
-stopifnot("rows carry an event_id the registry does not have" = nrow(c0) == .n_pre)
-cat(sprintf("scoreable performances: %s over %d events, %s to %s\n",
-            format(nrow(c0), big.mark=","), uniqueN(c0$event_id), min(c0$date), max(c0$date)))
-
-alt <- setDT(open_dataset(file.path(D, "athletics_corpus_store")) |>
-  dplyr::select(race_key, alt_m) |> dplyr::collect())
-alt <- unique(alt[!is.na(race_key)], by = "race_key")
-c0 <- merge(c0, alt, by = "race_key", all.x = TRUE)
-cat(sprintf("alt_m coverage after join: %.1f%% of %s rows\n", 100*mean(is.finite(c0$alt_m)), format(nrow(c0), big.mark=",")))
+# Stage 0 -- the scoreable corpus with registry + alt_m joined -- is identical
+# for every build until the corpus changes, and cost ~90s of each of the six
+# builds run on 2026-09-19. Cached beside the corpus, keyed on its mtime.
+corpus_f <- file.path(D, "athletics_corpus.parquet"); stage0_f <- file.path(D, "adjusted_marks_stage0.parquet")
+if (file.exists(stage0_f) && file.mtime(stage0_f) > file.mtime(corpus_f)) {
+  c0 <- setDT(read_parquet(stage0_f))
+  cat(sprintf("stage 0 from cache: %s rows (corpus %s)\n", format(nrow(c0), big.mark=","), format(file.mtime(corpus_f), "%Y-%m-%d %H:%M")))
+} else {
+  c0 <- setDT(read_parquet(corpus_f,
+                           col_select = c("athlete_id","event_id","race_key","mark","perf",
+                                          "date","wind","legal","indoor","scoreable",
+                                          "venue_city","venue_stadium","race_code","place","comp_name")))
+  c0[, athlete_id := as.character(athlete_id)]
+  .fill <- function(x) { u <- unique(x[!is.na(x) & nzchar(x)]); if (length(u) == 1L) u else x }
+  c0[, venue_city    := .fill(venue_city),    by = race_key]
+  c0[, venue_stadium := .fill(venue_stadium), by = race_key]
+  c0 <- c0[scoreable == TRUE & is.finite(perf) & is.finite(mark) & mark > 0]
+  .n_pre <- nrow(c0)
+  c0 <- merge(c0, reg, by = "event_id")
+  stopifnot("rows carry an event_id the registry does not have" = nrow(c0) == .n_pre)
+  alt <- setDT(open_dataset(file.path(D, "athletics_corpus_store")) |>
+    dplyr::select(race_key, alt_m) |> dplyr::collect())
+  alt <- unique(alt[!is.na(race_key)], by = "race_key")
+  c0 <- merge(c0, alt, by = "race_key", all.x = TRUE)
+  write_parquet(c0, stage0_f)
+}
+cat(sprintf("scoreable performances: %s over %d events, %s to %s; alt_m on %.1f%%\n",
+            format(nrow(c0), big.mark=","), uniqueN(c0$event_id), min(c0$date), max(c0$date), 100*mean(is.finite(c0$alt_m))))
 
 # ---- stage 1 ---------------------------------------------------------------
 c0[, `:=`(wind_adj = 0, venue_adj = 0, indoor_adj = 0, covered = FALSE)]
@@ -71,8 +79,12 @@ for (EV in sort(unique(c0$event_id))) {
   p <- conditions_params(EV, PDIR)
   if (is.null(p)) next
   params[[EV]] <- p
-  # unknown altitude -> uncovered (0), not imputed to sea level: NA policy still open
-  i <- c0[event_id == EV & is.finite(alt_m), which = TRUE]
+  # NA POLICY (decided 2026-09-19): an unknown altitude gets NO curve (never
+  # imputed to sea level) but the row stays covered -- the venue offset below
+  # is learnt on every row at that venue and carries its altitude implicitly.
+  # 14% of rows in every family have a venue and no altitude; leaving them
+  # uncovered cost the form engine measurably (v5 vs the August file).
+  i <- c0[event_id == EV, which = TRUE]
   if (!length(i)) next
   a <- adjust_conditions(p, wind = c0$wind[i], alt_m = c0$alt_m[i], indoor = c0$indoor[i] %in% TRUE)
   set(c0, i, "wind_adj", a$wind_adj); set(c0, i, "venue_adj", a$venue_adj); set(c0, i, "indoor_adj", a$indoor_adj)
@@ -121,25 +133,61 @@ for (it in seq_len(N_ITER)) {
                                         sd_resid_emp = round(100*sqrt(var_resid_emp), 2), sd_resid_fit = round(100*sqrt(var_resid_fit), 2))])
     c0 <- merge(c0, vc[, .(event_id, var_race_emp, var_resid_emp)], by = "event_id", all.x = TRUE)
   }
-  # venue offset from race-level means of the residual net of the current shock
+  # Venue offset, HIERARCHICAL, from race-level means of the residual net of the
+  # current shock. Three levels, each shrunk toward the one above (the August
+  # build did family-city then stadium and beat a flat per-event version by
+  # 1.2% in middle distance -- pooling is where thin events get their venue):
+  #   family x city   : pooled over every event in the family, toward 0
+  #   event  x city   : toward its family-city value
+  #   event x stadium : toward its event-city value
+  # Shrinkage weight n_races * var_venue / (n_races * var_venue + var_race + var_resid / field).
+  # from the RAW residual, not resid - race_shock: a venue whose races are
+  # reliably fast (a paced Diamond League track) carries that as venue signal,
+  # forecastable before the gun; the shrinkage denominator's var_race term is
+  # what accounts for race-level noise, so subtracting the shock first
+  # double-shrinks (v4 did, and left middle distance 1.2% behind the August file)
   vr <- c0[covered == TRUE & is.finite(resid) & is.finite(var_race_emp) & var_venue > 0 & !is.na(venue_city),
-           .(m = mean(resid - race_shock), n = .N), by = .(event_id, venue_city, race_key)]
-  vo <- vr[, .(n_races = .N, m = mean(m), nbar = mean(n)), by = .(event_id, venue_city)]
-  vo <- merge(vo, unique(c0[, .(event_id, var_venue, var_race_emp, var_resid_emp)]), by = "event_id")
-  vo[, venue_off := m * n_races * var_venue / (n_races * var_venue + var_race_emp + var_resid_emp / nbar)]
+           .(m = mean(resid), n = .N, family = family[1], venue_stadium = venue_stadium[1]),
+           by = .(event_id, venue_city, race_key)]
+  # one row per event, finite components only: an event with no empirical
+  # variance (too thin) must not turn its whole family's pooled variance NA --
+  # that zeroed every middle-distance and walk venue offset on the first run
+  evv <- unique(c0[is.finite(var_race_emp) & is.finite(var_resid_emp) & is.finite(var_venue),
+                   .(event_id, family, var_venue, var_race_emp, var_resid_emp)], by = "event_id")
+  shrink <- function(n_races, var_venue, var_race, var_resid, nbar) n_races * var_venue / (n_races * var_venue + var_race + var_resid / nbar)
+  fc <- vr[, .(n_races = .N, m = mean(m), nbar = mean(n)), by = .(family, venue_city)]
+  fv <- evv[, .(var_venue = mean(var_venue), var_race_emp = mean(var_race_emp), var_resid_emp = mean(var_resid_emp)), by = family]
+  stopifnot("a family lost its pooled variance components" = all(is.finite(unlist(fv[, -1]))))
+  fc <- merge(fc, fv, by = "family")
+  fc[, off_fc := m * shrink(n_races, var_venue, var_race_emp, var_resid_emp, nbar)]
+  ec <- vr[, .(n_races = .N, m = mean(m), nbar = mean(n)), by = .(event_id, family, venue_city)]
+  ec <- merge(ec, evv, by = c("event_id", "family"))
+  ec <- merge(ec, fc[, .(family, venue_city, off_fc)], by = c("family", "venue_city"))
+  ec[, off_ec := off_fc + shrink(n_races, var_venue, var_race_emp, var_resid_emp, nbar) * (m - off_fc)]
+  st <- vr[!is.na(venue_stadium) & nzchar(venue_stadium), .(n_races = .N, m = mean(m), nbar = mean(n)), by = .(event_id, family, venue_city, venue_stadium)]
+  st <- merge(st, evv, by = c("event_id", "family"))
+  st <- merge(st, ec[, .(event_id, venue_city, off_ec)], by = c("event_id", "venue_city"))
+  st[, off_st := off_ec + shrink(n_races, var_venue, var_race_emp, var_resid_emp, nbar) * (m - off_ec)]
   c0[, venue_off := NULL]
-  c0 <- merge(c0, vo[, .(event_id, venue_city, venue_off)], by = c("event_id", "venue_city"), all.x = TRUE, sort = FALSE)
-  c0[is.na(venue_off), venue_off := 0]
+  c0 <- merge(c0, ec[, .(event_id, venue_city, off_ec)], by = c("event_id", "venue_city"), all.x = TRUE, sort = FALSE)
+  c0 <- merge(c0, st[, .(event_id, venue_city, venue_stadium, off_st)], by = c("event_id", "venue_city", "venue_stadium"), all.x = TRUE, sort = FALSE)
+  c0[, venue_off := fcoalesce(off_st, off_ec, 0)]
+  c0[, c("off_ec", "off_st") := NULL]
+  vo <- ec[, .(event_id, venue_city, n_races, venue_off = off_ec)]
+  vs <- st[, .(event_id, venue_city, venue_stadium, n_races, venue_off = off_st)]
   c0[covered == TRUE & is.finite(var_race_emp),
      race_shock := race_shock_loo(resid - venue_off, var_race_emp[1], var_resid_emp[1]), by = race_key]
-  cat(sprintf("iter %d: sd(venue_off) %.5f over %s venues, sd(race_shock) %.5f, rows with an expectation %.1f%%\n",
-              it, sd(vo$venue_off), format(nrow(vo), big.mark=","), sd(c0[covered == TRUE]$race_shock),
-              100*mean(is.finite(c0[covered == TRUE]$resid))))
+  stopifnot("venue offsets contain NA" = !anyNA(vo$venue_off), !anyNA(vs$venue_off))
+  cat(sprintf("iter %d: sd(venue_off) %.5f over %s city cells, %s stadium cells, sd(race_shock) %.5f, rows with an expectation %.1f%%\n",
+              it, sd(vo$venue_off), format(nrow(vo), big.mark=","), format(nrow(vs), big.mark=","),
+              sd(c0[covered == TRUE]$race_shock), 100*mean(is.finite(c0[covered == TRUE]$resid))))
 }
 cat(sprintf("stage 2 in %.1fs\n", as.numeric(Sys.time()-t0, units="secs")))
 c0[, venue_adj := alt_adj + venue_off]
-write_parquet(vo[, .(event_id, venue_city, n_races, venue_off)], file.path(D, "conditions_params", "venue_offsets.parquet"))
-cat(sprintf("venue offsets: %s (event, venue) pairs written to conditions_params/venue_offsets.parquet\n", format(nrow(vo), big.mark=",")))
+write_parquet(vo, file.path(D, "conditions_params", "venue_offsets.parquet"))
+write_parquet(vs, file.path(D, "conditions_params", "stadium_offsets.parquet"))
+cat(sprintf("venue offsets: %s (event, city) and %s (event, city, stadium) cells written to conditions_params/\n",
+            format(nrow(vo), big.mark=","), format(nrow(vs), big.mark=",")))
 
 c0[, adj_perf := cleaned - venue_off - race_shock]
 c0[, adj_mark := perf_to_mark(adj_perf, orientation)]

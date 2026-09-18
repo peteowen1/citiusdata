@@ -19,6 +19,10 @@ dep <- d[, .(rated = .N, lead_n = round(max(n_eff[rk == 1]), 1)), by = .(event_i
 drop <- dep[rated < 10][order(rated)]
 cat("=== DROPPED: fewer than 10 rated athletes ===\n")
 print(drop[, .(discipline, sex, family, rated, lead_n)])
+# Nothing dropped is the PASSING case, and the merge below errors on an empty
+# table (rbindlist over zero events has no columns) -- which read as a guard
+# FAIL on 2026-09-19 for exactly the outcome the guard exists to confirm.
+if (nrow(drop) == 0L) { cat("no event is below ten rated athletes; nothing to explain\n"); quit(status = 0) }
 
 # how much RAW data does each dropped event actually have, before the T1/T2 cut?
 cat("\n=== what exists upstream for each ===\n")
