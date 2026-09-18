@@ -1151,20 +1151,26 @@ if (ADJ) {
   # And check the side that actually matters: if `d` carries two performances
   # under one key, they cannot be told apart and both would take the same
   # correction. d is not deduplicated until ~400 lines below this point.
-  .dupe_d <- nrow(d) - nrow(unique(d, by = .key))
-  if (.dupe_d > 0) {
-    # REAL, and found the moment this check was added: 41 of ~1.3M performances
-    # share a key, so the pair cannot be told apart and both take the same
-    # correction - taken from whichever mark survived the dedup above. At 0.003%
-    # that is not worth blocking a pipeline over, but it must be VISIBLE rather
-    # than absorbed, which is what the previous row-count assertion did.
+  .dupe_all <- nrow(d) - nrow(unique(d, by = .key))
+  # Only a key whose marks DIFFER can take the wrong correction. The same mark
+  # twice under one key (the store carries 2,065 of 2,441 duplicate keys that
+  # way as of 2026-09-18 -- one performance ingested under two race_codes, E and
+  # B, mostly marathon / half) gets the same correction either way, and the
+  # engine collapses it at its own unique() further down. Counting those here
+  # made this guard refuse EVERY run after the 2026-09-15 store rebuild (1,146
+  # rows against a 0.1% ceiling), on the live file included, when the number it
+  # exists to bound was ~355 rows. The double-ingest itself is a store defect,
+  # logged in NEXT-STEPS; this guard is not where it gets fixed.
+  .dupe_d <- d[, if (.N > 1L && data.table::uniqueN(mark) > 1L) .N else 0L, by = .key][, sum(V1)]
+  if (.dupe_all > 0) {
     cat(sprintf("[%s] WARNING: %s performance(s) share a (race_key, athlete_id,\n",
-                TAG, format(.dupe_d, big.mark = ",")))
-    cat("        event_id) key. Each pair takes a single shared correction, which\n")
-    cat("        may belong to the other mark. Logged as a data-quality item.\n")
+                TAG, format(.dupe_all, big.mark = ",")))
+    cat(sprintf("        event_id) key; %s of them with DIFFERENT marks, which take a\n",
+                format(.dupe_d, big.mark = ",")))
+    cat("        single shared correction that may belong to the other mark.\n")
   }
-  stopifnot("more than 0.1% of performances share a key - corrections cannot be
-matched to the right mark at that rate" = .dupe_d <= 0.001 * nrow(d))
+  stopifnot("more than 0.1% of performances share a key WITH DIFFERENT MARKS - corrections
+cannot be matched to the right mark at that rate" = .dupe_d <= 0.001 * nrow(d))
   # indoor_adj joined the file on 2026-08-20 and was NOT summed here for its
   # first run, so it was written and never read - the A/B came back byte-
   # identical on both arms, which is the only reason it was caught. A column
