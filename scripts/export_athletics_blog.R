@@ -343,6 +343,17 @@ RESULTS_META <- tryCatch(
 )
 if (!is.null(RESULTS_META)) RESULTS_META[, athlete_id := as.character(athlete_id)]
 
+# Altitude per race, for the live adjusted-marks columns below. alt_m lives
+# only in the store; one row per race_key, cached beside it (10s to build).
+alt_f <- file.path(D, "alt_by_race.parquet")
+if (!file.exists(alt_f) || file.mtime(alt_f) < max(file.mtime(list.files(file.path(D, "athletics_corpus_store"), recursive = TRUE, full.names = TRUE)))) {
+  .a <- setDT(open_dataset(file.path(D, "athletics_corpus_store")) |> dplyr::select(race_key, alt_m) |> dplyr::collect())
+  .a <- unique(.a[!is.na(race_key) & is.finite(alt_m)], by = "race_key")
+  write_parquet(.a, alt_f); rm(.a)
+}
+ALT_BY_RACE <- setDT(read_parquet(alt_f))
+cli::cli_alert_info("altitude lookup: {format(nrow(ALT_BY_RACE), big.mark = ',')} races.")
+
 for (i in seq_len(nrow(cal))) {
   mid <- cal$meet_id[i]
   # Deliberately NOT gated on wanted(): results are independent of which
@@ -393,10 +404,22 @@ for (i in seq_len(nrow(cal))) {
   # pages, so the two never disagree about which round was the medal race.
   # Semifinals match "final" as a substring, which is why the semi exclusion
   # has to come second.
+  # INPUTS FOR LIVE ADJUSTED MARKS (2026-09-19). The page computes the adjusted
+  # mark itself with conditions.js + athletics/conditions/<event>.json -- the
+  # same arithmetic as citius::adjust_conditions()/race_shock_loo(), parity
+  # 1e-15 -- so what ships here is every input, never the answer: perf and
+  # orientation, the conditions (wind, altitude, venue, stadium, indoor) and,
+  # joined after the cards are built, the card's own expected perf. A live
+  # harvest lacks the venue columns; they publish as NA and the page then
+  # applies wind and indoor only, and says so.
+  for (cc in c("perf", "orientation", "venue_city", "venue_stadium", "indoor", "race_key"))
+    if (!cc %in% names(sub)) sub[, (cc) := NA]
+  sub <- merge(sub, ALT_BY_RACE, by = "race_key", all.x = TRUE, sort = FALSE)
   res <- sub[, .(event_id, athlete_id = as.character(athlete_id), athlete = athlete_name,
                  place, mark, mark_string, wind, round,
                  is_final = grepl("final", round, ignore.case = TRUE) &
-                            !grepl("semi", round, ignore.case = TRUE))]
+                            !grepl("semi", round, ignore.case = TRUE),
+                 perf, orientation, alt_m, venue_city, venue_stadium, indoor = indoor %in% TRUE)]
   if (!is.null(RESULTS_META)) {
     res <- merge(res, RESULTS_META, by = "athlete_id", all.x = TRUE)
   } else {
@@ -604,6 +627,41 @@ for (mid in DL_MEETS) {
     "{mid}: {nrow(dcard)} athlete-event{?s} across {uniqueN(dcard$event_id)} event{?s}.")
 }
 
+# --- adjusted-marks inputs: expected perf onto every results file ------------
+# The card's ability IS the pre-race expectation the live race shock needs
+# (citius::race_shock: shrunk field mean of cleaned perf minus expected).
+# Joined here, after every card exists, so a Diamond League meet whose card is
+# built below the results loop still gets it.
+for (nm in grep("-results[.]parquet$", names(artefacts), value = TRUE)) {
+  pn <- sub("-results", "-predictions", nm)
+  if (is.null(artefacts[[pn]])) { artefacts[[nm]][, expected_perf := NA_real_]; next }
+  ex <- artefacts[[pn]][, .(event_id, athlete_id = as.character(athlete_id), expected_perf = ability)]
+  ex <- unique(ex, by = c("event_id", "athlete_id"))
+  n0 <- nrow(artefacts[[nm]])
+  artefacts[[nm]] <- merge(artefacts[[nm]], ex, by = c("event_id", "athlete_id"), all.x = TRUE, sort = FALSE)
+  stopifnot("expected_perf join fanned out" = nrow(artefacts[[nm]]) == n0)
+  cli::cli_alert_info("{nm}: expected_perf on {sum(is.finite(artefacts[[nm]]$expected_perf))}/{n0} rows.")
+}
+
+# --- conditions parameters, one file per event ---------------------------------
+# citiusdata/data/conditions_params/_all.json is 5 MB with the venue lookups;
+# a page shows one event, so it fetches athletics/conditions/<event_id>.json
+# (~60 KB). conditions.js itself lives in the site repo beside stats-table.js.
+COND_DIR <- file.path(D, "conditions_params")
+extra_files <- character(0)
+if (file.exists(file.path(COND_DIR, "_all.json"))) {
+  dir.create(file.path(BLOG, "conditions"), showWarnings = FALSE)
+  cond_all <- fromJSON(file.path(COND_DIR, "_all.json"), simplifyVector = FALSE)
+  for (ev in names(cond_all)) {
+    f <- file.path("conditions", paste0(ev, ".json"))
+    write_json(cond_all[[ev]], file.path(BLOG, f), auto_unbox = TRUE, digits = 8, null = "null")
+    extra_files <- c(extra_files, f)
+  }
+  cli::cli_alert_success("conditions parameters: {length(extra_files)} event file{?s}.")
+} else {
+  cli::cli_alert_warning("conditions_params/_all.json missing -- adjusted marks will not render; run export_conditions_params.R.")
+}
+
 for (nm in names(artefacts)) {
   write_parquet(artefacts[[nm]], file.path(BLOG, nm))
   cli::cli_alert_success("{nm}: {nrow(artefacts[[nm]])} row{?s}")
@@ -741,7 +799,7 @@ upload <- function(f) {
 if (nzchar(Sys.getenv("CITIUS_SKIP_UPLOAD"))) {
   cli::cli_alert_info("CITIUS_SKIP_UPLOAD set - wrote to {.file {BLOG}} only.")
 } else {
-  ok <- vapply(names(artefacts), upload, logical(1))
+  ok <- vapply(c(names(artefacts), extra_files), upload, logical(1))
   if (!all(ok)) {
     cli::cli_abort(c("{sum(!ok)} data upload{?s} failed - manifest NOT uploaded.",
                      i = "R2 still serves the previous run's manifest, so the section
