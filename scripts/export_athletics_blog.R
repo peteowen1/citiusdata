@@ -394,8 +394,22 @@ for (i in seq_len(nrow(cal))) {
         next
       }
       sub <- live[!is.na(event_id)]
+      # LIVE ROWS GET THE ADJUSTED-MARK INPUTS TOO (2026-09-19): perf from the
+      # mark and the registry's orientation, venue from the calendar row, altitude
+      # from the elevation table, indoor unknown (NA -> page applies no indoor
+      # term). Without these a meet in progress showed a Result and no Adjusted
+      # column until the corpus caught up the next morning.
+      sub[, athlete_id := as.character(athlete_id)]
+      sub <- merge(sub, orient[, .(event_id, orientation)], by = "event_id", all.x = TRUE, sort = FALSE)
+      sub[, perf := to_perf(mark, orientation)]
+      sub[, venue_city := cal$city[i]]
+      sub[, venue_stadium := NA_character_]
+      sub[, indoor := NA]
+      .ve <- tryCatch(setDT(read_parquet(file.path(D, "venue_elevation.parquet"), col_select = c("venue_city", "alt_m"))), error = function(e) NULL)
+      sub[, alt_m := if (!is.null(.ve) && cal$city[i] %chin% .ve$venue_city) .ve[venue_city == cal$city[i], alt_m][1] else NA_real_]
+      sub[, race_key := NA_character_]
       cli::cli_alert_warning(
-        "{mid}: publishing {nrow(sub)} row{?s} from the LIVE harvest {.file {basename(live_f)}} ({format(file.mtime(live_f))}) -- not yet in the corpus.")
+        "{mid}: publishing {nrow(sub)} row{?s} from the LIVE harvest {.file {basename(live_f)}} ({format(file.mtime(live_f))}) -- not yet in the corpus; venue {cal$city[i]}, altitude {if (is.finite(sub$alt_m[1])) paste0(round(sub$alt_m[1]), ' m') else 'unknown'}.")
     }
   }
   if (!nrow(sub)) { cli::cli_alert_info("{mid}: no harvested results yet -- results file skipped."); next }
