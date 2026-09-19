@@ -111,7 +111,7 @@ c0[, cleaned := perf - wind_adj - venue_adj - indoor_adj]
 # 1.36% sd on the marathon. Written into venue_adj (= alt_adj + venue_off) so
 # form_ratings.R's wind+venue+indoor sum carries it unchanged.
 c0[, season := as.integer(format(as.Date(date), "%Y"))]
-c0[, `:=`(race_shock = 0, venue_off = 0, alt_adj = venue_adj)]
+c0[, `:=`(race_shock = 0, race_shock_loo = 0, venue_off = 0, alt_adj = venue_adj)]
 vv <- rbindlist(lapply(params, function(p) data.table(event_id = p$event_id, var_venue = if (is.null(p$var_venue)) 0 else p$var_venue)))
 c0 <- merge(c0, vv, by = "event_id", all.x = TRUE)
 t0 <- Sys.time()
@@ -199,8 +199,14 @@ for (it in seq_len(N_ITER)) {
   c0[, c("off_ec", "off_st") := NULL]
   vo <- ec[, .(event_id, venue_city, n_races, venue_off = off_ec)]
   vs <- st[, .(event_id, venue_city, venue_stadium, n_races, venue_off = off_st)]
+  # race_shock is ONE number per race -- the field's shared surprise is a
+  # property of the race, and that is what the table stores and the site
+  # shows. The leave-one-out variant (each athlete's shock from the others
+  # only) exists so the validation below cannot credit an athlete's own
+  # surprise to the day; it is never stored. Decided with Pete 2026-09-19.
   c0[covered == TRUE & is.finite(var_race_emp),
-     race_shock := race_shock_loo(resid - venue_off, var_race_emp[1], var_resid_emp[1]), by = race_key]
+     `:=`(race_shock = race_shock(resid - venue_off, var_race_emp[1], var_resid_emp[1]),
+          race_shock_loo = race_shock_loo(resid - venue_off, var_race_emp[1], var_resid_emp[1])), by = race_key]
   stopifnot("venue offsets contain NA" = !anyNA(vo$venue_off), !anyNA(vs$venue_off))
   cat(sprintf("iter %d: sd(venue_off) %.5f over %s city cells, %s stadium cells, sd(race_shock) %.5f, rows with an expectation %.1f%%\n",
               it, sd(vo$venue_off), format(nrow(vo), big.mark=","), format(nrow(vs), big.mark=","),
@@ -226,7 +232,11 @@ c0[, adj_delta := adj_mark - mark]
 # ---- does each stage help? within-athlete scatter, 4+ marks -----------------
 cat("\n=== within-athlete sd of perf (log units), athlete-events with 4+ covered marks; lower is better ===\n")
 c0[, n_ath := 0L][covered == TRUE, n_ath := .N, by = .(athlete_id, event_id)]
-sc <- c0[covered == TRUE & n_ath >= 4, .(sd_raw = sd(perf), sd_s1 = sd(cleaned), sd_sv = sd(cleaned - venue_off), sd_s2 = sd(adj_perf)),
+# the shock stage is scored with the LEAVE-ONE-OUT shock (an athlete's own
+# surprise never counts as evidence the day was fast); the stored adj_perf
+# uses the race-level shock, which would flatter this number by ~40%
+sc <- c0[covered == TRUE & n_ath >= 4, .(sd_raw = sd(perf), sd_s1 = sd(cleaned), sd_sv = sd(cleaned - venue_off),
+                                         sd_s2 = sd(cleaned - venue_off - race_shock_loo)),
          by = .(athlete_id, event_id, family)]
 sc <- sc[is.finite(sd_raw) & is.finite(sd_s2)]
 res <- sc[, .(athlete_events = .N, sd_raw = round(mean(sd_raw), 5),

@@ -662,6 +662,43 @@ if (file.exists(file.path(COND_DIR, "_all.json"))) {
   cli::cli_alert_warning("conditions_params/_all.json missing -- adjusted marks will not render; run export_conditions_params.R.")
 }
 
+# --- athlete history, for athletics/athlete.qmd -------------------------------
+# One row per race the form engine forecast (forecast_marks_<tag>.parquet):
+# what they ran, what it was worth (adjusted), what we expected before the gun,
+# and the conditions. Scoped to athletes on any published card or results
+# file (3,041 on 2026-09-19; 113,707 rows, 4.7 MB as one file), then split
+# into 64 buckets by athlete id so a page fetches ~75 KB, not 5 MB. The page
+# computes the same bucket: Number(id) % 64.
+FM_F <- file.path(D, sprintf("forecast_marks_%s.parquet", TAG))
+if (file.exists(FM_F)) {
+  card_ids <- unique(unlist(lapply(c(grep("-(predictions|results)[.]parquet$", names(artefacts), value = TRUE)),
+                                   function(nm) as.character(artefacts[[nm]]$athlete_id))))
+  # predictions first: the card carries "Noah Lyles", the results feed "Noah
+  # LYLES", and unique() keeps the first spelling it meets
+  names_dt <- unique(rbindlist(lapply(c(grep("-predictions[.]parquet$", names(artefacts), value = TRUE),
+                                        grep("-results[.]parquet$", names(artefacts), value = TRUE)), function(nm) {
+    a <- artefacts[[nm]]; data.table(athlete_id = as.character(a$athlete_id), athlete = a$athlete, nation = if ("nation" %in% names(a)) a$nation else NA_character_)
+  }))[!is.na(athlete)], by = "athlete_id")
+  fm <- setDT(read_parquet(FM_F, col_select = c("athlete_id", "event_id", "family", "date", "comp_name", "venue_city", "place",
+                                                "mark", "adj_mark", "forecast_mark", "error", "wind", "alt_m", "indoor",
+                                                "wind_adj", "venue_adj", "indoor_adj", "race_shock", "seen")))
+  fm[, athlete_id := as.character(athlete_id)]
+  fm <- fm[athlete_id %in% card_ids & is.finite(mark)]
+  fm <- merge(fm, names_dt, by = "athlete_id", all.x = TRUE, sort = FALSE)
+  fm[, bucket := suppressWarnings(as.integer(athlete_id)) %% 64L]
+  fm[is.na(bucket), bucket := 0L]
+  fm[, generated_at := NOW]
+  dir.create(file.path(BLOG, "athletes"), showWarnings = FALSE)
+  for (b in sort(unique(fm$bucket))) {
+    f <- file.path("athletes", sprintf("%02d.parquet", b))
+    write_parquet(fm[bucket == b][order(athlete_id, event_id, date)], file.path(BLOG, f))
+    extra_files <- c(extra_files, f)
+  }
+  cli::cli_alert_success("athlete history: {format(nrow(fm), big.mark = ',')} rows for {uniqueN(fm$athlete_id)} athletes in {uniqueN(fm$bucket)} buckets (from {basename(FM_F)}).")
+} else {
+  cli::cli_alert_warning("{basename(FM_F)} missing -- athlete pages will show no history; run build_forecast_marks.R.")
+}
+
 for (nm in names(artefacts)) {
   write_parquet(artefacts[[nm]], file.path(BLOG, nm))
   cli::cli_alert_success("{nm}: {nrow(artefacts[[nm]])} row{?s}")
@@ -783,15 +820,28 @@ if (length(dl_blocks)) manifest <- c(manifest, dl_blocks[order(names(dl_blocks))
 write_json(manifest, file.path(BLOG, "athletics-manifest.json"),
            auto_unbox = TRUE, pretty = TRUE, na = "null")
 
+# UPLOAD-IF-CHANGED (2026-09-19). Every artefact was re-sent on every run: 116
+# objects, ~4 min, three runs a day. A local memo of the md5 last uploaded per
+# key lets an unchanged file skip the put. Honest limits: parquets carry
+# `generated_at`, so they differ every run by design and always upload -- the
+# saving is the 83 conditions/*.json (only change on a refit) and any static
+# file. CITIUS_FORCE_UPLOAD=1 re-sends everything. The memo is written only
+# after a successful put, so a failed upload is retried next run.
+MEMO_F <- file.path(BLOG, ".uploaded_md5.json")
+MEMO <- if (file.exists(MEMO_F)) fromJSON(MEMO_F) else list()
+FORCE <- nzchar(Sys.getenv("CITIUS_FORCE_UPLOAD"))
+n_skipped <- 0L
 upload <- function(f) {
   key <- sprintf("%s/%s/%s", BUCKET, PREFIX, f)
+  md5 <- unname(tools::md5sum(file.path(BLOG, f)))
+  if (!FORCE && identical(MEMO[[key]], md5)) { n_skipped <<- n_skipped + 1L; return(TRUE) }
   # shQuote is not optional: the cache-control value contains a space and
   # system2() does no quoting on Windows, so it would arrive as two arguments.
   args <- c("r2", "object", "put", shQuote(key), "--file", shQuote(file.path(BLOG, f)),
             "--cache-control", shQuote("public, max-age=300"), "--remote")
   st <- suppressWarnings(system2("wrangler", args, stdout = TRUE, stderr = TRUE))
   ok <- is.null(attr(st, "status")) || attr(st, "status") == 0
-  if (ok) cli::cli_alert_success("uploaded {key}")
+  if (ok) { cli::cli_alert_success("uploaded {key}"); MEMO[[key]] <<- md5 }
   else cli::cli_alert_danger("FAILED {key}: {paste(tail(st, 3), collapse = ' ')}")
   ok
 }
@@ -806,4 +856,6 @@ if (nzchar(Sys.getenv("CITIUS_SKIP_UPLOAD"))) {
                           stays self-consistent. Re-run once the cause is fixed."))
   }
   if (!upload("athletics-manifest.json")) cli::cli_abort("Manifest upload failed.")
+  write_json(MEMO, MEMO_F, auto_unbox = TRUE)
+  cli::cli_alert_info("uploads: {length(artefacts) + length(extra_files) + 1L - n_skipped} sent, {n_skipped} unchanged and skipped.")
 }
