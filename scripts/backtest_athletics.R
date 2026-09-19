@@ -430,6 +430,23 @@ if (nzchar(ADJ_MARKS_FILE)) {
   ADJ_MARKS <- data.table::setDT(arrow::read_parquet(.af, col_select = c("race_key", "athlete_id", "event_id", "wind_adj", "venue_adj", "indoor_adj")))
   ADJ_MARKS[, athlete_id := as.character(athlete_id)]
   ADJ_MARKS <- unique(ADJ_MARKS, by = c("race_key", "athlete_id", "event_id"))
+  # CITIUS_BT_ADJ_SKIP: families the correction must NOT touch, comma-separated
+  # (default "road"). First run of this arm, 2026-09-19: marks worse pooled
+  # (+0.034pp, t = 5.1) with road carrying it (+0.068pp, t = 5.5; >2200m +1.17pp)
+  # while every other family was flat or better and concordance rose +0.31pp
+  # (t = 2.3). Same finding as the altitude review: a course's point
+  # elevation misrepresents a climb, so road stays on raw marks, as the
+  # deployed calibration already does. Filtered HERE, at top level, so the
+  # workers need nothing new exported.
+  .skip <- trimws(strsplit(Sys.getenv("CITIUS_BT_ADJ_SKIP", "road"), ",")[[1]])
+  .skip <- .skip[nzchar(.skip)]
+  if (length(.skip)) {
+    .fam <- data.table::as.data.table(citius_events())[, .(event_id, family)]
+    .skip_ev <- .fam[family %chin% .skip, event_id]
+    .n_before <- nrow(ADJ_MARKS)
+    ADJ_MARKS <- ADJ_MARKS[!event_id %chin% .skip_ev]
+    cli::cli_alert_info("Adjusted-marks arm: skipping {paste(.skip, collapse = ', ')} ({format(.n_before - nrow(ADJ_MARKS), big.mark = ',')} rows left on raw marks).")
+  }
   ADJ_MARKS[, adj_total := data.table::fifelse(is.finite(wind_adj), wind_adj, 0) + data.table::fifelse(is.finite(venue_adj), venue_adj, 0) + data.table::fifelse(is.finite(indoor_adj), indoor_adj, 0)]
   ADJ_MARKS <- ADJ_MARKS[, .(race_key, athlete_id, event_id, adj_total)]
   data.table::setkey(ADJ_MARKS, race_key, athlete_id, event_id)
@@ -1119,6 +1136,7 @@ arm_fingerprint <- list(
   adjust_context = ADJUST_CONTEXT, adjust_race = ADJUST_RACE,
   use_meet_tier = USE_MEET_TIER,
   adj_marks = ADJ_MARKS_FILE, adj_marks_md5 = if (nzchar(ADJ_MARKS_FILE)) md5_of(ADJ_MARKS_FILE) else "",
+  adj_skip = if (nzchar(ADJ_MARKS_FILE)) Sys.getenv("CITIUS_BT_ADJ_SKIP", "road") else "",
   tier_filter = TIER_FILTER, elite_history = ELITE_HISTORY,
   # Without this, a T1+T2-trained arm and its full-history control share a
   # cache: the second one read back the first's predictions and the A/B came
