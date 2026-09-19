@@ -68,7 +68,7 @@ function Step($n, $label, $script, $envs, $expect) {
   "--- step $n $label done in $mins min -> $expect ---" | Out-File -Append -Encoding utf8 $LOG
 }
 
-Step 0 "base calibrate (scored competitions removed)" "citiusdata\scripts\build_calibration_wac_coast_0904.R" `
+Step 0 $(if ($EXCL -eq "1") { "base calibrate (scored competitions removed)" } else { "base calibrate (REFIT control, nothing removed)" }) "citiusdata\scripts\build_calibration_wac_coast_0904.R" `
   $X0 $BASE
 Step 1 "context condition_sd" "citiusdata\scripts\build_calibration_condsd_context.R" `
   @{ CITIUS_CTXSD_SRC = $BASE; CITIUS_CTXSD_OUT = $CTXSD } $CTXSD
