@@ -40,6 +40,19 @@ d <- rbindlist(lapply(trimws(strsplit(ROWS, ",")[[1]]), function(r) fread(file.p
 req <- c("family", "race_key", "resid", "race_mean_resid", "indiv_resid", "sigma", "ability_se", "cond_sd", "tail_df", "form_sd")
 stopifnot(all(req %in% names(d)))
 d <- d[is.finite(resid) & is.finite(sigma) & is.finite(cond_sd)]
+# NO-LEAK HOOK (2026-09-19). CITIUS_EXCLUDE_SCORED names a backtest artefact;
+# every PIT row from a race that backtest scores is dropped, so the scales are
+# not fitted on the residuals of the races they are later judged on. The PIT
+# residuals themselves were still produced with a calibration that saw those
+# races (a second-order leak, accepted and recorded in the provenance).
+EXCL <- Sys.getenv("CITIUS_EXCLUDE_SCORED", "")
+if (nzchar(EXCL)) {
+  ids <- unique(as.character(as.data.table(readRDS(file.path(OUT, EXCL))$outcomes)$race_id))
+  stopifnot("no scored races found in the exclusion artefact" = length(ids) > 0)
+  n0 <- nrow(d); d <- d[!as.character(race_key) %chin% ids]
+  say("NO-LEAK: dropped %s of %s PIT rows from %s scored races named by %s",
+      format(n0 - nrow(d), big.mark = ","), format(n0, big.mark = ","), format(length(ids), big.mark = ","), EXCL)
+}
 d[, n_field := .N, by = race_key]
 tvar <- function(df) ifelse(is.finite(df) & df > 2, df / (df - 2), 1)
 # The mark distribution is drawn from sigma_marks when the ability table carries
@@ -72,7 +85,11 @@ print(sc[, .(family, n, n_races, k_shared_raw = round(sqrt(clamp(k_shared2_raw))
 cal <- readRDS(file.path(OUT, SRC))
 stopifnot(inherits(cal, "citius_calibration"))
 cal$spread_scales <- sc[, .(family, k_shared, k_indiv, n_races, n_rows = n)]
-cal$provenance$spread_scales <- list(rows = ROWS, src = SRC, pseudo_races = M, built = Sys.time())
+cal$provenance$spread_scales <- list(rows = ROWS, src = SRC, pseudo_races = M, built = Sys.time(),
+                                     excluded_scored = if (nzchar(EXCL)) EXCL else NULL)
 saveRDS(cal, file.path(OUT, DST))
-fwrite(cal$spread_scales, file.path(OUT, "spread_scales.csv"))
-say("wrote %s (spread_scales on %d families) and spread_scales.csv", DST, nrow(sc))
+# The CSV is a record beside the calibration, so it takes the calibration's
+# name: an arm run (no-leak chain) must not overwrite the deployed one.
+CSV <- if (DST == "calibration_corpus_wac_coast_0904_ctxsd_scaled.rds") "spread_scales.csv" else sub("\\.rds$", "_spread_scales.csv", DST)
+fwrite(cal$spread_scales, file.path(OUT, CSV))
+say("wrote %s (spread_scales on %d families) and %s", DST, nrow(sc), CSV)
