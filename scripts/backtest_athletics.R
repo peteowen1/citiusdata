@@ -412,6 +412,30 @@ if (COND_CONTEXT) cli::cli_alert_info(
 # per-result `tier`, which varies within a single meet and labels the Diamond
 # League "low". Off by default so it is measured as its own arm.
 USE_MEET_TIER <- nzchar(Sys.getenv("CITIUS_BT_MEET_TIER", ""))
+# ADJUSTED-MARKS HISTORY (arm, 2026-09-19). CITIUS_BT_ADJ_MARKS=<file in
+# data/> joins that adjusted_marks build onto every per-meet history read and
+# replaces perf with perf - wind_adj - venue_adj - indoor_adj, so
+# estimate_ability() sees marks cleaned of conditions (the conditions model,
+# docs/reviews/adjusted-marks-arms-2026-09-19.md). The calibration's own
+# altitude term is switched OFF when this is on -- the file's venue term
+# carries altitude, and two altitude corrections would double-count (the
+# "one level lever at a time" rule). Race shock is NOT taken from the file:
+# calibrate()'s c_r stays, so the two never overlap. Judged on marks +
+# concordance, never Brier alone (citiusverse/CLAUDE.md).
+ADJ_MARKS_FILE <- Sys.getenv("CITIUS_BT_ADJ_MARKS", "")
+ADJ_MARKS <- NULL
+if (nzchar(ADJ_MARKS_FILE)) {
+  .af <- file.path(OUT, ADJ_MARKS_FILE)
+  if (!file.exists(.af)) cli::cli_abort("CITIUS_BT_ADJ_MARKS names {.file {.af}}, which does not exist.")
+  ADJ_MARKS <- data.table::setDT(arrow::read_parquet(.af, col_select = c("race_key", "athlete_id", "event_id", "wind_adj", "venue_adj", "indoor_adj")))
+  ADJ_MARKS[, athlete_id := as.character(athlete_id)]
+  ADJ_MARKS <- unique(ADJ_MARKS, by = c("race_key", "athlete_id", "event_id"))
+  ADJ_MARKS[, adj_total := data.table::fifelse(is.finite(wind_adj), wind_adj, 0) + data.table::fifelse(is.finite(venue_adj), venue_adj, 0) + data.table::fifelse(is.finite(indoor_adj), indoor_adj, 0)]
+  ADJ_MARKS <- ADJ_MARKS[, .(race_key, athlete_id, event_id, adj_total)]
+  data.table::setkey(ADJ_MARKS, race_key, athlete_id, event_id)
+  cli::cli_alert_info("Adjusted-marks arm: {format(nrow(ADJ_MARKS), big.mark = ',')} corrections from {.file {ADJ_MARKS_FILE}}; the calibration's altitude term will be switched off.")
+  if (!is.null(calibration$altitude)) { calibration$altitude <- NULL; cli::cli_alert_info("calibration$altitude removed for this arm (the adjusted marks carry altitude).") }
+}
 
 # Cross-event ability transfer (transfer_neighbour_ability()), 2026-09-13.
 # estimate_ability() groups everything by = .(athlete_id, event_id), so an
@@ -1094,6 +1118,7 @@ arm_fingerprint <- list(
   sigma_parts = paste(SIGMA_PARTS, collapse = ","),
   adjust_context = ADJUST_CONTEXT, adjust_race = ADJUST_RACE,
   use_meet_tier = USE_MEET_TIER,
+  adj_marks = ADJ_MARKS_FILE, adj_marks_md5 = if (nzchar(ADJ_MARKS_FILE)) md5_of(ADJ_MARKS_FILE) else "",
   tier_filter = TIER_FILTER, elite_history = ELITE_HISTORY,
   # Without this, a T1+T2-trained arm and its full-history control share a
   # cache: the second one read back the first's predictions and the A/B came
@@ -1542,6 +1567,19 @@ run_meet <- function(i) {
             event_id %in% meet_events]
   })
   if (!is.null(dev_ids)) past <- past[as.character(athlete_id) %in% dev_ids]
+  if (!is.null(ADJ_MARKS)) {
+    # cleaned marks for the history; the meet being forecast is untouched
+    # (its outcome is scored as run). Coverage is printed per meet so a broken
+    # join cannot read as a null result.
+    .n0 <- nrow(past)
+    past[, athlete_id := as.character(athlete_id)]
+    past <- ADJ_MARKS[past, on = c("race_key", "athlete_id", "event_id")]
+    stopifnot("adjusted-marks join changed the history row count" = nrow(past) == .n0)
+    .hit <- is.finite(past$adj_total) & past$adj_total != 0
+    past[.hit, perf := perf - adj_total]
+    past[, adj_total := NULL]
+    if (mean(.hit) < 0.5) cli::cli_warn("adjusted marks reached only {round(100 * mean(.hit), 1)}% of this meet's history rows.")
+  }
   # Training-tier restriction. Applied to the HISTORY only -- the meet being
   # forecast is chosen by TIER_FILTER and is untouched by this.
   if (length(TRAIN_TIERS)) {
