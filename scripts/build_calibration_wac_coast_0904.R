@@ -79,5 +79,4 @@ WAC_OUT <- Sys.getenv("CITIUS_WAC_OUT", if (nzchar(EXCL)) "calibration_corpus_wa
 cal$provenance$excluded_scored <- if (nzchar(EXCL)) list(from = EXCL, competitions = length(scored_comp)) else NULL
 saveRDS(cal, file.path(OUT, WAC_OUT))
 say(sprintf("wrote %s", WAC_OUT))
-say(sprintf("wrote calibration_corpus_wac_coast_0904.rds, total %.1f min",
-            as.numeric(difftime(Sys.time(), t0, units = "mins"))))
+say(sprintf("total %.1f min", as.numeric(difftime(Sys.time(), t0, units = "mins"))))
