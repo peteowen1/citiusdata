@@ -52,13 +52,43 @@ f[, forecast_mark := perf_to_mark(forecast_perf, orientation)]
 f[, adj_mark := perf_to_mark(adj_perf, orientation)]
 f[, race_shock := shock]
 setnames(f, "place.x", "place", skip_absent = TRUE)
-out <- f[, .(race_key, athlete_id, event_id, family, sex, date, comp_name, venue_city, place,
-             forecast_mark, mark, adj_mark, forecast_perf, adj_perf, error,
+
+# ROUND-AWARE FORECAST (2026-09-19). The engine's r_pre is a typical-mark
+# forecast; athletes cruise in heats and the strongest cruise most
+# (diagnostics/heats_cruise_factor.R: heats MAE 1.703 -> 1.597 with a
+# round x family x strength offset fitted on 2020-24, and it beats last-5
+# on heats, 1.503 vs 1.590). The offsets and each event's strength-quintile
+# edges live in conditions_params/round_offsets*.parquet; a missing cell
+# means no offset. forecast_perf stays the raw engine forecast; the round-
+# aware one is what a page or a scorer should compare a heat against.
+f[, round := fifelse(rc %chin% c("heat", "semi", "final"), rc, "other")]
+ro_f <- file.path(D, "conditions_params", "round_offsets.parquet")
+qb_f <- file.path(D, "conditions_params", "round_offsets_quintiles.parquet")
+f[, cruise := 0]
+if (file.exists(ro_f) && file.exists(qb_f)) {
+  ro <- setDT(read_parquet(ro_f)); qb <- setDT(read_parquet(qb_f))
+  f <- merge(f, qb, by = "event_id", all.x = TRUE, sort = FALSE)
+  f[, strength_q := 1L + (r_pre > q1) + (r_pre > q2) + (r_pre > q3) + (r_pre > q4)]
+  f[is.na(strength_q), strength_q := 3L]
+  f[, c("q1", "q2", "q3", "q4") := NULL]
+  f <- merge(f, ro[, .(family, round, strength_q, cruise_cell = cruise)], by = c("family", "round", "strength_q"), all.x = TRUE, sort = FALSE)
+  f[is.finite(cruise_cell), cruise := cruise_cell]; f[, cruise_cell := NULL]
+  cat(sprintf("round offsets applied on %.1f%% of rows (heats %.1f%%)\n", 100*mean(f$cruise != 0), 100*mean(f[round == "heat"]$cruise != 0)))
+} else cat("round_offsets not found -- forecast_round equals the raw forecast\n")
+f[, forecast_round_perf := forecast_perf + cruise]
+f[, forecast_round_mark := perf_to_mark(forecast_round_perf, orientation)]
+f[, error_round := adj_perf - forecast_round_perf]
+
+out <- f[, .(race_key, athlete_id, event_id, family, sex, date, comp_name, venue_city, place, round,
+             forecast_mark, forecast_round_mark, mark, adj_mark, forecast_perf, forecast_round_perf, adj_perf, error, error_round,
              wind, alt_m, indoor, wind_adj, venue_adj, indoor_adj, race_shock,
              n_eff, v_pre, k, seen)]
 
 cat("\nforecast error by family (perf-log units x100 = % of mark; sd lower is better, mean near 0 = unbiased):\n")
 print(out[seen == TRUE & is.finite(error), .(rows = .N, mean_pct = round(100*mean(error), 3), sd_pct = round(100*sd(error), 3)), by = family][order(sd_pct)])
+cat("\nMAE by round, raw forecast vs round-aware (% of mark, lower is better; 2025-26 only, the offsets' out-of-sample window):\n")
+print(out[seen == TRUE & is.finite(error) & date >= as.Date("2025-01-01"),
+          .(rows = .N, mae_raw = round(100*mean(abs(error)), 3), mae_round = round(100*mean(abs(error_round)), 3)), by = round][order(round)])
 cat(sprintf("\nwithin-race error variance (sigma_e^2 for live shrinkage), pooled: %.3e\n",
             out[seen == TRUE & is.finite(error), var(error - mean(error)), by = race_key][, mean(V1, na.rm = TRUE)]))
 

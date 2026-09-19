@@ -10,11 +10,17 @@ suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
 suppressMessages({ library(arrow); library(data.table) })
 D <- here::here("citiusdata", "data"); TAG <- Sys.getenv("FORM_TAG", "final")
 h <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG)),
-                        col_select = c("race_key", "date", "event_id", "athlete_id", "r_pre", "perf", "rc", "seen", "n_eff")))
+                        col_select = c("race_key", "date", "event_id", "athlete_id", "r_pre", "perf", "shock", "rc", "seen", "n_eff")))
 reg <- as.data.table(citius_events())[, .(event_id, family)]
 h <- merge(h, reg, by = "event_id", all.x = TRUE)
 s <- h[seen == TRUE & is.finite(r_pre) & is.finite(perf)]
-s[, err := perf - r_pre]                       # + = better than forecast
+# TARGET: "adj" (default) fits the cruise net of the race shock -- the target
+# forecast_marks scores against (adj_perf - r_pre); "raw" is perf - r_pre. The
+# first persisted offsets were fitted raw and made heats WORSE when applied to
+# the shock-removed table (1.448 -> 1.493): a shared slow heat is shock, not
+# cruise, and was being removed twice.
+TARGET <- Sys.getenv("TARGET", "adj")
+s[, err := if (TARGET == "adj") perf - shock - r_pre else perf - r_pre]   # + = better than forecast
 s[, round := fifelse(rc %chin% c("heat", "semi", "final"), rc, "other")]
 fit <- s[date < as.Date("2025-01-01")]; test <- s[date >= as.Date("2025-01-01")]
 

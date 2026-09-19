@@ -693,9 +693,16 @@ if (file.exists(FM_F)) {
                                         grep("-results[.]parquet$", names(artefacts), value = TRUE)), function(nm) {
     a <- artefacts[[nm]]; data.table(athlete_id = as.character(a$athlete_id), athlete = a$athlete, nation = if ("nation" %in% names(a)) a$nation else NA_character_)
   }))[!is.na(athlete)], by = "athlete_id")
-  fm <- setDT(read_parquet(FM_F, col_select = c("athlete_id", "event_id", "family", "date", "comp_name", "venue_city", "place",
-                                                "mark", "adj_mark", "forecast_mark", "error", "wind", "alt_m", "indoor",
-                                                "wind_adj", "venue_adj", "indoor_adj", "race_shock", "seen")))
+  # forecast_round_mark / error_round (2026-09-19): the round-aware forecast --
+  # r_pre plus the fitted cruise offset for heats and semis -- is what a heat
+  # result should be judged against; tolerated as absent so an older
+  # forecast_marks file still publishes.
+  .fm_cols <- c("athlete_id", "event_id", "family", "date", "comp_name", "venue_city", "place", "round",
+                "mark", "adj_mark", "forecast_mark", "forecast_round_mark", "error", "error_round", "wind", "alt_m", "indoor",
+                "wind_adj", "venue_adj", "indoor_adj", "race_shock", "seen")
+  .fm_have <- names(arrow::open_dataset(FM_F))
+  fm <- setDT(read_parquet(FM_F, col_select = intersect(.fm_cols, .fm_have)))
+  for (cc in setdiff(.fm_cols, names(fm))) fm[, (cc) := if (cc == "round") NA_character_ else NA_real_]
   fm[, athlete_id := as.character(athlete_id)]
   fm <- fm[athlete_id %in% card_ids & is.finite(mark)]
   fm <- merge(fm, names_dt, by = "athlete_id", all.x = TRUE, sort = FALSE)
