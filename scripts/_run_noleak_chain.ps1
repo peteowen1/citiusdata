@@ -25,21 +25,31 @@
 #      CITIUS_NL_FROM (step number to resume from, default 0), CITIUS_NL_WORKERS (1)
 $ErrorActionPreference = "Continue"
 Set-Location "C:\dev\citiusverse"
-$LOG = "C:\dev\citiusverse\citiusdata\noleak_chain_log.txt"
+# CITIUS_NL_TAG names the chain's artefacts (default "noleak"); CITIUS_NL_EXCLUDE=0
+# runs the SAME chain on the SAME corpus with nothing excluded -- the refit
+# control. Needed because the deployed calibration was fitted on the 09-04
+# corpus (32,089 meets) and a refit today sees 33,372: deployed vs no-leak
+# confounds corpus vintage with the exclusion, refit vs no-leak does not.
+$TAG    = $(if ($env:CITIUS_NL_TAG)    { $env:CITIUS_NL_TAG }    else { "noleak" })
+$EXCL   = $(if ($env:CITIUS_NL_EXCLUDE) { $env:CITIUS_NL_EXCLUDE } else { "1" })
+$LOG = "C:\dev\citiusverse\citiusdata\${TAG}_chain_log.txt"
 $D   = "C:\dev\citiusverse\citiusdata\data"
-"=== START $(Get-Date -Format s) ===" | Out-File -Append -Encoding utf8 $LOG
+"=== START $(Get-Date -Format s) (tag $TAG, exclude $EXCL) ===" | Out-File -Append -Encoding utf8 $LOG
 $POOL   = $(if ($env:CITIUS_NL_POOL)   { $env:CITIUS_NL_POOL }   else { "backtest_ss_ctrl.rds" })
 $TARGET = $(if ($env:CITIUS_NL_TARGET) { $env:CITIUS_NL_TARGET } else { "60" })
 $FROM   = [int]$(if ($env:CITIUS_NL_FROM) { $env:CITIUS_NL_FROM } else { "0" })
 if (-not (Test-Path (Join-Path $D $POOL))) { "!!! pool artefact $POOL missing" | Out-File -Append $LOG; exit 1 }
 
-$BASE   = "calibration_corpus_wac_coast_0904_noleak.rds"
-$CTXSD  = "calibration_corpus_wac_coast_0904_noleak_ctxsd.rds"
-$SCALED = "calibration_corpus_wac_coast_0904_noleak_ctxsd_scaled_all.rds"
-$EB     = "calibration_race_eb_perevent_noleak.rds"
-$PERS   = "calibration_race_eb_perevent_noleak_persist5.rds"
-$FULL2  = "calibration_corpus_wac_coast_0904_full2_noleak.rds"
-$FINAL  = "calibration_corpus_wac_coast_0904_full2_altitude_banded_noroad_noleak.rds"
+$BASE   = "calibration_corpus_wac_coast_0904_$TAG.rds"
+$CTXSD  = "calibration_corpus_wac_coast_0904_${TAG}_ctxsd.rds"
+$SCALED = "calibration_corpus_wac_coast_0904_${TAG}_ctxsd_scaled_all.rds"
+$EB     = "calibration_race_eb_perevent_$TAG.rds"
+$PERS   = "calibration_race_eb_perevent_${TAG}_persist5.rds"
+$FULL2  = "calibration_corpus_wac_coast_0904_full2_$TAG.rds"
+$FINAL  = "calibration_corpus_wac_coast_0904_full2_altitude_banded_noroad_$TAG.rds"
+$X0 = @{ CITIUS_WAC_OUT = $BASE }
+$X2 = @{ CITIUS_SCALES_SRC = $CTXSD; CITIUS_SCALES_OUT = $SCALED }
+if ($EXCL -eq "1") { $X0.CITIUS_EXCLUDE_SCORED = $POOL; $X2.CITIUS_EXCLUDE_SCORED = $POOL }
 
 function Step($n, $label, $script, $envs, $expect) {
   if ($n -lt $FROM) { "--- step $n $label SKIPPED (resume from $FROM)" | Out-File -Append $LOG; return }
@@ -50,7 +60,7 @@ function Step($n, $label, $script, $envs, $expect) {
   foreach ($k in $envs.Keys) { Remove-Item "Env:\$k" -ErrorAction SilentlyContinue }
   $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
   $csv  = Join-Path $env:USERPROFILE ".claude\runtime-log.csv"
-  "$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')),$([int]((Get-Date) - $t0).TotalSeconds),citiusdata,PowerShell,chain,noleak step $n $label" | Out-File -Append -Encoding utf8 $csv
+  "$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')),$([int]((Get-Date) - $t0).TotalSeconds),citiusdata,PowerShell,chain,$TAG step $n $label" | Out-File -Append -Encoding utf8 $csv
   $f = Join-Path $D $expect
   if (-not (Test-Path $f) -or (Get-Item $f).LastWriteTime -lt $t0) {
     "!!! step $n $label did not write $expect -- stopping ($mins min)" | Out-File -Append $LOG; exit 1
@@ -59,11 +69,11 @@ function Step($n, $label, $script, $envs, $expect) {
 }
 
 Step 0 "base calibrate (scored competitions removed)" "citiusdata\scripts\build_calibration_wac_coast_0904.R" `
-  @{ CITIUS_EXCLUDE_SCORED = $POOL; CITIUS_WAC_OUT = $BASE } $BASE
+  $X0 $BASE
 Step 1 "context condition_sd" "citiusdata\scripts\build_calibration_condsd_context.R" `
   @{ CITIUS_CTXSD_SRC = $BASE; CITIUS_CTXSD_OUT = $CTXSD } $CTXSD
 Step 2 "spread scales (scored PIT rows removed)" "citiusdata\scripts\fit_spread_scales.R" `
-  @{ CITIUS_EXCLUDE_SCORED = $POOL; CITIUS_SCALES_SRC = $CTXSD; CITIUS_SCALES_OUT = $SCALED } $SCALED
+  $X2 $SCALED
 Step 3 "EB race shrinkage" "citiusdata\scripts\build_calibration_race_eb.R" `
   @{ CITIUS_EB_SRC = $BASE; CITIUS_EB_OUT = $EB } $EB
 Step 4 "shock persistence (family-gated)" "citiusdata\scripts\fit_race_shock_persistence.R" `
@@ -94,18 +104,18 @@ if (7 -ge $FROM) {
                  "CITIUS_SIGMA_SCALE", "CITIUS_BT_COND_CONTEXT", "CITIUS_BT_ADJ_MARKS", "CITIUS_BT_SIGMA_SCALE") {
     Remove-Item "Env:\$v" -ErrorAction SilentlyContinue
   }
-  $env:CITIUS_BT_CACHE = "bt_cache_noleak"
-  $env:CITIUS_BT_OUT   = "backtest_noleak.rds"
-  $out = Join-Path $D "backtest_noleak.rds"
+  $env:CITIUS_BT_CACHE = "bt_cache_$TAG"
+  $env:CITIUS_BT_OUT   = "backtest_$TAG.rds"
+  $out = Join-Path $D "backtest_$TAG.rds"
   for ($i = 1; $i -le 6; $i++) {
     & Rscript "citiusdata\scripts\backtest_athletics.R" 2>&1 | Out-File -Append -Encoding utf8 $LOG
     if (Test-Path $out) { $f = Get-Item $out; if ($f.LastWriteTime -gt $t0) { break } }
-    "    retry $i for noleak arm at $(Get-Date -Format s)" | Out-File -Append -Encoding utf8 $LOG
+    "    retry $i for $TAG arm at $(Get-Date -Format s)" | Out-File -Append -Encoding utf8 $LOG
     Start-Sleep -Seconds 30
   }
   $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
   $csv  = Join-Path $env:USERPROFILE ".claude\runtime-log.csv"
-  "$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')),$([int]((Get-Date) - $t0).TotalSeconds),citiusdata,PowerShell,arm,backtest_athletics.R / noleak (target $TARGET M1 meets, placings)" | Out-File -Append -Encoding utf8 $csv
+  "$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')),$([int]((Get-Date) - $t0).TotalSeconds),citiusdata,PowerShell,arm,backtest_athletics.R / $TAG (target $TARGET M1 meets, placings)" | Out-File -Append -Encoding utf8 $csv
   "--- step 7 arm done in $mins min ---" | Out-File -Append -Encoding utf8 $LOG
 }
 "=== ALL DONE $(Get-Date -Format s) ===" | Out-File -Append -Encoding utf8 $LOG
