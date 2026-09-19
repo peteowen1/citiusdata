@@ -2353,6 +2353,11 @@ if (N_WORKERS > 1L) {
   # already hit four times (FAMILY_DEBIAS, TRAIN_TIERS, shock_tbl, NEIGHBOUR_*).
   # Caught before running this time, by reading the patch rather than the diff.
   export_vars <- c(export_vars, "ABIL_ON", "ABIL_DIR", "ALT_ADDBACK", "SIGMA_K")
+  # The conditional-export trap, fifth time (2026-09-19): run_meet() reads
+  # ADJ_MARKS unconditionally (`if (!is.null(ADJ_MARKS))`), so the parallel
+  # workers died with "object 'ADJ_MARKS' not found" on the first real arm
+  # after a one-worker smoke test had passed. NULL exports fine.
+  export_vars <- c(export_vars, "ADJ_MARKS")
   # Same TIER_SHRINK trap, same day: run_meet() calls family_pool_offset(),
   # whose closure reads `.fp`/`.fp_fs_by_event` from this script's top-level
   # environment. clusterExport() re-homes an exported function's environment
