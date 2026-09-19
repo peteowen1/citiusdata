@@ -20,7 +20,11 @@ $env:CITIUS_BT_ADJUST_RACE        = "1"
 $env:CITIUS_BT_STORE              = "athletics_corpus_store"
 $env:CITIUS_BT_TIER               = "M1"
 $env:CITIUS_BT_MEET_TIER          = "1"
-$env:CITIUS_BT_TARGET             = "120"
+# CITIUS_SS_TARGET overrides the pool size (both arms share it -- a different
+# target selects different meets); CITIUS_SS_SCALES the treatment list, e.g.
+# "0.8" for one arm when the machine is slow (placings at one worker ran ~2.7
+# min/meet on 2026-09-19: 120 meets x 3 arms would not finish overnight).
+$env:CITIUS_BT_TARGET             = $(if ($env:CITIUS_SS_TARGET) { $env:CITIUS_SS_TARGET } else { "120" })
 $env:CITIUS_BT_MEETS              = "150"
 # CITIUS_SS_WORKERS overrides the worker count (1 when the machine is short of
 # memory: each worker needs ~5.9 GB before any meet runs); CITIUS_BT_MIN_FREE_MB
@@ -39,11 +43,9 @@ foreach ($v in "CITIUS_BT_MARKS_ONLY", "CITIUS_BT_SHOCK_ADDBACK", "CITIUS_BT_TRA
   Remove-Item "Env:\$v" -ErrorAction SilentlyContinue
 }
 
-$ARMS = @(
-  @{ tag = "ss_ctrl"; scale = "" },
-  @{ tag = "ss_090";  scale = "0.9" },
-  @{ tag = "ss_080";  scale = "0.8" }
-)
+$scales = if ($env:CITIUS_SS_SCALES) { $env:CITIUS_SS_SCALES -split "," } else { @("0.9", "0.8") }
+$ARMS = @(@{ tag = "ss_ctrl"; scale = "" })
+foreach ($s in $scales) { $ARMS += @{ tag = "ss_" + ($s -replace "\.", ""); scale = $s } }
 
 foreach ($a in $ARMS) {
   $tag = $a.tag
