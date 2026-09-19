@@ -22,11 +22,17 @@ $env:CITIUS_BT_TIER               = "M1"
 $env:CITIUS_BT_MEET_TIER          = "1"
 $env:CITIUS_BT_TARGET             = "120"
 $env:CITIUS_BT_MEETS              = "150"
-$env:CITIUS_BT_WORKERS            = "2"
+# CITIUS_SS_WORKERS overrides the worker count (1 when the machine is short of
+# memory: each worker needs ~5.9 GB before any meet runs); CITIUS_BT_MIN_FREE_MB
+# is passed through untouched so the preflight floor can be lowered knowingly.
+$env:CITIUS_BT_WORKERS            = $(if ($env:CITIUS_SS_WORKERS) { $env:CITIUS_SS_WORKERS } else { "2" })
 $env:CITIUS_HALF_LIFE_FAMILY      = "road=1095,walk=730,hurdles=180"
 $env:CITIUS_BT_CALIBRATION        = "calibration_corpus_wac_coast_0904_full2_altitude_banded_noroad.rds"
 $env:CITIUS_EVENT_PARAMS          = "event_params.rds"
 $env:CITIUS_BT_NEIGHBOUR_COMBINE  = "1"
+# the deployed link set (DEPLOYED$neighbour_combine$events); the backtest aborts
+# without it -- "names fewer than 2 events" -- as it did on the first launch
+$env:CITIUS_BT_NEIGHBOUR_COMBINE_EVENTS = "AT-800Metres-M,AT-1500Metres-M,AT-3000Metres-M,AT-5000Metres-M,AT-10000Metres-M"
 foreach ($v in "CITIUS_BT_MARKS_ONLY", "CITIUS_BT_SHOCK_ADDBACK", "CITIUS_BT_TRAIN_TIERS", "CITIUS_BT_FAMILY_DEBIAS",
                "CITIUS_BT_SIGMA_MODE", "CITIUS_BT_SIGMA_PARTS", "CITIUS_SIGMA_PSEUDO_N",
                "CITIUS_SIGMA_SCALE", "CITIUS_BT_COND_CONTEXT", "CITIUS_BT_ADJ_MARKS", "CITIUS_BT_SIGMA_SCALE") {
