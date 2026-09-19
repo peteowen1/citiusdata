@@ -60,7 +60,7 @@ cp <- unique(setDT(read_parquet(file.path(OUT, "athletics_corpus.parquet"),
                                 col_select = c("race_key","competition_id"))), by = "race_key")
 cp[, competition_id := as.character(competition_id)]
 cg <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet"),
-                         col_select = c("competition_id","class","meet_tier")))
+                         col_select = c("competition_id", class = "meet_type", "meet_tier")))
 cg[, competition_id := as.character(competition_id)]
 h <- merge(h, merge(cp, cg, by = "competition_id", all.x = TRUE)[, .(race_key, class, meet_tier)],
            by = "race_key", all.x = TRUE)
