@@ -447,7 +447,15 @@ if (nzchar(ADJ_MARKS_FILE)) {
     ADJ_MARKS <- ADJ_MARKS[!event_id %chin% .skip_ev]
     cli::cli_alert_info("Adjusted-marks arm: skipping {paste(.skip, collapse = ', ')} ({format(.n_before - nrow(ADJ_MARKS), big.mark = ',')} rows left on raw marks).")
   }
-  ADJ_MARKS[, adj_total := data.table::fifelse(is.finite(wind_adj), wind_adj, 0) + data.table::fifelse(is.finite(venue_adj), venue_adj, 0) + data.table::fifelse(is.finite(indoor_adj), indoor_adj, 0)]
+  # CITIUS_BT_ADJ_TERMS: which of wind,venue,indoor the file supplies (default
+  # all three). estimate_ability() carries its OWN wind block (suppressed only
+  # where a fitted c_r applies), so a file that also removes wind corrects it
+  # twice on wind events -- run 2 (2026-09-19) had hurdles +0.040pp worse
+  # (t = 3.4) with every other family flat. Run 3 = venue,indoor.
+  .terms <- trimws(strsplit(Sys.getenv("CITIUS_BT_ADJ_TERMS", "wind,venue,indoor"), ",")[[1]])
+  .z <- function(x) data.table::fifelse(is.finite(x), x, 0)
+  ADJ_MARKS[, adj_total := (if ("wind" %in% .terms) .z(wind_adj) else 0) + (if ("venue" %in% .terms) .z(venue_adj) else 0) + (if ("indoor" %in% .terms) .z(indoor_adj) else 0)]
+  cli::cli_alert_info("Adjusted-marks arm: terms taken from the file = {paste(.terms, collapse = ', ')}.")
   ADJ_MARKS <- ADJ_MARKS[, .(race_key, athlete_id, event_id, adj_total)]
   data.table::setkey(ADJ_MARKS, race_key, athlete_id, event_id)
   cli::cli_alert_info("Adjusted-marks arm: {format(nrow(ADJ_MARKS), big.mark = ',')} corrections from {.file {ADJ_MARKS_FILE}}; the calibration's altitude term will be switched off.")
@@ -1137,6 +1145,7 @@ arm_fingerprint <- list(
   use_meet_tier = USE_MEET_TIER,
   adj_marks = ADJ_MARKS_FILE, adj_marks_md5 = if (nzchar(ADJ_MARKS_FILE)) md5_of(ADJ_MARKS_FILE) else "",
   adj_skip = if (nzchar(ADJ_MARKS_FILE)) Sys.getenv("CITIUS_BT_ADJ_SKIP", "road") else "",
+  adj_terms = if (nzchar(ADJ_MARKS_FILE)) Sys.getenv("CITIUS_BT_ADJ_TERMS", "wind,venue,indoor") else "",
   tier_filter = TIER_FILTER, elite_history = ELITE_HISTORY,
   # Without this, a T1+T2-trained arm and its full-history control share a
   # cache: the second one read back the first's predictions and the A/B came
