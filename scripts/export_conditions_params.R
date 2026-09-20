@@ -61,6 +61,21 @@ if (file.exists(fc_f)) {
 }
 n_fc <- 0L; ratio <- c()
 
+# INDOOR coefficient (2026-09-20): from the build's within-athlete estimate,
+# not the gam. The gam's coefficient is unidentified for an event run mostly
+# indoors (1000m M -6.38% vs -0.18% within athletes) and the site applied it.
+# INDOOR_TAG names the build whose indoor_coef_<tag>.parquet to read; required,
+# like OFFSETS_TAG, because the venue offsets (v8, tier-demeaned) and the
+# indoor coefficients (v12) come from different builds by decision.
+IN_TAG <- Sys.getenv("INDOOR_TAG", "")
+if (!nzchar(IN_TAG)) stop("INDOOR_TAG is not set - name the build whose indoor coefficients this export should carry (e.g. INDOOR_TAG=adjusted_marks_v12)")
+in_f <- file.path(OUT, sprintf("indoor_coef_%s.parquet", IN_TAG))
+if (!file.exists(in_f)) stop(sprintf("no indoor coefficients for INDOOR_TAG=%s (%s missing); run build_adjusted_marks.R with INDOOR_SOURCE=career ADJ_OUT=%s.parquet first", IN_TAG, basename(in_f), IN_TAG))
+INDOOR <- setDT(arrow::read_parquet(in_f))
+INDOOR <- setNames(INDOOR$coef, INDOOR$event_id)
+cat(sprintf("indoor coefficients from %s: %d events (the gam's kept where the build has none)\n", basename(in_f), length(INDOOR)))
+n_in <- 0L
+
 for (EV in ids) {
   r <- readRDS(file.path(DIR, paste0(EV, ".rds")))
   g <- r$model$gam; cs <- r$sample
@@ -80,7 +95,10 @@ for (EV in ids) {
   amax <- max(cs$alt_m, na.rm = TRUE)
   alt_grid_m <- unique(round(expm1(seq(0, log1p(amax), length.out = 80))))
   alt_curve <- as.numeric(predict(g, newdata = mk_nd(0, log1p(alt_grid_m))) - ref)
-  indoor_coef <- if (has_indoor) as.numeric(predict(g, newdata = mk_nd(0, 0, "TRUE")) - ref) else 0
+  indoor_coef_fit <- if (has_indoor) as.numeric(predict(g, newdata = mk_nd(0, 0, "TRUE")) - ref) else 0
+  indoor_from_build <- is.finite(INDOOR[EV])
+  if (indoor_from_build) n_in <- n_in + 1L
+  indoor_coef <- if (indoor_from_build) unname(INDOOR[EV]) else indoor_coef_fit
 
   # variance components: from the fit object (venue fits) or the older sd table
   if (!is.null(r$sd)) {
@@ -101,7 +119,9 @@ for (EV in ids) {
                      n_venues = if ("venue_city" %in% names(cs)) uniqueN(cs$venue_city) else NA),
     wind = if (has_wind) list(grid = wind_grid, curve = wind_curve) else NULL,
     altitude = list(grid_m = alt_grid_m, curve = alt_curve, max_m = amax),
-    indoor_coef = indoor_coef, has_indoor = has_indoor,
+    indoor_coef = indoor_coef, has_indoor = has_indoor || indoor_from_build,
+    indoor_coef_fit = indoor_coef_fit,
+    indoor_source = if (indoor_from_build) IN_TAG else "fit",
     var_race = unname(sdv["race"])^2,
     var_resid = if (use_fc) v_fc$var_resid_fc else var_resid_fit,
     var_resid_fit = var_resid_fit,
@@ -116,6 +136,8 @@ for (EV in ids) {
 }
 stopifnot("forecast_marks exists but no event took its variance -- the join or the tag is wrong" =
             !file.exists(fc_f) || n_fc > 0L)
+stopifnot("no event took the build's indoor coefficient -- the tag or the join is wrong" = n_in > 0L)
+cat(sprintf("indoor_coef from %s on %d of %d events\n", IN_TAG, n_in, length(ids)))
 if (n_fc) cat(sprintf("var_resid from forecast error on %d of %d events; forecast/fit variance ratio median %.2f, range %.2f-%.2f (>1 = a forecast misses more than a fitted level, as it should)\n",
                       n_fc, length(ids), median(ratio), min(ratio), max(ratio)))
 # one combined file for the site: a single fetch covers every event

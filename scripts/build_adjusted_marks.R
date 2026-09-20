@@ -97,7 +97,8 @@ for (EV in sort(unique(c0$event_id))) {
 # cannot identify its own indoor effect, and the whole of middle distance's
 # +1.0% loss to August sits on its indoor rows (compare_forecast_arms.R).
 if (Sys.getenv("INDOOR_SOURCE", "fit") == "august") {
-  aug_f <- file.path(D, "adjusted_marks.parquet")
+  # the August file itself; adjusted_marks.parquet has been v12 since 2026-09-20
+  aug_f <- file.path(D, "adjusted_marks_august_2026-08.parquet")
   aug <- setDT(read_parquet(aug_f, col_select = c("event_id", "indoor", "indoor_adj")))
   aug <- unique(aug[indoor %in% TRUE & is.finite(indoor_adj), .(event_id, indoor_aug = indoor_adj)], by = "event_id")
   stopifnot("August indoor coefficients are not one per event" = !anyDuplicated(aug$event_id), nrow(aug) > 20)
