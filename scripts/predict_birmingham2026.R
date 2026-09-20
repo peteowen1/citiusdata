@@ -121,7 +121,14 @@ if (nrow(alias)) {
     "Merged {nrow(alias)} secondary athlete id{?s} into their canonical id before estimating ability.")
 }
 
-ability <- deployed_ability(past, as_of = CUT, calibration = calibration)
+# Read back from the last run's snapshot when nothing it depends on has moved
+# (stamp, as_of, history); CITIUS_CARD_NOCACHE=1 forces the estimate. The
+# snapshot is written after the guards below, keyed on the stamped cutoff.
+ability <- deployed_ability_or_snapshot(past, as_of = CUT, calibration = calibration,
+                                        dir = D, meet = "birmingham2026", cutoff = CUT)
+snapshot_hit <- isTRUE(attr(ability, "snapshot_hit"))
+history_key  <- attr(ability, "history_key")
+ability_raw  <- data.table::copy(ability)
 
 # --- publication guards -------------------------------------------------------
 # Both are on the Glasgow shipping path (predict_glasgow_pretournament.R:136-141)
@@ -159,6 +166,11 @@ ability <- temper_unevidenced(ability)
 se_after <- ability[athlete_id %in% entrant_ids, sum(ability_se, na.rm = TRUE)]
 cli::cli_alert_info(
   "temper_unevidenced(): entrant ability_se reduced by {round(100*(1 - se_after/se_before), 2)}% (entrants only, not the whole population).")
+if (!snapshot_hit) {
+  deployed_ability_snapshot(ability_raw, ability, D, "birmingham2026", CUT,
+                            as_of = CUT, history_key = history_key)
+}
+rm(ability_raw)
 
 ages <- past[!is.na(age), .(age_last = max(age), age_asof = max(date)),
              by = .(athlete_id = as.character(athlete_id), event_id)]

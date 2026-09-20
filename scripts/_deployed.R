@@ -708,7 +708,10 @@ deployed_neighbour_links <- function(as_of, calibration,
                               from = as.Date(as_of) - cfg$link_days,
                               to = as.Date(as_of) - 1L)
   nb_hist <- nb_hist[!is.na(perf)]
-  ids <- unique(as.character(nb_hist$athlete_id))
+  # sort(): the store read returns rows in partition order, which is not stable
+  # between runs, so the seeded sample below drew a different 25,000 each time
+  # (24,809 vs 24,805 rows adjusted on two back-to-back Zurich runs, 2026-09-20).
+  ids <- sort(unique(as.character(nb_hist$athlete_id)))
   if (length(ids) > cfg$link_athletes) {
     set.seed(20260914L)   # same sample as the backtest arm that measured this
     ids <- sample(ids, cfg$link_athletes)
@@ -737,26 +740,105 @@ deployed_neighbour_links <- function(as_of, calibration,
 #' provenance stamp: a snapshot whose config or cutoff cannot be read back is
 #' indistinguishable from one built under a different model.
 #'
-#' @param ability Ability table as passed to the simulator -- AFTER
-#'   drop_impossible_sigma()/temper_unevidenced(), so it is what the card used.
+#' Since 2026-09-20 the snapshot is also READ BACK: `deployed_ability_or_snapshot()`
+#' returns it instead of re-estimating when the stamp, as_of, cutoff and the
+#' history the card was built from all match. Predict was 80-90% of every card
+#' run and a repeat run under an unchanged model recomputed it every time.
+#'
+#' The file therefore holds the RAW table (before the two publication guards)
+#' with a `kept` column marking rows that survived drop_impossible_sigma() and
+#' temper_unevidenced(); the guards are deterministic and take under a second,
+#' so a reader re-runs them. "What the card used" is `kept == TRUE` (the
+#' tempered rows differ only in ability_se; re-run temper_unevidenced() for
+#' those exact values).
+#'
+#' @param ability_raw Ability table straight from deployed_ability().
+#' @param ability_kept The same table after both guards (its keys mark `kept`).
 #' @param dir,meet Output directory and meet_id.
 #' @param cutoff The stamped cutoff (the data boundary, not the requested date).
+#' @param as_of The as_of the ability was estimated at.
+#' @param history_key Fingerprint of the history rows, from
+#'   `deployed_history_key()`.
 #' @param stamp Configuration stamp; defaults to the deployed one.
 #' @return The path written, invisibly.
-deployed_ability_snapshot <- function(ability, dir, meet, cutoff,
-                                      stamp = DEPLOYED$stamp) {
-  ab <- data.table::copy(data.table::as.data.table(ability))
+deployed_ability_snapshot <- function(ability_raw, ability_kept, dir, meet, cutoff,
+                                      as_of, history_key, stamp = DEPLOYED$stamp) {
+  ab <- data.table::copy(data.table::as.data.table(ability_raw))
   if (!nrow(ab)) {
     cli::cli_alert_warning("Ability snapshot skipped: table is empty.")
     return(invisible(NULL))
   }
-  ab[, `:=`(meet = meet, cutoff = as.Date(cutoff), config = stamp,
-            generated_at = Sys.time())]
-  f <- file.path(dir, paste0(meet, "_ability_", format(as.Date(cutoff), "%Y%m%d"), ".parquet"))
+  kept <- unique(data.table::as.data.table(ability_kept)[, .(event_id, athlete_id = as.character(athlete_id))])
+  ab[, kept := data.table::`%chin%`(paste(event_id, as.character(athlete_id)),
+                                    paste(kept$event_id, kept$athlete_id))]
+  ab[, `:=`(meet = meet, cutoff = as.Date(cutoff), as_of = as.Date(as_of),
+            history_key = history_key, config = stamp, generated_at = Sys.time())]
+  f <- .ability_snapshot_path(dir, meet, cutoff)
   arrow::write_parquet(ab, f)
   cli::cli_alert_success(
-    "Ability snapshot: {format(nrow(ab), big.mark = ',')} athlete-event{?s} across {data.table::uniqueN(ab$event_id)} event{?s} -> {.path {basename(f)}}")
+    "Ability snapshot: {format(nrow(ab), big.mark = ',')} athlete-event{?s} across {data.table::uniqueN(ab$event_id)} event{?s} ({sum(!ab$kept)} not kept by the guards) -> {.path {basename(f)}}")
   invisible(f)
+}
+
+.ability_snapshot_path <- function(dir, meet, cutoff) {
+  file.path(dir, paste0(meet, "_ability_", format(as.Date(cutoff), "%Y%m%d"), ".parquet"))
+}
+
+#' Fingerprint of everything the ability estimate reads besides the stamp.
+#'
+#' The history rows (only the columns the estimate reads, so a store rebuild
+#' that changes nothing the model sees still hits; ~0.5s on a few hundred
+#' thousand rows) PLUS the md5 of the deployed input files -- calibration,
+#' event_params, debias -- and the neighbour_combine config. The stamp is a
+#' hand-typed string, so `event_params.rds` overwritten in place without a
+#' stamp bump would otherwise serve a stale snapshot (review, 2026-09-20).
+deployed_history_key <- function(past, dir = here::here("citiusdata", "data")) {
+  p <- data.table::as.data.table(past)
+  cols <- intersect(c("athlete_id", "event_id", "date", "perf", "wind", "race_key",
+                      "competition_id", "round", "place", "alt_m"), names(p))
+  files <- c(DEPLOYED$calibration, DEPLOYED$event_params, DEPLOYED$family_debias$file)
+  files <- file.path(dir, files[!vapply(files, is.null, logical(1))])
+  md5 <- unname(tools::md5sum(files[file.exists(files)]))
+  digest::digest(list(n = nrow(p), cols = cols,
+                      body = p[, cols, with = FALSE][order(athlete_id, event_id, date, perf)],
+                      inputs = md5, neighbour = DEPLOYED$neighbour_combine,
+                      adjust_race = DEPLOYED$adjust_race))
+}
+
+#' deployed_ability(), or the snapshot of the last identical call.
+#'
+#' Returns the RAW ability table (guards not yet applied) either from
+#' `deployed_ability()` or, when a snapshot for this meet/cutoff exists whose
+#' stamp, as_of and history fingerprint all match, from that file. Set
+#' `CITIUS_CARD_NOCACHE=1` to force the estimate. The result carries
+#' `attr(, "snapshot_hit")` and `attr(, "history_key")`; a caller that got a
+#' miss writes the snapshot with `deployed_ability_snapshot()` after the guards.
+deployed_ability_or_snapshot <- function(past, as_of, calibration, dir, meet, cutoff,
+                                         stamp = DEPLOYED$stamp) {
+  hk <- deployed_history_key(past, dir)
+  f <- .ability_snapshot_path(dir, meet, cutoff)
+  meta <- c("meet", "cutoff", "as_of", "history_key", "config", "generated_at", "kept")
+  if (!nzchar(Sys.getenv("CITIUS_CARD_NOCACHE")) && file.exists(f)) {
+    ab <- data.table::as.data.table(arrow::read_parquet(f))
+    if (all(meta %in% names(ab)) && nrow(ab) &&
+        identical(ab$config[1], stamp) && identical(ab$history_key[1], hk) &&
+        isTRUE(as.Date(ab$as_of[1]) == as.Date(as_of))) {
+      cli::cli_alert_success(
+        "Ability read from snapshot {.path {basename(f)}} (written {format(ab$generated_at[1], '%Y-%m-%d %H:%M')}; stamp, as_of and history all match) -- {format(nrow(ab), big.mark = ',')} rows.")
+      ab[, (meta) := NULL]
+      data.table::setattr(ab, "snapshot_hit", TRUE)
+      data.table::setattr(ab, "history_key", hk)
+      return(ab[])
+    }
+    why <- if (!all(meta %in% names(ab))) "written before read-back existed" else
+      if (!identical(ab$config[1], stamp)) "stamp differs" else
+      if (!isTRUE(as.Date(ab$as_of[1]) == as.Date(as_of))) "as_of differs" else "history differs"
+    cli::cli_alert_info("Ability snapshot {.path {basename(f)}} not reused: {why}; re-estimating.")
+  }
+  ab <- deployed_ability(past, as_of = as_of, calibration = calibration)
+  data.table::setattr(ab, "snapshot_hit", FALSE)
+  data.table::setattr(ab, "history_key", hk)
+  ab
 }
 
 .deployed_ability_raw <- function(past, as_of, calibration, event_params = deployed_event_params()) {

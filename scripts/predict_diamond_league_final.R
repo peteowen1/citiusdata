@@ -155,7 +155,13 @@ if (CUT_STAMPED < CUT_REQUESTED) {
 }
 stopifnot("stamped cutoff must not be later than the run date" = CUT_STAMPED <= Sys.Date())
 
-ability <- deployed_ability(past, as_of = CUT, calibration = calibration)
+# Read back from the last run's snapshot when nothing it depends on has moved
+# (stamp, as_of, history); CITIUS_CARD_NOCACHE=1 forces the estimate.
+ability <- deployed_ability_or_snapshot(past, as_of = CUT, calibration = calibration,
+                                        dir = D, meet = MEET, cutoff = CUT_STAMPED)
+snapshot_hit <- isTRUE(attr(ability, "snapshot_hit"))
+history_key  <- attr(ability, "history_key")
+ability_raw  <- data.table::copy(ability)
 # The store's athlete_id is integer; the resolve script's ids/ages are
 # character (it builds them from championship_results.rds's aid <-
 # as.character(athlete_id) convention, same as resolve_birmingham_athletes.R).
@@ -181,9 +187,13 @@ ability <- temper_unevidenced(ability)
 ab_final_keys <- unique(ability[, .(event_id, athlete_id)])
 
 # The whole rated population, not just the entrants the card keeps -- see
-# deployed_ability_snapshot(). Written here, after both guards, so the file is
-# the table the simulation below actually consumed.
-deployed_ability_snapshot(ability, D, MEET, CUT_STAMPED)
+# deployed_ability_snapshot(). Written after both guards so `kept` marks the
+# rows the simulation below consumed; skipped when this run read it back.
+if (!snapshot_hit) {
+  deployed_ability_snapshot(ability_raw, ability, D, MEET, CUT_STAMPED,
+                            as_of = CUT, history_key = history_key)
+}
+rm(ability_raw)
 
 ages <- past[!is.na(age), .(age_last = max(age), age_asof = max(date)), by = .(athlete_id = as.character(athlete_id), event_id)]
 ages[, age_now := age_last + as.numeric(CUT - age_asof) / 365.25]
