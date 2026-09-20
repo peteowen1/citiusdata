@@ -40,6 +40,11 @@ $ErrorActionPreference = "Stop"
 
 $VERSE   = "C:\dev\citiusverse"
 $SCRIPTS = Join-Path $VERSE "citiusdata\scripts"
+# Every step script finds the verse with here::here(), which walks up from the
+# CWD to the nearest repo root -- from citiusdata\scripts that is citiusdata,
+# and load_all(file.path(VERSE, "citius")) then fails. Pin the cwd here so the
+# runner works from wherever it is invoked (2026-09-20, refresh_all_cards.ps1).
+Set-Location $VERSE
 $CAL     = Join-Path $VERSE "citiusdata\data\athletics_calendar.csv"
 
 function Fail($msg) { Write-Host "`n  ABORTED: $msg" -ForegroundColor Red; exit 1 }
