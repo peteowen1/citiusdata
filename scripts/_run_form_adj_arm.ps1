@@ -10,13 +10,13 @@
 #
 #   $env:VENUE_INDOOR="1"; $env:LEVEL_BY="career"
 #   powershell -NoProfile -File citiusdata\scripts\_run_form_adj_arm.ps1 -Tag v9
-#   log: citiusdata\form_adj_arm_<tag>_log.txt     ~45 min (build 4, engine ~35, rest 3)
+#   log: citiusdata\form_adj_arm_<tag>_log.txt     ~11 min measured (build 6, engine 3.6, forecast 0.6, compare 0.1)
 param([Parameter(Mandatory)][string]$Tag, [string[]]$Vs = @("adjold", "adjv7"))
 $ErrorActionPreference = "Continue"
 Set-Location "C:\dev\citiusverse"
 $LOG = "C:\dev\citiusverse\citiusdata\form_adj_arm_${Tag}_log.txt"
 $ADJ = "adjusted_marks_$Tag.parquet"
-"=== START $Tag $(Get-Date -Format s) === build env: LEVEL_BY=$env:LEVEL_BY VENUE_INDOOR=$env:VENUE_INDOOR TIER_DEMEAN=$env:TIER_DEMEAN" | Out-File -Encoding utf8 $LOG
+"=== START $Tag $(Get-Date -Format s) === build env: LEVEL_BY=$env:LEVEL_BY VENUE_INDOOR=$env:VENUE_INDOOR TIER_DEMEAN=$env:TIER_DEMEAN INDOOR_SOURCE=$env:INDOOR_SOURCE" | Out-File -Encoding utf8 $LOG
 
 function Step($label, $script, $envs, $expect) {
   "--- $label start $(Get-Date -Format s) ---" | Out-File -Append -Encoding utf8 $LOG

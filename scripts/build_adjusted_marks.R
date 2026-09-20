@@ -90,6 +90,82 @@ for (EV in sort(unique(c0$event_id))) {
   set(c0, i, "wind_adj", a$wind_adj); set(c0, i, "venue_adj", a$venue_adj); set(c0, i, "indoor_adj", a$indoor_adj)
   set(c0, i, "covered", TRUE)
 }
+# INDOOR_SOURCE=august (arm v10, 2026-09-20): take the per-event indoor
+# coefficient from the August build instead of the gamm4 fit. On indoor
+# middle-distance rows the fit's coefficient runs 1.5-35x August's (1000m M
+# -6.38% vs -0.18%; Mile W -1.29% vs -0.20%): an event run almost only indoors
+# cannot identify its own indoor effect, and the whole of middle distance's
+# +1.0% loss to August sits on its indoor rows (compare_forecast_arms.R).
+if (Sys.getenv("INDOOR_SOURCE", "fit") == "august") {
+  aug_f <- file.path(D, "adjusted_marks.parquet")
+  aug <- setDT(read_parquet(aug_f, col_select = c("event_id", "indoor", "indoor_adj")))
+  aug <- unique(aug[indoor %in% TRUE & is.finite(indoor_adj), .(event_id, indoor_aug = indoor_adj)], by = "event_id")
+  stopifnot("August indoor coefficients are not one per event" = !anyDuplicated(aug$event_id), nrow(aug) > 20)
+  c0[aug, on = "event_id", indoor_aug := i.indoor_aug]
+  n_sw <- c0[indoor %in% TRUE & covered == TRUE & is.finite(indoor_aug), .N]
+  c0[indoor %in% TRUE & covered == TRUE & is.finite(indoor_aug), indoor_adj := indoor_aug]
+  c0[, indoor_aug := NULL]
+  cat(sprintf("INDOOR_SOURCE=august: indoor_adj replaced on %s indoor rows across %d events (fit's kept where August has none)\n",
+              format(n_sw, big.mark = ","), nrow(aug)))
+}
+# INDOOR_SOURCE=within (arm v11): the indoor coefficient estimated WITHIN
+# athlete-season -- for every athlete-season with both indoor and outdoor
+# marks in the event, the mean of their indoor marks (net of wind and altitude)
+# minus the mean of their outdoor ones; the event's coefficient is the
+# athlete-season-weighted mean of those differences, shrunk toward the fit's
+# coefficient with a prior worth 10 athlete-seasons. Identified by athletes who
+# race both, which a population-level fit is not for an event run mostly
+# indoors. v10 (August's coefficients, which were built this way) was the first
+# arm to beat the August file; this is that estimate made here.
+#
+# INDOOR_SOURCE=career (arm v12): the August build's own estimator, made here.
+# Athlete-EVENT demeaning over the whole career (not the season), rows pooled
+# (so an athlete with many races weighs more), gap = mean indoor minus mean
+# outdoor of the demeaned marks, shrunk by n_in / (n_in + 200) toward zero.
+# v11's season version overstates the penalty (800m W -1.22% vs August's
+# -0.97%), because indoor races are early-season races; the career version
+# compares an athlete's indoor marks against their outdoor form across years.
+IN_SRC <- Sys.getenv("INDOOR_SOURCE", "fit")
+if (IN_SRC %in% c("within", "career")) {
+  K_IN <- if (IN_SRC == "within") 10 else 0
+  c0[, .yr := if (IN_SRC == "within") as.integer(format(as.Date(date), "%Y")) else 0L]
+  c0[, .p0 := perf - wind_adj - venue_adj]
+  if (IN_SRC == "career") {
+    ix <- c0[covered == TRUE & is.finite(.p0) & !is.na(indoor)]
+    ix[, .n := .N, by = .(athlete_id, event_id)]
+    ix <- ix[.n >= 3L]
+    ix[, .both := uniqueN(indoor) == 2L, by = .(athlete_id, event_id)]
+    ix <- ix[.both == TRUE]
+    ix[, .y := .p0 - mean(.p0), by = .(athlete_id, event_id)]
+    w_in <- ix[, .(n_in = sum(indoor), n_out = sum(!indoor), d = mean(.y[indoor]) - mean(.y[!indoor])),
+               by = .(event_id, athlete_id, .yr)]
+    ev_in <- ix[, .(n_as = uniqueN(athlete_id), n_in = sum(indoor), w_sum = sum(indoor),
+                    d_w = mean(.y[indoor]) - mean(.y[!indoor])), by = event_id][n_in >= 30L & is.finite(d_w)]
+    ev_in[, d_w := d_w * n_in / (n_in + 200)]
+    rm(ix)
+  } else {
+    w_in <- c0[covered == TRUE & is.finite(.p0),
+               .(n_in = sum(indoor %in% TRUE), n_out = sum(!indoor %in% TRUE),
+                 d = mean(.p0[indoor %in% TRUE]) - mean(.p0[!indoor %in% TRUE])),
+               by = .(event_id, athlete_id, .yr)][n_in >= 1L & n_out >= 1L & is.finite(d)]
+    w_in[, w := pmin(n_in, n_out)]
+    ev_in <- w_in[, .(n_as = .N, w_sum = sum(w), d_w = sum(w * d) / sum(w)), by = event_id]
+  }
+  fit_in <- rbindlist(lapply(params, function(p) data.table(event_id = p$event_id, coef_fit = if (isTRUE(p$has_indoor)) p$indoor_coef else 0)))
+  ev_in <- merge(ev_in, fit_in, by = "event_id", all.x = TRUE)
+  ev_in[is.na(coef_fit), coef_fit := 0]
+  ev_in[, coef := (w_sum * d_w + K_IN * coef_fit) / (w_sum + K_IN)]
+  c0[ev_in, on = "event_id", .coef := i.coef]
+  n_sw <- c0[indoor %in% TRUE & covered == TRUE & is.finite(.coef), .N]
+  c0[indoor %in% TRUE & covered == TRUE & is.finite(.coef), indoor_adj := .coef]
+  cat(sprintf("INDOOR_SOURCE=%s: %d events estimated from %s athlete%s racing both; indoor_adj replaced on %s indoor rows\n",
+              IN_SRC, nrow(ev_in), format(nrow(w_in), big.mark = ","), if (IN_SRC == "within") "-seasons" else "-events",
+              format(n_sw, big.mark = ",")))
+  cat("  event, athlete-seasons, within-athlete coefficient vs the fit's (% of mark; indoor slower = negative):\n")
+  print(ev_in[order(-n_as)][1:12, .(event_id, n_as, within = round(100 * d_w, 3), fit = round(100 * coef_fit, 3), used = round(100 * coef, 3))])
+  write_parquet(ev_in, file.path(D, "conditions_params", sprintf("indoor_coef_%s.parquet", sub("[.]parquet$", "", Sys.getenv("ADJ_OUT", "adjusted_marks")))))
+  c0[, c(".yr", ".p0", ".coef") := NULL]
+}
 cat(sprintf("stage 1: %d events with parameters, applied in %.1fs; rows covered %s (%.1f%%)\n",
             length(params), as.numeric(Sys.time()-t0, units="secs"),
             format(sum(c0$covered), big.mark=","), 100*mean(c0$covered)))

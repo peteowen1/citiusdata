@@ -683,6 +683,18 @@ if (file.exists(file.path(COND_DIR, "_all.json"))) {
 # file (3,041 on 2026-09-19; 113,707 rows, 4.7 MB as one file), then split
 # into 64 buckets by athlete id so a page fetches ~75 KB, not 5 MB. The page
 # computes the same bucket: Number(id) % 64.
+# CONTENT HASH (2026-09-20). A parquet's bytes change every run because
+# `generated_at` does, so the md5 memo below never skipped one: 180 objects
+# sent, 0 skipped, on a run that changed 84 files. The upload key for a table
+# is therefore a digest of its content WITHOUT generated_at; a table whose
+# content is unchanged keeps the published file, whose stamp is the truth
+# about when that content was generated (the manifest, always re-sent, carries
+# the run's own stamp).
+CONTENT <- list()
+content_hash <- function(dt) {
+  dt <- data.table::as.data.table(dt)
+  digest::digest(dt[, setdiff(names(dt), "generated_at"), with = FALSE], algo = "md5")
+}
 FM_F <- file.path(D, sprintf("forecast_marks_%s.parquet", TAG))
 if (file.exists(FM_F)) {
   card_ids <- unique(unlist(lapply(c(grep("-(predictions|results)[.]parquet$", names(artefacts), value = TRUE)),
@@ -712,7 +724,9 @@ if (file.exists(FM_F)) {
   dir.create(file.path(BLOG, "athletes"), showWarnings = FALSE)
   for (b in sort(unique(fm$bucket))) {
     f <- file.path("athletes", sprintf("%02d.parquet", b))
-    write_parquet(fm[bucket == b][order(athlete_id, event_id, date)], file.path(BLOG, f))
+    fb <- fm[bucket == b][order(athlete_id, event_id, date)]
+    CONTENT[[f]] <- content_hash(fb)
+    write_parquet(fb, file.path(BLOG, f))
     extra_files <- c(extra_files, f)
   }
   cli::cli_alert_success("athlete history: {format(nrow(fm), big.mark = ',')} rows for {uniqueN(fm$athlete_id)} athletes in {uniqueN(fm$bucket)} buckets (from {basename(FM_F)}).")
@@ -721,6 +735,7 @@ if (file.exists(FM_F)) {
 }
 
 for (nm in names(artefacts)) {
+  CONTENT[[nm]] <- content_hash(artefacts[[nm]])
   write_parquet(artefacts[[nm]], file.path(BLOG, nm))
   cli::cli_alert_success("{nm}: {nrow(artefacts[[nm]])} row{?s}")
 }
@@ -842,19 +857,18 @@ write_json(manifest, file.path(BLOG, "athletics-manifest.json"),
            auto_unbox = TRUE, pretty = TRUE, na = "null")
 
 # UPLOAD-IF-CHANGED (2026-09-19). Every artefact was re-sent on every run: 116
-# objects, ~4 min, three runs a day. A local memo of the md5 last uploaded per
-# key lets an unchanged file skip the put. Honest limits: parquets carry
-# `generated_at`, so they differ every run by design and always upload -- the
-# saving is the 83 conditions/*.json (only change on a refit) and any static
-# file. CITIUS_FORCE_UPLOAD=1 re-sends everything. The memo is written only
-# after a successful put, so a failed upload is retried next run.
+# objects, ~4 min, three runs a day. A local memo of the hash last uploaded per
+# key lets an unchanged file skip the put: the file's md5, or for a table the
+# content hash computed above (so `generated_at` alone cannot force a send).
+# CITIUS_FORCE_UPLOAD=1 re-sends everything. The memo is written only after a
+# successful put, so a failed upload is retried next run.
 MEMO_F <- file.path(BLOG, ".uploaded_md5.json")
 MEMO <- if (file.exists(MEMO_F)) fromJSON(MEMO_F) else list()
 FORCE <- nzchar(Sys.getenv("CITIUS_FORCE_UPLOAD"))
 n_skipped <- 0L
 upload <- function(f) {
   key <- sprintf("%s/%s/%s", BUCKET, PREFIX, f)
-  md5 <- unname(tools::md5sum(file.path(BLOG, f)))
+  md5 <- if (!is.null(CONTENT[[f]])) CONTENT[[f]] else unname(tools::md5sum(file.path(BLOG, f)))
   if (!FORCE && identical(MEMO[[key]], md5)) { n_skipped <<- n_skipped + 1L; return(TRUE) }
   # shQuote is not optional: the cache-control value contains a space and
   # system2() does no quoting on Windows, so it would arrive as two arguments.
