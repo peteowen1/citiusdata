@@ -223,6 +223,23 @@ calibration <- readRDS(file.path(OUT, CALIBRATION))
 # finding is over and above sigma_context, not evidence sigma is uncorrected).
 # Multiplying its `ratio` column is therefore an ADDITIONAL correction on top
 # of the existing one, not a replacement for a missing one.
+# SPREAD-ONLY SCALE (2026-09-20). CITIUS_BT_SIGMA_SCALE above multiplies
+# sigma_context BEFORE estimate_ability(), and that ratio feeds kappa and so
+# shrinkage and ability (ability.R, `kappa := sig_k^2 / sigma_between^2`) -- so
+# every value in a sigma sweep recomputed ability from scratch: four 60-meet
+# arms at ~30 min each on 2026-09-19/20, ~90% of it ability that the sweep did
+# not change on purpose. CITIUS_BT_SPREAD_SCALE multiplies `sigma` and
+# `sigma_marks` on the ability table AFTER it is computed or read from the
+# ability cache, so it is a pure spread lever: ranking, ability, ability_se and
+# shrinkage are bit-identical to the control, only the simulated draws widen or
+# narrow. It is excluded from the ability-cache key (ABIL_EXCLUDE), so a sweep
+# shares the control's cached ability and each arm costs the simulation only.
+# It is NOT the same lever as CITIUS_BT_SIGMA_SCALE and must not be compared
+# to those arms as if it were.
+SPREAD_SCALE <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_BT_SPREAD_SCALE", "")))
+if (!is.na(SPREAD_SCALE) && (!is.finite(SPREAD_SCALE) || SPREAD_SCALE <= 0 || SPREAD_SCALE > 2)) cli::cli_abort(
+  "{.envvar CITIUS_BT_SPREAD_SCALE} must be in (0, 2], got {.val {SPREAD_SCALE}}.")
+if (!is.na(SPREAD_SCALE)) cli::cli_alert_info("spread-only scale {.val {SPREAD_SCALE}} on sigma and sigma_marks after ability (ability cache shared with the control).")
 SIGMA_SCALE <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_BT_SIGMA_SCALE", "")))
 if (!is.na(SIGMA_SCALE)) {
   if (!is.finite(SIGMA_SCALE) || SIGMA_SCALE <= 0 || SIGMA_SCALE > 2) cli::cli_abort(
@@ -810,6 +827,10 @@ ELITE_HISTORY <- nzchar(Sys.getenv("CITIUS_BT_ELITE_HISTORY", ""))
 # Target-race shock add-back. See the application site in run_meet() for what
 # it does and why it refuses without CITIUS_BT_ADJUST_RACE.
 #   CITIUS_BT_SHOCK_ADDBACK=expected_race_shock.csv
+#   CITIUS_BT_SPREAD_SCALE=0.8   spread-only lever on the ability table's sigma
+#                                and sigma_marks AFTER ability; shares the
+#                                control's ability cache, so a sweep costs the
+#                                simulation only (see the block near line 226)
 SHOCK_FILE <- Sys.getenv("CITIUS_BT_SHOCK_ADDBACK", "")
 # The altitude add-back: put the target venue's altitude back onto ability,
 # uniformly across the field. Default OFF so no existing arm changes; it is the
@@ -1184,6 +1205,9 @@ arm_fingerprint <- list(
   # A sigma scale changes every simulated probability, so an arm run with one
   # must never read back cached meets from an arm run without it.
   sigma_scale = if (is.na(SIGMA_SCALE)) "" else format(SIGMA_SCALE),
+  # post-ability spread lever; in the fingerprint (a different arm) but excluded
+  # from the ability-cache key (same ability) -- see ABIL_EXCLUDE
+  spread_scale = if (is.na(SPREAD_SCALE)) "" else format(SPREAD_SCALE),
   family_debias = FAMILY_DEBIAS,
   cond_context = COND_CONTEXT,
   # Hash the file this arm ACTUALLY read, not the default name. Hashing the
@@ -1374,7 +1398,7 @@ if (nrow(pool) > TARGET) pool <- pool[round(seq(1, .N, length.out = TARGET))]
 # The excluded four are simulation and projection settings applied AFTER ability
 # exists, which is what makes a marks-only arm and its full-simulation twin share
 # one cache -- the case that motivated this.
-ABIL_EXCLUDE <- c("n_sims", "marks_only", "project_tier", "project_round")
+ABIL_EXCLUDE <- c("n_sims", "marks_only", "project_tier", "project_round", "spread_scale")
 ABIL_KEY <- substr(digest::digest(
   arm_fingerprint[setdiff(names(arm_fingerprint), ABIL_EXCLUDE)], algo = "md5"), 1, 16)
 ABIL_DIR <- file.path(OUT, "ability_cache", ABIL_KEY)
@@ -1812,6 +1836,14 @@ run_meet <- function(i) {
       tryCatch({ saveRDS(ability, .tmp); file.rename(.tmp, .abil_f) },
                error = function(e) { unlink(.tmp); invisible(NULL) })
     }
+  }
+  # Spread-only scale: AFTER the cache write, so the cache holds the unscaled
+  # table and every scale in a sweep reads the same one. Only the two columns
+  # simulate_event() draws with; kappa/shrinkage/ability are already fixed.
+  if (!is.na(SPREAD_SCALE)) {
+    ability <- data.table::copy(ability)
+    ability[, sigma := sigma * SPREAD_SCALE]
+    if ("sigma_marks" %in% names(ability)) ability[, sigma_marks := sigma_marks * SPREAD_SCALE]
   }
 
   # Cross-event ability transfer, gated by NEIGHBOUR_TRANSFER (see the flag
@@ -2316,7 +2348,7 @@ if (N_WORKERS > 1L) {
                     "dev_ids", "elite_ids", "USE_MEET_TIER", "calibration", "PRIOR_WEIGHT",
                     "mom_eff", "aging", "N_SIMS", "hl_map", "half_life", "ADJUST_CONTEXT",
                     "ADJUST_RACE", "SIGMA_MODE", "SIGMA_PARTS", "PEAK_GAMMA",
-                    "ROBUST_LOCATION", "DECOUPLE_PEAK", "CHAMP_OK",
+                    "ROBUST_LOCATION", "DECOUPLE_PEAK", "CHAMP_OK", "SPREAD_SCALE",
                     # run_meet() reads these at the project_tier()/
                     # project_round() calls. Without them here the serial path
                     # works (lexical scoping) and every PSOCK worker dies with
