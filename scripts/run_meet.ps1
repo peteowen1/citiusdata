@@ -24,7 +24,8 @@
 param(
   [Parameter(Mandatory = $true, Position = 0)][string]$MeetId,
   [switch]$SkipUpload,
-  [switch]$SkipEntries   # the entry list rarely changes; skip the PDF re-parse
+  [switch]$SkipEntries,  # the entry list rarely changes; skip the PDF re-parse
+  [switch]$SkipExport    # refresh_all_cards.ps1 publishes once at the end; skip the per-meet export (63s each)
 )
 
 $ErrorActionPreference = "Stop"
@@ -69,7 +70,7 @@ $STEPS = switch ($MeetId) {
       @{ n = "build rounds";      f = "build_birmingham_rounds.R" },
       @{ n = "predict";           f = "predict_birmingham2026.R" },
       @{ n = "sanity";            f = "sanity_birmingham_card.R" },
-      @{ n = "export + publish";  f = "export_athletics_blog.R";    a = @($MeetId) }
+      @{ n = "export + publish";  f = "export_athletics_blog.R";    a = @($MeetId); optional = $SkipExport }
     )
   }
   # The finals-only shape. Every script it needs was written on 2026-08-31 and
@@ -91,7 +92,7 @@ $STEPS = switch ($MeetId) {
       @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("budapest2026") },
       @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("budapest2026") },
       @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("budapest2026") },
-      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId); optional = $SkipExport }
     )
   }
   "brussels2026" {
@@ -100,7 +101,7 @@ $STEPS = switch ($MeetId) {
       @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("brussels2026") },
       @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("brussels2026") },
       @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("brussels2026") },
-      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId); optional = $SkipExport }
     )
   }
   # Backfill (2026-09-11): lausanne2026/silesia2026/zurich2026 are the same
@@ -135,7 +136,7 @@ $STEPS = switch ($MeetId) {
       @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("lausanne2026") },
       @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("lausanne2026") },
       @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("lausanne2026") },
-      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId); optional = $SkipExport }
     )
   }
   "silesia2026" {
@@ -144,7 +145,7 @@ $STEPS = switch ($MeetId) {
       @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("silesia2026") },
       @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("silesia2026") },
       @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("silesia2026") },
-      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId); optional = $SkipExport }
     )
   }
   "zurich2026" {
@@ -153,7 +154,7 @@ $STEPS = switch ($MeetId) {
       @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("zurich2026") },
       @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("zurich2026") },
       @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("zurich2026") },
-      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId); optional = $SkipExport }
     )
   }
   default {
