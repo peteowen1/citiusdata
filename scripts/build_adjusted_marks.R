@@ -111,6 +111,20 @@ c0[, cleaned := perf - wind_adj - venue_adj - indoor_adj]
 # 1.36% sd on the marathon. Written into venue_adj (= alt_adj + venue_off) so
 # form_ratings.R's wind+venue+indoor sum carries it unchanged.
 c0[, season := as.integer(format(as.Date(date), "%Y"))]
+# VENUE_INDOOR=1 (arm v9, 2026-09-20): an indoor meet is a different venue from
+# the outdoor track in the same city. Measured on v7 before building: in middle
+# distance, 366 (event, city) cells hold 5+ races of each kind and their
+# indoor-minus-outdoor residual has sd 1.03% of mark (258 of 366 beyond 0.3%),
+# on 22.9% of covered middle rows -- the pooled cell averages two venues.
+# Implemented as a city suffix so every cell below (family-city, event-city,
+# stadium) splits without touching the estimator; the suffix is written to the
+# offsets files and adjusted_marks under this arm's tag, so a reader of an
+# indoor-split build sees "[indoor]" in venue_city and knows.
+if (Sys.getenv("VENUE_INDOOR", "0") == "1") {
+  n_in <- c0[indoor %in% TRUE & !is.na(venue_city) & nzchar(venue_city), .N]
+  c0[indoor %in% TRUE & !is.na(venue_city) & nzchar(venue_city), venue_city := paste(venue_city, "[indoor]")]
+  cat(sprintf("VENUE_INDOOR: %s indoor rows now carry their own venue cells\n", format(n_in, big.mark = ",")))
+}
 c0[, `:=`(race_shock = 0, race_shock_loo = 0, venue_off = 0, alt_adj = venue_adj)]
 vv <- rbindlist(lapply(params, function(p) data.table(event_id = p$event_id, var_venue = if (is.null(p$var_venue)) 0 else p$var_venue)))
 c0 <- merge(c0, vv, by = "event_id", all.x = TRUE)

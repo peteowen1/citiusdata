@@ -4,9 +4,13 @@
 #   alt curve    : s(alt_t) evaluated on a log1p(alt_m) grid          (perf-log units)
 #   indoor       : one coefficient
 #   var_race     : race-shock variance (sigma_r^2), from the fit
-#   var_resid    : within-race residual variance (sigma_e^2), from the fit --
-#                  NOTE the live adjuster should replace this with the
-#                  forecast-error variance once forecast_marks exists.
+#   var_resid    : within-race variance of the FORECAST error (sigma_e^2) from
+#                  forecast_marks_<FORECAST_TAG>.parquet (default final), the
+#                  residual the live adjuster actually shrinks -- a cleaned mark
+#                  minus a pre-race expectation, not minus a fitted athlete
+#                  level. Falls back to the fit's residual variance for an
+#                  event the forecasts do not cover; var_resid_fit and
+#                  var_resid_source say which. Wired 2026-09-20.
 # Curves are relative to the reference point (wind 0, altitude 0, outdoor).
 #
 # Output: citiusdata/data/conditions_params/<EVENT>.json  (one per event)
@@ -38,6 +42,25 @@ STADIUMS <- if (file.exists(st_f)) { s <- setDT(arrow::read_parquet(st_f)); s[, 
 cat(sprintf("venue offsets on disk: %s (event, city) and %s (event, city, stadium) cells\n",
             format(sum(vapply(VENUES, nrow, 1L)), big.mark = ","), format(sum(vapply(STADIUMS, nrow, 1L)), big.mark = ",")))
 
+# Forecast-error variance per event: the mean over races (2+ forecast rows) of
+# the within-race variance of `error` (adj_perf - forecast_perf). Races with a
+# single forecast row carry no within-race information and are skipped.
+FC_TAG <- Sys.getenv("FORECAST_TAG", "final")
+fc_f <- file.path("C:/dev/citiusverse/citiusdata/data", sprintf("forecast_marks_%s.parquet", FC_TAG))
+VAR_FC <- list()
+if (file.exists(fc_f)) {
+  fc <- setDT(arrow::read_parquet(fc_f, col_select = c("race_key", "event_id", "error", "seen")))
+  fc <- fc[seen == TRUE & is.finite(error)]
+  wr <- fc[, .(n = .N, v = if (.N >= 2L) var(error) else NA_real_), by = .(event_id, race_key)]
+  ve <- wr[is.finite(v), .(var_resid_fc = mean(v), n_races = .N, n_rows = sum(n)), by = event_id]
+  VAR_FC <- split(ve, by = "event_id", keep.by = FALSE)
+  cat(sprintf("forecast-error variance from %s: %d events, %s races with 2+ forecast rows\n",
+              basename(fc_f), nrow(ve), format(sum(ve$n_races), big.mark = ",")))
+} else {
+  cat(sprintf("NOTE: %s not found -- var_resid falls back to the fit's residual variance for every event\n", basename(fc_f)))
+}
+n_fc <- 0L; ratio <- c()
+
 for (EV in ids) {
   r <- readRDS(file.path(DIR, paste0(EV, ".rds")))
   g <- r$model$gam; cs <- r$sample
@@ -68,6 +91,10 @@ for (EV in ids) {
              venue = NA_real_, resid = vc$sd_perf[vc$term == "residual"])
   }
   ref_mark <- exp(abs(median(cs$perf)))   # perf = orientation * log(mark); sign carries the orientation
+  var_resid_fit <- unname(sdv["resid"])^2
+  v_fc <- VAR_FC[[EV]]
+  use_fc <- !is.null(v_fc) && is.finite(v_fc$var_resid_fc) && v_fc$n_races >= 50L
+  if (use_fc) { n_fc <- n_fc + 1L; ratio <- c(ratio, v_fc$var_resid_fc / var_resid_fit) }
   params <- list(
     event_id = EV, ref_mark = round(ref_mark, 2), offsets_tag = OFF_TAG, exported_at = format(Sys.time(), "%Y-%m-%d %H:%M"),
     fitted_on = list(n_rows = nrow(cs), n_athletes = uniqueN(cs$athlete_id), n_races = uniqueN(cs$race_key),
@@ -75,7 +102,10 @@ for (EV in ids) {
     wind = if (has_wind) list(grid = wind_grid, curve = wind_curve) else NULL,
     altitude = list(grid_m = alt_grid_m, curve = alt_curve, max_m = amax),
     indoor_coef = indoor_coef, has_indoor = has_indoor,
-    var_race = unname(sdv["race"])^2, var_resid = unname(sdv["resid"])^2,
+    var_race = unname(sdv["race"])^2,
+    var_resid = if (use_fc) v_fc$var_resid_fc else var_resid_fit,
+    var_resid_fit = var_resid_fit,
+    var_resid_source = if (use_fc) sprintf("forecast_marks_%s (%d races)", FC_TAG, v_fc$n_races) else "fit",
     var_athlete = unname(sdv["athlete"])^2,
     var_venue = if (is.finite(sdv["venue"])) unname(sdv["venue"])^2 else NULL,
     venues = if (!is.null(VENUES[[EV]])) as.list(setNames(round(VENUES[[EV]]$venue_off, 6), VENUES[[EV]]$venue_city)) else NULL,
@@ -84,6 +114,10 @@ for (EV in ids) {
   write_json(params, file.path(OUT, paste0(EV, ".json")), auto_unbox = TRUE, digits = 8, null = "null")
   all_params[[EV]] <- params
 }
+stopifnot("forecast_marks exists but no event took its variance -- the join or the tag is wrong" =
+            !file.exists(fc_f) || n_fc > 0L)
+if (n_fc) cat(sprintf("var_resid from forecast error on %d of %d events; forecast/fit variance ratio median %.2f, range %.2f-%.2f (>1 = a forecast misses more than a fitted level, as it should)\n",
+                      n_fc, length(ids), median(ratio), min(ratio), max(ratio)))
 # one combined file for the site: a single fetch covers every event
 write_json(all_params, file.path(OUT, "_all.json"), auto_unbox = TRUE, digits = 8, null = "null")
 cat(sprintf("wrote %d param files + _all.json (%.0f KB) to %s\n", length(ids),
