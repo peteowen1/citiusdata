@@ -32,7 +32,7 @@ DEPLOYED <- list(
   # with other tags in between (my first attempt) failed the check even though
   # every token was present, because the check is on the literal filename
   # remainder, not on token membership.
-  stamp = "2026-09-18 wac_coast_0904_full2_altitude_banded_noroad (ctxsd strip4fam evparams5, debias OFF, blend OFF)",
+  stamp = "2026-09-20 wac_coast_0904_full2_altitude_banded_noroad_refit (corpus to 2026-09-13; ctxsd strip4fam evparams5, debias OFF, blend OFF)",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -140,7 +140,18 @@ DEPLOYED <- list(
   # threshold that promoted the race-shock strip above -- this is a marks
   # improvement with no measured placings cost, not a placings win. Full
   # evidence: docs/reviews/altitude-arm-2026-09-17.md, DECISIONS.md 2026-09-18.
-  calibration = "calibration_corpus_wac_coast_0904_full2_altitude_banded_noroad.rds",
+  #
+  # PROMOTED 2026-09-20: `_refit` is the SAME composition refitted on the
+  # current corpus (33,431 meets to 2026-09-13, against 32,089 to 08-27). The
+  # `0904` in the name is the chain's family name, not the corpus date -- the
+  # provenance carries the real dates. Found by the leakage audit
+  # (docs/plans/leakage-noleak-chain-2026-09-19.md): seeing its own outcomes
+  # bought the old file ~0.2% Brier, while the fresher corpus alone bought gold
+  # Brier -0.85% and marks -0.013pp on the same 60-meet M1 pool. Rebuilt with
+  # `_run_noleak_chain.ps1` (CITIUS_NL_TAG=refit CITIUS_NL_EXCLUDE=0), ~50 min.
+  # Refresh again whenever the corpus moves a season: the vintage is worth
+  # more than any single term.
+  calibration = "calibration_corpus_wac_coast_0904_full2_altitude_banded_noroad_refit.rds",
 
   # AGING -- the blended curve, adopted 2026-07-29.
   aging = "aging.rds",
