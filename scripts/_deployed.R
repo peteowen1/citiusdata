@@ -32,7 +32,7 @@ DEPLOYED <- list(
   # with other tags in between (my first attempt) failed the check even though
   # every token was present, because the check is on the literal filename
   # remainder, not on token membership.
-  stamp = "2026-09-20 wac_coast_0904_full2_altitude_banded_noroad_refit (corpus to 2026-09-13; ctxsd strip4fam evparams5, debias OFF, blend OFF)",
+  stamp = "2026-09-20 wac_coast_0904_full2_altitude_banded_noroad_refit_ss080 (corpus to 2026-09-13; sigma_context x0.8, ctxsd strip4fam evparams5, debias OFF, blend OFF)",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -151,7 +151,17 @@ DEPLOYED <- list(
   # `_run_noleak_chain.ps1` (CITIUS_NL_TAG=refit CITIUS_NL_EXCLUDE=0), ~50 min.
   # Refresh again whenever the corpus moves a season: the vintage is worth
   # more than any single term.
-  calibration = "calibration_corpus_wac_coast_0904_full2_altitude_banded_noroad_refit.rds",
+  #
+  # PROMOTED 2026-09-20 (Pete, "promote sigma 0.8"): `_ss080` is the refit with
+  # `sigma_context$ratio` x 0.8 (the finals-spread scale), nothing else changed;
+  # provenance$sigma_scale records it. Measured on the pre-refit file, same
+  # composition, 60 M1 meets: gold Brier -2.27% (p=0.0001), medal -1.34%
+  # (p=0.0002), log-loss no cost, concordance flat, favourites' gap +9.9pp ->
+  # +4.9pp; 0.8 is an interior optimum on log-loss (0.7 turns medal log-loss
+  # +1.27%). Not re-measured on the refit itself. Evidence:
+  # docs/reviews/sigma-scale-arm-2026-09-19.md. Reversible: name the `_refit`
+  # file and drop `_ss080` from the stamp.
+  calibration = "calibration_corpus_wac_coast_0904_full2_altitude_banded_noroad_refit_ss080.rds",
 
   # AGING -- the blended curve, adopted 2026-07-29.
   aging = "aging.rds",
