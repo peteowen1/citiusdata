@@ -101,7 +101,7 @@ if (time_left() > 8) {
                      !competition_id %in% c(GLASGOW, BHAM)]
     say("candidates in window (2026-07-15..08-18), excluding Glasgow/Birmingham: %d", nrow(cand))
     if (nrow(cand)) {
-      print(cand[order(start), .(competition_id, name = substr(name, 1, 50), start, end, race_code)])
+      print(cand[order(start), .(competition_id, name = substr(name, 1, 50), start, end, meet_code)])
       saveRDS(cand, file.path(OUT, "gap_candidates_20260818.rds"))
       MAXN <- 25L
       cand <- head(cand[order(start)], MAXN)
@@ -112,7 +112,7 @@ if (time_left() > 8) {
         dur <- max(1L, min(if (is.na(dur)) 3L else dur, 10L))
         r <- tryCatch(athletics_competition_results(cid, days = seq_len(dur)), error = function(e) NULL)
         if (!is.null(r) && nrow(r)) {
-          r[, `:=`(comp_name = cand$name[i], comp_start = cand$start[i], comp_tier = cand$race_code[i])]
+          r[, `:=`(comp_name = cand$name[i], comp_start = cand$start[i], comp_tier = cand$meet_code[i])]
           pieces[[paste0("gap_", cid)]] <- r
           say("  %s (%d): %d rows", cand$name[i], cid, nrow(r))
         } else say("  %s (%d): no results", cand$name[i], cid)
