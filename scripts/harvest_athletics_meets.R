@@ -71,6 +71,14 @@ if (file.exists(comp_file)) {
   saveRDS(comps, comp_file)
 }
 cli::cli_alert_info("{nrow(comps)} competition{?s} known.")
+# citius >= the 2026-09-24 quality pass returns the meet-level rankingCategory as
+# meet_code; a comps cache written before that carries it as race_code. Read
+# whichever is there -- a plain rename would turn every cached comp_tier to NA.
+if (!"meet_code" %in% names(comps) && "race_code" %in% names(comps)) {
+  data.table::setnames(comps, "race_code", "meet_code")
+  cli::cli_alert_info("comps cache predates the meet_code rename; read its race_code as meet_code.")
+}
+stopifnot("comps has no meet_code column" = !nrow(comps) || "meet_code" %in% names(comps))
 
 # --- stage 1: competition results -------------------------------------------
 todo_c <- comps[!file.exists(file.path(COMP_CACHE, paste0(competition_id, ".rds")))]
@@ -101,7 +109,7 @@ if (nrow(todo_c)) {
     } else {
       if (nrow(r)) {
         r[, `:=`(comp_name = todo_c$name[i], comp_start = todo_c$start[i],
-                 comp_tier = todo_c$race_code[i])]
+                 comp_tier = todo_c$meet_code[i])]
       }
       saveRDS(r, file.path(COMP_CACHE, paste0(cid, ".rds")))
     }
