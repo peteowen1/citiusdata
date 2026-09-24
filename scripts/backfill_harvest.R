@@ -142,7 +142,7 @@ say("%s competitions to harvest this run", format(nrow(cand), big.mark = ","))
 if (!nrow(cand)) quit(status = 0)
 
 # --- harvest loop -------------------------------------------------------------
-ok <- 0L; failed <- 0L; empty <- 0L
+ok <- 0L; failed <- 0L; empty <- 0L; fault <- 0L
 for (i in seq_len(nrow(cand))) {
   if (Sys.time() > deadline) { say("BUDGET REACHED (%.1f h) -- stopping cleanly", HOURS); break }
   # WAIT OUT A DIP, do not end the night on one.
@@ -187,10 +187,15 @@ for (i in seq_len(nrow(cand))) {
   # inherits. Found by the first smoke test, which failed two meets in 0s each.
   Sys.setenv(CITIUS_COMP = cid, CITIUS_MEET = sprintf("bf_%s", cid))
   logf <- file.path(STAGE, sprintf("comp_%s.log", cid))
+  # system2() reports a timeout as a WARNING and returns 124. A tryCatch
+  # warning handler would replace that 124 with its own code, so a hung meet
+  # would be journalled as a plain failure. Muffle the warning, keep the value.
   rc <- tryCatch(
-    system2("Rscript", c(shQuote(file.path(S, "harvest_wa_results.R"))),
-            stdout = logf, stderr = logf, timeout = PER_MEET_S),
-    error = function(e) 99L, warning = function(w) 98L)
+    withCallingHandlers(
+      system2("Rscript", c(shQuote(file.path(S, "harvest_wa_results.R"))),
+              stdout = logf, stderr = logf, timeout = PER_MEET_S),
+      warning = function(w) invokeRestart("muffleWarning")),
+    error = function(e) 99L)
 
   secs <- as.numeric(difftime(Sys.time(), t1, units = "secs"))
   src <- file.path(D, sprintf("bf_%s_raw_results.rds", cid))
@@ -219,13 +224,24 @@ for (i in seq_len(nrow(cand))) {
     # 2026-09-15 backfill reported 8 failures, all of this kind, and a rerun
     # immediately reproduced all 8. Staging a zero-row marker records the
     # question as asked and answered, so the next run skips them.
-    no_results <- file.exists(logf) &&
-      any(grepl("returned no results on days", readLines(logf, warn = FALSE), fixed = TRUE))
-    if (no_results) {
-      saveRDS(data.table(), out)      # marker: asked, and WA has nothing
-      empty <- empty + 1L
-      journal(cid, nm, "empty", 0, secs, "WA published no results")
-      say("   empty (WA has no results for this meet)")
+    log_txt <- if (file.exists(logf)) readLines(logf, warn = FALSE) else character()
+    no_results <- any(grepl("returned no results on days", log_txt, fixed = TRUE))
+    # WA's resolver crashing for a meet is a different fact from an empty meet,
+    # but the same answer for this queue: harvest_wa_results.R says it is not
+    # fixable by retrying. Staged as a marker too, under its own journal status
+    # so the two stay countable; delete the marker to retry if WA fixes it.
+    server_fault <- any(grepl("the WA API errored rather than returning no results", log_txt, fixed = TRUE))
+    if (no_results || server_fault) {
+      saveRDS(data.table(), out)      # marker: asked, and nothing harvestable
+      if (server_fault) {
+        fault <- fault + 1L
+        journal(cid, nm, "server_fault", 0, secs, "WA API errored for every day (known-unfixable)")
+        say("   server fault (WA API errors for this meet; marked, not re-queued)")
+      } else {
+        empty <- empty + 1L
+        journal(cid, nm, "empty", 0, secs, "WA published no results")
+        say("   empty (WA has no results for this meet)")
+      }
       unlink(logf)
     } else {
       failed <- failed + 1L
@@ -242,6 +258,7 @@ say("=== BACKFILL SUMMARY ===")
 say("elapsed        %.2f h", as.numeric(difftime(Sys.time(), T0, units = "hours")))
 say("harvested ok   %d", ok)
 say("empty          %d", empty)
+say("server fault   %d", fault)
 say("failed         %d", failed)
 say("staged files   %d", length(Sys.glob(file.path(STAGE, "comp_*.rds"))))
 say("journal        %s", JOURNAL)

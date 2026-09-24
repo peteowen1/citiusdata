@@ -104,18 +104,21 @@ stopifnot("competition_id overlaps the existing store" = !any(new$competition_id
 if (DRY) { say("DRY RUN -- nothing written. %s rows would be appended.", format(nrow(new), big.mark=",")); quit(status = 0) }
 
 # --- backup, append, save ----------------------------------------------------
-backup <- file.path(D, "championship_results_premerge_missingmeets.rds")
-if (file.exists(backup)) {
-  say("rollback already exists at championship_results_premerge_missingmeets.rds; keeping it")
-} else {
-  saveRDS(ch, backup)
-  say("backed up pre-merge championship_results.rds to championship_results_premerge_missingmeets.rds")
-}
+# One backup per run, time-stamped: a fixed name kept "if it exists" is the
+# FIRST run's pre-state forever, so restoring it would also undo every later
+# merge that had already landed.
+backup <- file.path(D, sprintf("championship_results_premerge_missingmeets_%s.rds",
+                               format(Sys.time(), "%Y%m%d_%H%M%S")))
+if (!file.copy(CH_F, backup)) cli::cli_abort("could not write the rollback copy {.file {backup}}; nothing merged.")
+say("backed up pre-merge championship_results.rds to %s", basename(backup))
 
 before <- nrow(ch)
 ch2 <- rbind(ch, new, fill = TRUE)
 stopifnot(nrow(ch2) == before + nrow(new))
-saveRDS(ch2, CH_F)
+tmp <- paste0(CH_F, ".tmp")
+saveRDS(ch2, tmp)
+if (!file.rename(tmp, CH_F))    # write-then-rename: never a half-written table
+  cli::cli_abort("wrote {.file {tmp}} but could not move it over {.file {CH_F}}; the original is untouched.")
 say("appended: %s -> %s rows (%s comps -> %s comps)",
     format(before, big.mark = ","), format(nrow(ch2), big.mark = ","),
     format(uniqueN(ch$competition_id), big.mark = ","), format(uniqueN(ch2$competition_id), big.mark = ","))

@@ -273,6 +273,18 @@ for (it in seq_len(N_ITER)) {
   fc <- vr[, .(n_races = .N, m = mean(m), nbar = mean(n)), by = .(family, venue_city)]
   fv <- evv[, .(var_venue = mean(var_venue), var_race_emp = mean(var_race_emp), var_resid_emp = mean(var_resid_emp)), by = family]
   stopifnot("a family lost its pooled variance components" = all(is.finite(unlist(fv[, -1]))))
+  # The check above only sees families that made it into fv. A family whose
+  # events all lack conditions params never gets a row, passes it vacuously,
+  # and every venue offset in it lands on the fcoalesce(..., 0) below -- the
+  # venue term silently inert for that family, as it once was for the whole
+  # corpus. Coverage, not presence.
+  miss_fam <- setdiff(unique(vr$family), fv$family)
+  miss_ev  <- setdiff(unique(vr$event_id), evv$event_id)
+  if (length(miss_fam) || length(miss_ev)) cli::cli_abort(c(
+    "Venue offsets would be 0 for data that has venue residuals:",
+    "x" = "families with no pooled variance: {.val {miss_fam}}",
+    "x" = "events with no variance components: {.val {miss_ev}}",
+    "i" = "Check conditions_params/*.json for these events before re-running."))
   fc <- merge(fc, fv, by = "family")
   fc[, off_fc := m * shrink(n_races, var_venue, var_race_emp, var_resid_emp, nbar)]
   ec <- vr[, .(n_races = .N, m = mean(m), nbar = mean(n)), by = .(event_id, family, venue_city)]
@@ -344,7 +356,7 @@ keep <- c("race_key","athlete_id","event_id","discipline","sex","family","date",
           "venue_city","place","mark","adj_mark","adj_delta","perf","adj_perf","wind","alt_m","indoor",
           "wind_adj","venue_adj","alt_adj","venue_off","indoor_adj","race_shock","level","legal","unit","covered")
 c0[, setdiff(names(c0), keep) := NULL]; setcolorder(c0, keep)
-rm(sc, alt, vc, fit); invisible(gc())        # the write copies; drop everything else first
+rm(list = intersect(c("sc", "alt", "vc", "fit"), ls())); invisible(gc())   # the write copies; drop everything else first (alt exists only when stage 0 was rebuilt)
 OUT_PATH <- file.path(D, Sys.getenv("ADJ_OUT", "adjusted_marks.parquet"))
 write_parquet(c0, OUT_PATH)
 cat(sprintf("\nwrote %s: %s rows x %d cols in %.0fs total\n",

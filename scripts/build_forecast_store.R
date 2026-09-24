@@ -169,11 +169,17 @@ one_meet <- function(mid) {
     ab <- deployed_field(ab, aging = aging,
                          ages = ages[event_id == ev, .(athlete_id, age_now)])
     proj <- tryCatch(project_field(ab, event = ev, as_of = CUT, size = nrow(f)),
-                     error = function(e) NULL)
+                     error = function(e) {
+                       cli::cli_alert_danger("{mid} {ev}: project_field failed, event dropped: {conditionMessage(e)}")
+                       NULL
+                     })
     if (is.null(proj) || !nrow(proj)) return(NULL)
     sim <- tryCatch(simulate_event(proj, n_sims = N_SIMS, calibration = calibration,
                                    seed = SEED, context = deployed_race_context("final")),
-                    error = function(e) NULL)
+                    error = function(e) {
+                      cli::cli_alert_danger("{mid} {ev}: simulate_event failed, event dropped: {conditionMessage(e)}")
+                      NULL
+                    })
     if (is.null(sim)) return(NULL)
 
     mp <- as.data.table(medal_probs(sim, top_n = K_POS))
@@ -192,6 +198,11 @@ one_meet <- function(mid) {
     r[, `:=`(event_id = ev, round = "Final", race_key = NA_character_)]
     r[]
   }), fill = TRUE)
+  # Requested vs produced. An event with fewer than 3 rated entrants is skipped
+  # by design; anything else missing failed above, and says so there.
+  n_out <- if (nrow(out)) data.table::uniqueN(out$event_id) else 0L
+  if (n_out < length(events))
+    cli::cli_alert_warning("{mid}: {n_out} of {length(events)} events forecast; missing {.val {setdiff(events, unique(out$event_id))}}.")
   if (!nrow(out)) return(NULL)
 
   out[, `:=`(meet_id = mid, competition_id = COMP, cutoff = CUT,

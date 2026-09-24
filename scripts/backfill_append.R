@@ -59,21 +59,27 @@ if (!length(files)) { say("nothing to do"); quit(status = 0) }
 
 # --- map everything ----------------------------------------------------------
 say("mapping %s meets ...", format(length(files), big.mark = ","))
-bad <- character(0)
+bad <- character(0); why <- character(0)
+note_bad <- function(id, reason) { bad <<- c(bad, id); why <<- c(why, reason) }
 mapped <- vector("list", length(files))
 for (k in seq_along(files)) {
-  h <- tryCatch(as.data.table(readRDS(files[k])), error = function(e) NULL)
-  if (is.null(h) || !nrow(h)) { bad <- c(bad, cids[k]); next }
-  m <- tryCatch(.map_harvest_to_championship(h, cids[k], D), error = function(e) NULL)
-  if (is.null(m)) { bad <- c(bad, cids[k]); next }
+  h <- tryCatch(as.data.table(readRDS(files[k])), error = function(e) conditionMessage(e))
+  if (is.character(h)) { note_bad(cids[k], paste("read:", h)); next }
+  if (!nrow(h)) { note_bad(cids[k], "zero rows"); next }
+  m <- tryCatch(.map_harvest_to_championship(h, cids[k], D), error = function(e) conditionMessage(e))
+  if (is.character(m)) { note_bad(cids[k], paste("map:", m)); next }
   miss <- setdiff(need, names(m))
-  if (length(miss)) { bad <- c(bad, cids[k]); next }
+  if (length(miss)) { note_bad(cids[k], paste("missing columns:", paste(miss, collapse = ", "))); next }
   mapped[[k]] <- m[, ..need]
   if (k %% 250 == 0) say("  mapped %s/%s", format(k, big.mark = ","), format(length(files), big.mark = ","))
 }
 mapped <- mapped[!vapply(mapped, is.null, logical(1))]
-if (length(bad)) say("%s meet(s) could not be mapped and are SKIPPED: %s",
-                     length(bad), paste(head(bad, 8), collapse = ", "))
+if (length(bad)) {
+  say("%s meet(s) could not be mapped and are SKIPPED. Reasons, by count:", length(bad))
+  rs <- sort(table(sub("^(read|map|missing columns):.*", "\\1", why)), decreasing = TRUE)
+  for (r in names(rs)) say("  %-16s %d", r, rs[[r]])
+  for (i in head(seq_along(bad), 8)) say("  %s  %s", bad[i], why[i])
+}
 if (!length(mapped)) cli_abort("Nothing mapped successfully.")
 
 new <- rbindlist(mapped, use.names = TRUE, fill = TRUE)

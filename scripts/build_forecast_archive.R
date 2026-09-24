@@ -55,7 +55,10 @@ one_cache <- function(dir) {
   if (!length(blobs)) return(NULL)
 
   rows <- lapply(blobs, function(bf) {
-    b <- tryCatch(readRDS(bf), error = function(e) NULL)
+    b <- tryCatch(readRDS(bf), error = function(e) {
+      message(sprintf("  unreadable blob skipped: %s (%s)", bf, conditionMessage(e)))
+      NULL
+    })
     if (!is.list(b) || !length(b)) return(NULL)
     # One blob is a list of races; each race is list(pred, outc).
     pr <- lapply(b, function(r) {
