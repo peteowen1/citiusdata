@@ -83,6 +83,57 @@ if (nzchar(.ep_file)) {
   cli::cli_inform("Per-event parameters from {.path {basename(.ep_path)}} ({nrow(EVENT_PARAMS)} events); per-family half-life map DISABLED.")
 }
 MAX_PER_RUN <- .env_int("CITIUS_BT_MEETS", "25")
+
+# PREFLIGHT MEMORY GUARD.
+#
+# This script's steady-state footprint is ~8 GB regardless of which arm is on --
+# measured 2026-09-14 on a 2-meet run: 8,555 MB with no cross-event arm against
+# 8,283 MB with one, i.e. the arms add nothing and the history load is the whole
+# cost. Started with too little headroom it does not error, it is OOM-killed
+# hours in, having written only the meets its cache happened to reach. That is
+# how the 2026-09-13 overnight arm died at 50 of 394 meets, and how a run here
+# came to be competing with three other R sessions on the same machine.
+#
+# Available memory, not free memory: FreePhysicalMemory excludes the standby
+# list and reads far lower than what a process can actually get, so a guard on
+# it would refuse to start almost always.
+#
+# AND NOTE PARALLEL MODE: each PSOCK worker carries its own copy of the history,
+# so CITIUS_BT_WORKERS = n needs roughly n x this floor, not one lot of it.
+# 7,000 since 2026-09-17, down from 9,000, at Pete's call. The reason it is
+# defensible now and would not have been this morning: an OOM used to destroy
+# the whole run, because the parallel path wrote its per-meet cache only after
+# the LAST meet returned. It now writes after each chunk, so being killed costs
+# at most one chunk (N_WORKERS * 4 meets) and the next run resumes. Lowering a
+# guard is reasonable exactly when the cost of tripping it has gone down.
+#
+# Trade accepted knowingly: at 2 workers this is below what the comment above
+# implies is comfortable, so an OOM is likelier than before. It is now cheap
+# rather than catastrophic, and waiting hours for another verse's job to finish
+# has its own cost.
+BT_MIN_FREE_MB <- .env_int("CITIUS_BT_MIN_FREE_MB", "7000")
+.sys_avail_mb <- function() {
+  if (!requireNamespace("ps", quietly = TRUE)) return(NA_real_)
+  tryCatch(ps::ps_system_memory()[["avail"]] / 1024^2, error = function(e) NA_real_)
+}
+.avail0 <- .sys_avail_mb()
+if (is.na(.avail0)) {
+  cli::cli_alert_warning(
+    "Could not read available memory ({.pkg ps} missing); preflight guard skipped.")
+} else if (.avail0 < BT_MIN_FREE_MB) {
+  cli::cli_abort(c(
+    # Quote the ACTUAL floor, not a number typed into the string. This said
+    # "about 8,000 MB" while BT_MIN_FREE_MB defaulted to 9,000, so a run
+    # launched at 8,595 MB -- comfortably over the stated bar -- aborted anyway
+    # and read as a bug in the launcher (2026-09-17). A guard that misstates its
+    # own threshold sends people chasing the wrong thing.
+    "Only {round(.avail0)} MB available; this backtest needs {BT_MIN_FREE_MB} MB and would be OOM-killed part-way.",
+    "i" = "Wait for other jobs to finish, or lower the floor with {.envvar CITIUS_BT_MIN_FREE_MB} if you accept the risk.",
+    "i" = "Available memory swings while another big job runs, so a launch can pass the check you did by hand and fail this one seconds later. Check immediately before launching, or just retry.",
+    "i" = "Cached meets already written are kept, so a stopped run resumes rather than restarts -- true on the parallel path only since the per-chunk cache write of 2026-09-17."))
+} else {
+  cli::cli_alert_info("Preflight: {round(.avail0)} MB available (floor {BT_MIN_FREE_MB} MB).")
+}
 # History depth per refit. TWELVE YEARS, and do not shorten it on the argument
 # that old marks carry negligible weight.
 #
@@ -172,6 +223,23 @@ calibration <- readRDS(file.path(OUT, CALIBRATION))
 # finding is over and above sigma_context, not evidence sigma is uncorrected).
 # Multiplying its `ratio` column is therefore an ADDITIONAL correction on top
 # of the existing one, not a replacement for a missing one.
+# SPREAD-ONLY SCALE (2026-09-20). CITIUS_BT_SIGMA_SCALE above multiplies
+# sigma_context BEFORE estimate_ability(), and that ratio feeds kappa and so
+# shrinkage and ability (ability.R, `kappa := sig_k^2 / sigma_between^2`) -- so
+# every value in a sigma sweep recomputed ability from scratch: four 60-meet
+# arms at ~30 min each on 2026-09-19/20, ~90% of it ability that the sweep did
+# not change on purpose. CITIUS_BT_SPREAD_SCALE multiplies `sigma` and
+# `sigma_marks` on the ability table AFTER it is computed or read from the
+# ability cache, so it is a pure spread lever: ranking, ability, ability_se and
+# shrinkage are bit-identical to the control, only the simulated draws widen or
+# narrow. It is excluded from the ability-cache key (ABIL_EXCLUDE), so a sweep
+# shares the control's cached ability and each arm costs the simulation only.
+# It is NOT the same lever as CITIUS_BT_SIGMA_SCALE and must not be compared
+# to those arms as if it were.
+SPREAD_SCALE <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_BT_SPREAD_SCALE", "")))
+if (!is.na(SPREAD_SCALE) && (!is.finite(SPREAD_SCALE) || SPREAD_SCALE <= 0 || SPREAD_SCALE > 2)) cli::cli_abort(
+  "{.envvar CITIUS_BT_SPREAD_SCALE} must be in (0, 2], got {.val {SPREAD_SCALE}}.")
+if (!is.na(SPREAD_SCALE)) cli::cli_alert_info("spread-only scale {.val {SPREAD_SCALE}} on sigma and sigma_marks after ability (ability cache shared with the control).")
 SIGMA_SCALE <- suppressWarnings(as.numeric(Sys.getenv("CITIUS_BT_SIGMA_SCALE", "")))
 if (!is.na(SIGMA_SCALE)) {
   if (!is.finite(SIGMA_SCALE) || SIGMA_SCALE <= 0 || SIGMA_SCALE > 2) cli::cli_abort(
@@ -361,6 +429,225 @@ if (COND_CONTEXT) cli::cli_alert_info(
 # per-result `tier`, which varies within a single meet and labels the Diamond
 # League "low". Off by default so it is measured as its own arm.
 USE_MEET_TIER <- nzchar(Sys.getenv("CITIUS_BT_MEET_TIER", ""))
+# ADJUSTED-MARKS HISTORY (arm, 2026-09-19). CITIUS_BT_ADJ_MARKS=<file in
+# data/> joins that adjusted_marks build onto every per-meet history read and
+# replaces perf with perf - wind_adj - venue_adj - indoor_adj, so
+# estimate_ability() sees marks cleaned of conditions (the conditions model,
+# docs/reviews/adjusted-marks-arms-2026-09-19.md). The calibration's own
+# altitude term is switched OFF when this is on -- the file's venue term
+# carries altitude, and two altitude corrections would double-count (the
+# "one level lever at a time" rule). Race shock is NOT taken from the file:
+# calibrate()'s c_r stays, so the two never overlap. Judged on marks +
+# concordance, never Brier alone (citiusverse/CLAUDE.md).
+ADJ_MARKS_FILE <- Sys.getenv("CITIUS_BT_ADJ_MARKS", "")
+ADJ_MARKS <- NULL
+if (nzchar(ADJ_MARKS_FILE)) {
+  .af <- file.path(OUT, ADJ_MARKS_FILE)
+  if (!file.exists(.af)) cli::cli_abort("CITIUS_BT_ADJ_MARKS names {.file {.af}}, which does not exist.")
+  ADJ_MARKS <- data.table::setDT(arrow::read_parquet(.af, col_select = c("race_key", "athlete_id", "event_id", "wind_adj", "venue_adj", "indoor_adj")))
+  ADJ_MARKS[, athlete_id := as.character(athlete_id)]
+  ADJ_MARKS <- unique(ADJ_MARKS, by = c("race_key", "athlete_id", "event_id"))
+  # CITIUS_BT_ADJ_SKIP: families the correction must NOT touch, comma-separated
+  # (default "road"). First run of this arm, 2026-09-19: marks worse pooled
+  # (+0.034pp, t = 5.1) with road carrying it (+0.068pp, t = 5.5; >2200m +1.17pp)
+  # while every other family was flat or better and concordance rose +0.31pp
+  # (t = 2.3). Same finding as the altitude review: a course's point
+  # elevation misrepresents a climb, so road stays on raw marks, as the
+  # deployed calibration already does. Filtered HERE, at top level, so the
+  # workers need nothing new exported.
+  .skip <- trimws(strsplit(Sys.getenv("CITIUS_BT_ADJ_SKIP", "road"), ",")[[1]])
+  .skip <- .skip[nzchar(.skip)]
+  if (length(.skip)) {
+    .fam <- data.table::as.data.table(citius_events())[, .(event_id, family)]
+    .skip_ev <- .fam[family %chin% .skip, event_id]
+    .n_before <- nrow(ADJ_MARKS)
+    ADJ_MARKS <- ADJ_MARKS[!event_id %chin% .skip_ev]
+    cli::cli_alert_info("Adjusted-marks arm: skipping {paste(.skip, collapse = ', ')} ({format(.n_before - nrow(ADJ_MARKS), big.mark = ',')} rows left on raw marks).")
+  }
+  # CITIUS_BT_ADJ_TERMS: which of wind,venue,indoor the file supplies (default
+  # all three). estimate_ability() carries its OWN wind block (suppressed only
+  # where a fitted c_r applies), so a file that also removes wind corrects it
+  # twice on wind events -- run 2 (2026-09-19) had hurdles +0.040pp worse
+  # (t = 3.4) with every other family flat. Run 3 = venue,indoor.
+  .terms <- trimws(strsplit(Sys.getenv("CITIUS_BT_ADJ_TERMS", "wind,venue,indoor"), ",")[[1]])
+  .z <- function(x) data.table::fifelse(is.finite(x), x, 0)
+  ADJ_MARKS[, adj_total := (if ("wind" %in% .terms) .z(wind_adj) else 0) + (if ("venue" %in% .terms) .z(venue_adj) else 0) + (if ("indoor" %in% .terms) .z(indoor_adj) else 0)]
+  cli::cli_alert_info("Adjusted-marks arm: terms taken from the file = {paste(.terms, collapse = ', ')}.")
+  ADJ_MARKS <- ADJ_MARKS[, .(race_key, athlete_id, event_id, adj_total)]
+  data.table::setkey(ADJ_MARKS, race_key, athlete_id, event_id)
+  cli::cli_alert_info("Adjusted-marks arm: {format(nrow(ADJ_MARKS), big.mark = ',')} corrections from {.file {ADJ_MARKS_FILE}}; the calibration's altitude term will be switched off.")
+  if (!is.null(calibration$altitude)) { calibration$altitude <- NULL; cli::cli_alert_info("calibration$altitude removed for this arm (the adjusted marks carry altitude).") }
+}
+
+# Cross-event ability transfer (transfer_neighbour_ability()), 2026-09-13.
+# estimate_ability() groups everything by = .(athlete_id, event_id), so an
+# athlete's rating in one event never sees his marks in a neighbouring one --
+# the Ingebrigtsen Budapest 5000m miss (NEXT-STEPS.md, hypothesis-registry.md
+# "An athlete's form in a NEIGHBOURING event..."). Off by default so it is
+# measured as its own arm, same as ADJUST_RACE above.
+#
+# The transfer needs each event's FULL population of ability_raw to rank an
+# athlete's standing, which the `only=` fast path (citius/CLAUDE.md) never
+# computes -- recomputing it per meet measured at ~21s for 4 events alone,
+# 3-5 ADDED HOURS across a M1 run's 900+ meets. Instead the population
+# reference is built once per calendar year of `cut_date` and cached in
+# NEIGHBOUR_REF_CACHE; measured cost with that cache: ~23s per year bucket
+# (there are a few dozen at most) plus ~0.3s per meet -- called out here
+# because that y/n is exactly the kind of thing that turns a 20-minute
+# backtest into an overnight one without anything erroring.
+NEIGHBOUR_TRANSFER <- nzchar(Sys.getenv("CITIUS_BT_NEIGHBOUR_TRANSFER", ""))
+NEIGHBOUR_R2_FILE <- Sys.getenv("CITIUS_BT_NEIGHBOUR_R2", "neighbour_r2.rds")
+NEIGHBOUR_R2 <- NULL
+NEIGHBOUR_EVENTS <- character()
+NEIGHBOUR_REF_CACHE <- new.env(parent = emptyenv())
+if (NEIGHBOUR_TRANSFER) {
+  # Parenthesised: cli reads a leading-dot name as a style token (.file, .val)
+  # and aborts with "Invalid cli literal ... starts with a dot" -- the same
+  # trap the family-debias patch hit on {.fp$fit_arm} (see its comment above).
+  .nb_path <- file.path(OUT, NEIGHBOUR_R2_FILE)
+  if (!file.exists(.nb_path)) cli::cli_abort(
+    "{.envvar CITIUS_BT_NEIGHBOUR_TRANSFER} is on but {.path {(.nb_path)}} does not exist.")
+  NEIGHBOUR_R2 <- readRDS(.nb_path)
+  NEIGHBOUR_EVENTS <- unique(c(NEIGHBOUR_R2$event_id, NEIGHBOUR_R2$neighbour_event_id))
+  cli::cli_alert_info(
+    "Cross-event transfer ON: {nrow(NEIGHBOUR_R2)} measured edge{?s} across {length(NEIGHBOUR_EVENTS)} event{?s} ({.path {(.nb_path)}}).")
+}
+
+# The SECOND cross-event arm, 2026-09-14: combine_neighbour_ability().
+#
+# Not a variant of the one above, a different mechanism. transfer_neighbour_
+# ability() maps the neighbour's PERCENTILE through sqrt(r2), which is a
+# regression toward the population median and therefore can only ever drag an
+# elite athlete down -- measured on the Budapest 5000m field it made 12 of 12
+# slower and moved nobody's rank. This one keeps the athlete's own rating as the
+# baseline and adds every neighbour as an inverse-variance term, so a man whose
+# neighbour rating is both better-evidenced and genuinely faster moves UP.
+#
+# Events are given as a comma-separated list rather than read from the r2 file,
+# because this arm needs no measured-edge table: fit_neighbour_links() derives
+# the offset, correlation and tau itself from the population at each cutoff, and
+# a pair that carries no signal earns ~no weight on its own. Every event in the
+# list is both a candidate target and a candidate neighbour of the others.
+# Process RSS, not gc(). gc() reports only the R-managed heap, and the gap is
+# not small: a script that measured 477 MB by gc() was holding 1,226 MB at the
+# OS. Every memory number this arm prints is the real footprint or it is not
+# printed at all.
+.rss_mb <- function() {
+  if (!requireNamespace("ps", quietly = TRUE)) return(NA_integer_)
+  tryCatch(as.integer(ps::ps_memory_info(ps::ps_handle())[["rss"]] / 1024^2),
+           error = function(e) NA_integer_)
+}
+
+NEIGHBOUR_COMBINE <- nzchar(Sys.getenv("CITIUS_BT_NEIGHBOUR_COMBINE", ""))
+# Links are an offset, a correlation and a quantile -- population shape, which
+# moves slowly and does not need the full 12-year ability window the entrants
+# themselves are rated on. Shorter window and a capped athlete sample are what
+# keep this arm's footprint flat; both are knobs so a run that wants the exact
+# figure can pay for it.
+NEIGHBOUR_LINK_DAYS <- .env_int("CITIUS_BT_NEIGHBOUR_LINK_DAYS", "1825")
+NEIGHBOUR_LINK_ATHLETES <- .env_int("CITIUS_BT_NEIGHBOUR_LINK_ATHLETES", "25000")
+NEIGHBOUR_COMBINE_EVENTS <- trimws(strsplit(
+  Sys.getenv("CITIUS_BT_NEIGHBOUR_COMBINE_EVENTS", ""), ",")[[1]])
+NEIGHBOUR_COMBINE_EVENTS <- NEIGHBOUR_COMBINE_EVENTS[nzchar(NEIGHBOUR_COMBINE_EVENTS)]
+NEIGHBOUR_LINK_CACHE <- new.env(parent = emptyenv())
+if (NEIGHBOUR_COMBINE) {
+  if (NEIGHBOUR_TRANSFER) cli::cli_abort(c(
+    "{.envvar CITIUS_BT_NEIGHBOUR_TRANSFER} and {.envvar CITIUS_BT_NEIGHBOUR_COMBINE} are both on.",
+    "x" = "They are two different cross-event mechanisms; running both stacks one on the other.",
+    "i" = "Pick one per arm -- and give each arm its own {.envvar CITIUS_BT_CACHE}."))
+  if (length(NEIGHBOUR_COMBINE_EVENTS) < 2L) cli::cli_abort(c(
+    "{.envvar CITIUS_BT_NEIGHBOUR_COMBINE} is on but {.envvar CITIUS_BT_NEIGHBOUR_COMBINE_EVENTS} names fewer than 2 events.",
+    "i" = "Comma-separated event_ids, e.g. {.val AT-1500Metres-M,AT-5000Metres-M}."))
+  # The history `past` is read on is restricted to the events being SCORED, so
+  # an arm whose neighbours are not in that set would silently find no neighbour
+  # rows and score as a dead heat against its control -- the failure the cache
+  # fingerprint exists to prevent, arriving by a different door.
+  NEIGHBOUR_EVENTS <- unique(c(NEIGHBOUR_EVENTS, NEIGHBOUR_COMBINE_EVENTS))
+  cli::cli_alert_info(
+    "Cross-event COMBINE ON across {length(NEIGHBOUR_COMBINE_EVENTS)} event{?s}: {.val {NEIGHBOUR_COMBINE_EVENTS}}.")
+}
+
+# Links are a population quantity that moves slowly, so they are fitted once per
+# calendar year of `cut_date` on the same window and the same store `past` uses.
+# Same look-ahead trade-off build_neighbour_rank_reference()'s own docstring
+# names: a meet early in a year gets links fitted from data including later in
+# that year. It moves the OFFSET and CORRELATION between two events, never an
+# individual athlete's own form, and it is stated here rather than buried.
+.neighbour_links_for <- function(cut_date) {
+  yr <- format(as.Date(cut_date), "%Y")
+  if (is.null(NEIGHBOUR_LINK_CACHE[[yr]])) {
+    nb_hist <- if (USE_STORE) {
+      read_results_store(STORE, events = NEIGHBOUR_COMBINE_EVENTS,
+                         from = cut_date - NEIGHBOUR_LINK_DAYS, to = cut_date - 1L,
+                         columns = STORE_COLS)
+    } else {
+      clean[date < cut_date & date >= cut_date - NEIGHBOUR_LINK_DAYS &
+              event_id %in% NEIGHBOUR_COMBINE_EVENTS]
+    }
+    nb_hist <- nb_hist[!is.na(perf)]
+    # SAMPLE, AND GO DOWN estimate_ability()'s `only=` FAST PATH.
+    #
+    # The first version estimated every rated athlete in these events over the
+    # full HISTORY_DAYS window, which is the trap citius/CLAUDE.md names
+    # outright: the population priors are computed over everyone regardless, and
+    # the expensive per-athlete body is what `only=` skips. A 4-meet smoke run
+    # of this arm held 6.7 GB and had to be killed because it was competing with
+    # other work on the machine (2026-09-14).
+    #
+    # Sampling is sound here because links are POPULATION quantities -- an
+    # offset, a correlation and a quantile -- not per-athlete ones. The pairs
+    # this fits carry n ~ 1,400 at full size; a uniform sample of athletes is
+    # unbiased for all three and min_n still drops any pair that ends up too
+    # thin rather than fitting one on noise.
+    ids <- unique(as.character(nb_hist$athlete_id))
+    if (length(ids) > NEIGHBOUR_LINK_ATHLETES) {
+      set.seed(20260914L)   # same sample for treatment and control re-runs
+      ids <- sample(ids, NEIGHBOUR_LINK_ATHLETES)
+    }
+    pop <- estimate_ability(nb_hist, as_of = as.Date(cut_date) - 1L,
+                            calibration = calibration, only = ids)
+    links <- fit_neighbour_links(
+      pop, target_events = NEIGHBOUR_COMBINE_EVENTS,
+      neighbour_events = NEIGHBOUR_COMBINE_EVENTS)
+    # Free the two big transients before the meet loop allocates again. gc() is
+    # called explicitly because the next allocation is large and R will not
+    # return this memory to the OS on its own in time to matter.
+    rm(pop, nb_hist, ids); gc(verbose = FALSE)
+    # Parenthesised for the same reason the transfer arm's `{(.nb_path)}` is:
+    # cli reads a leading-dot name as a style token and aborts. Walked into it
+    # anyway on 2026-09-14, two screens below the comment that warns about it.
+    .rss_now <- .rss_mb()
+    cli::cli_alert_info(
+      "Neighbour links {yr}: {nrow(links)} pair{?s} fitted; process RSS {.val {(.rss_now)}} MB.")
+    NEIGHBOUR_LINK_CACHE[[yr]] <- links
+  }
+  NEIGHBOUR_LINK_CACHE[[yr]]
+}
+# One reference per calendar year of `cut_date`, read the SAME way `past` is
+# read a few hundred lines below (partitioned store when available, same
+# HISTORY_DAYS window -- so the population `ability_raw` is measured against
+# is on the same scale as the entrants' own, not a differently-windowed one)
+# but restricted to NEIGHBOUR_EVENTS only, never the whole corpus. Memoised in
+# NEIGHBOUR_REF_CACHE; a PSOCK worker gets its own empty cache (see
+# export_vars) and builds into it lazily, same as any other per-worker
+# memoisation here.
+.neighbour_reference_for <- function(cut_date) {
+  yr <- format(as.Date(cut_date), "%Y")
+  if (is.null(NEIGHBOUR_REF_CACHE[[yr]])) {
+    nb_hist <- if (USE_STORE) {
+      read_results_store(STORE, events = NEIGHBOUR_EVENTS,
+                         from = cut_date - HISTORY_DAYS, to = cut_date - 1L,
+                         columns = STORE_COLS)
+    } else {
+      clean[date < cut_date & date >= cut_date - HISTORY_DAYS &
+              event_id %in% NEIGHBOUR_EVENTS]
+    }
+    NEIGHBOUR_REF_CACHE[[yr]] <- build_neighbour_rank_reference(
+      nb_hist, events = NEIGHBOUR_EVENTS, as_of = as.Date(cut_date) - 1L,
+      calibration = calibration)
+  }
+  NEIGHBOUR_REF_CACHE[[yr]]
+}
 
 # THE MISSING COUNTERPARTS OF project_championship().
 #
@@ -490,7 +777,7 @@ if (FAMILY_DEBIAS) {
 # 105 are T1 and 262 are T2/T3 -- so 72% of a 90-minute run went to populations
 # the framework calls "context only, never the headline".
 #
-# CITIUS_BT_TIER=T1_elite keeps everything the T1 decision needs: 43 scored
+# CITIUS_BT_TIER=M1 keeps everything the T1 decision needs: 43 scored
 # meets after the holdout, plus 62 before it, which is what score_arm.R fits the
 # baseline sigma on. ~25 minutes instead of ~90.
 #
@@ -521,7 +808,7 @@ ELITE_HISTORY <- nzchar(Sys.getenv("CITIUS_BT_ELITE_HISTORY", ""))
 # RESTRICT THE TRAINING HISTORY BY MEET TIER (Pete's goal, 2026-09-05: "train
 # all T1 and T2 leading up to a T1 event and test on the T1 event").
 #
-#   CITIUS_BT_TRAIN_TIERS=T1_elite,T2_strong
+#   CITIUS_BT_TRAIN_TIERS=M1,M2
 #
 # DIFFERENT KNOB FROM CITIUS_BT_TIER, and conflating them is the easy mistake:
 # CITIUS_BT_TIER picks which meets are SCORED, leaving the model untouched;
@@ -540,7 +827,28 @@ ELITE_HISTORY <- nzchar(Sys.getenv("CITIUS_BT_ELITE_HISTORY", ""))
 # Target-race shock add-back. See the application site in run_meet() for what
 # it does and why it refuses without CITIUS_BT_ADJUST_RACE.
 #   CITIUS_BT_SHOCK_ADDBACK=expected_race_shock.csv
+#   CITIUS_BT_SPREAD_SCALE=0.8   spread-only lever on the ability table's sigma
+#                                and sigma_marks AFTER ability; shares the
+#                                control's ability cache, so a sweep costs the
+#                                simulation only (see the block near line 226)
 SHOCK_FILE <- Sys.getenv("CITIUS_BT_SHOCK_ADDBACK", "")
+# The altitude add-back: put the target venue's altitude back onto ability,
+# uniformly across the field. Default OFF so no existing arm changes; it is the
+# counterpart of estimate_ability()'s history subtraction, which is itself
+# inert unless the calibration carries $altitude.
+ALT_ADDBACK <- !identical(Sys.getenv("CITIUS_BT_ALT_ADDBACK", "0"), "0")
+# Compute the sigma scale k ONCE for the whole arm, per event, and pass it to
+# every per-meet call. k belongs to the event and the history window, not to the
+# meet (within-event spread over six years 1.94%, between-event 19.75%), so the
+# n>=10 population it is estimated from does not need dragging through the
+# expensive per-group body 120 times. Measured on one meet-sized call: 8.24s ->
+# 4.40s, 47% faster and BIT-IDENTICAL when the same k is passed back.
+#
+# NOT bit-identical at ARM level, and that distinction matters. Each meet
+# currently computes k pooled over ITS OWN event mix, so a card with 800m and
+# 5000m applies one blended k to both. A hoisted k is necessarily per event, so
+# this is a model change and needs judging on medal Brier, not just on the clock.
+SIGMA_K_HOIST <- !identical(Sys.getenv("CITIUS_BT_SIGMA_K_HOIST", "0"), "0")
 shock_tbl <- NULL
 if (nzchar(SHOCK_FILE)) {
   .sf <- file.path(OUT, SHOCK_FILE)
@@ -669,10 +977,85 @@ outcome_rows <- if (identical(HISTORY, OUTCOMES)) {
 # 2026-09-04 WAC promotion actually reaches the model). Narrowing it away would
 # silently drop the arm back to the feed's `tier` and report a dead heat --
 # the same trap the `wind` and `indoor` notes above describe.
-keep_cols <- c("athlete_id", "event_id", "date", "perf", "age", "round", "tier",
+keep_cols <- c("athlete_id", "event_id", "date", "perf", "age", "round", "race_code",
                "meet_tier", "competition_id", "comp_start", "place", "race_key",
-               "wind", "momentum", "indoor", "venue_country")
+               "wind", "momentum", "indoor", "venue_country",
+               # alt_m added 2026-09-17, and its absence is exactly the trap the
+               # paragraph above describes. The altitude arm ran to completion,
+               # scored cleanly, and produced predictions BYTE-IDENTICAL to its
+               # control -- diff 0.0000pp in every altitude band, t = NaN --
+               # because estimate_ability() gates its altitude block on
+               # `"alt_m" %in% names(dt)` and this list had narrowed it away.
+               # A no-op that is indistinguishable from "the mechanism does
+               # nothing" is the worst possible failure for an A/B, and it was
+               # caught only by checking that the two arms DIFFERED at all
+               # before reading their numbers.
+               #
+               # Three places must carry a new history column, not one:
+               # build_stores.R's keep (into the store), _deployed.R's rescue
+               # keep list, and HERE (into the model). Getting two of three
+               # ships a term that cannot fire.
+               "alt_m")
 if (!is.null(clean)) clean <- clean[, intersect(keep_cols, names(clean)), with = FALSE]
+# VENUE ALTITUDE FOR THE RACE BEING PREDICTED.
+#
+# The history gets alt_m from the parquet store, which build_stores.R joins on
+# venue_city. The OUTCOME rows come from championship_results, which has no
+# alt_m at all -- so `field$alt_m` did not exist and the add-back applied to
+# ZERO races on its first run. Caught in thirty seconds by the zero-application
+# guard rather than by a wasted arm, which is the entire reason that guard was
+# copied across with the pattern.
+#
+# Guarded on alt_m being ABSENT: when HISTORY and OUTCOMES are the same object,
+# outcome_rows is `clean`, which already carries alt_m. Merging again would hit
+# data.table's duplicate-name rule and produce alt_m.x / alt_m.y, leaving no
+# bare `alt_m` -- the exact failure the meet_tier merge a few hundred lines up
+# documents, where a column existed under two names and the reader silently took
+# neither.
+if (ALT_ADDBACK && !"alt_m" %in% names(outcome_rows) &&
+    "venue_city" %in% names(outcome_rows)) {
+  .ve <- tryCatch({
+    source(file.path(here::here("citiusdata", "scripts"), "_venue_elevation.R"),
+           local = TRUE)
+    as.data.table(venue_elevation(file.path(here::here("citiusdata"), "data"),
+                                  quiet = TRUE))[, .(venue_city, alt_m)]
+  }, error = function(e) NULL)
+  if (is.null(.ve) || !nrow(.ve)) {
+    cli::cli_abort(c(
+      "x" = "{.envvar CITIUS_BT_ALT_ADDBACK} is on but venue_elevation is unavailable.",
+      "i" = "Without it every race has an unknown venue altitude and the add-back is inert."))
+  }
+  # sort = FALSE IS LOAD-BEARING. merge() sorts by the join key by default,
+  # which reorders outcome_rows; `finals` and then `pool` inherit that order,
+  # and `setorder(pool, comp_start)` leaves TIES in whatever order the input
+  # had. The pool is an evenly spaced subsample, so a different tie-break picks
+  # DIFFERENT MEETS -- measured: turning this merge on made an arm share only 87
+  # of 120 meets with its control, while both caches looked complete and no
+  # guard fired. The meet_tier merge a few hundred lines down already passes
+  # sort = FALSE for the same reason; I did not copy it.
+  .n_before <- nrow(outcome_rows)
+  outcome_rows <- merge(outcome_rows, .ve, by = "venue_city", all.x = TRUE,
+                        sort = FALSE)
+  # venue_city is unique in venue_elevation (3,110 of 3,110 as at 2026-09-18),
+  # so this join must not change the row count. Asserted rather than assumed: a
+  # future duplicate would multiply history rows silently.
+  if (nrow(outcome_rows) != .n_before) cli::cli_abort(
+    "joining venue elevation changed the outcome row count ({.n_before} -> {nrow(outcome_rows)}) -- venue_city is not unique in venue_elevation.")
+  .has_city <- !is.na(outcome_rows$venue_city) & nzchar(as.character(outcome_rows$venue_city))
+  .cov <- if (any(.has_city)) 100 * mean(!is.na(outcome_rows$alt_m[.has_city])) else NA_real_
+  cli::cli_alert_info(
+    "outcome rows: alt_m on {round(100*mean(!is.na(outcome_rows$alt_m)),1)}% of rows; of rows WITH a venue_city, {round(.cov,1)}% resolved.")
+  # Coverage, not presence -- the same assertion build_stores.R makes, and for
+  # the same reason: a column that is present and empty passes every other check.
+  if (is.na(.cov) || .cov < 70) cli::cli_abort(
+    "venue altitude resolved for only {round(.cov,1)}% of outcome rows carrying a venue_city -- the join is broken, not merely sparse.")
+} else if (ALT_ADDBACK && !"venue_city" %in% names(outcome_rows) &&
+           !"alt_m" %in% names(outcome_rows)) {
+  cli::cli_abort(c(
+    "x" = "{.envvar CITIUS_BT_ALT_ADDBACK} is on but the outcome rows carry neither alt_m nor venue_city.",
+    "i" = "There is no way to know the target race's altitude, so the add-back would be silently inert."))
+}
+
 outcome_rows <- outcome_rows[, intersect(keep_cols, names(outcome_rows)), with = FALSE]
 
 # STORE/USE_STORE are now resolved near the top of the script (see the
@@ -723,7 +1106,53 @@ store_fp <- function() if (!USE_STORE) NA_character_ else tryCatch({
   unname(tools::md5sum(tf))
 }, error = function(e) NA_character_)
 
+# CODE IDENTITY. The fingerprint above md5s every DATA input and says nothing
+# about the CODE that read them -- a script edit or a package change moves
+# what an arm computes exactly as much as a new calibration file does, and
+# this fingerprint was blind to it. Bit on 2026-09-17: alt_m was added to
+# keep_cols mid-session, and the already-populated control cache was still
+# accepted because no fingerprint field had moved -- the reasoning that it was
+# harmless was almost certainly right and was never actually checked.
+#
+# script_md5 catches an edit to THIS file. citius_git catches everything
+# else: the package this script calls into (estimate_ability, deployed_field,
+# .altitude_band, ...) lives in its own git repo, and a change there is
+# invisible to a hash of this script alone. Warns rather than aborts on
+# failure (no git on PATH, not a repo, etc.) -- consistent with md5_of()'s
+# own choice: a degraded fingerprint that still runs beats an arm that
+# refuses to start because git introspection failed.
+# here::here(), not commandArgs() introspection of the running script's own
+# path -- this file is always invoked as citiusdata/scripts/backtest_athletics.R
+# (every runner in this repo calls it that way), so hardcoding the known path
+# is simpler and more reliable than parsing --file= out of commandArgs(), which
+# behaves differently under Rscript, R CMD BATCH and an interactive source().
+this_script_md5 <- tryCatch(
+  unname(tools::md5sum(here::here("citiusdata", "scripts", "backtest_athletics.R"))),
+  error = function(e) NA_character_)
+if (is.na(this_script_md5)) cli::cli_alert_warning(
+  "Could not md5 this script's own file; the fingerprint cannot detect a code edit here.")
+
+citius_git <- tryCatch({
+  pkg_dir <- here::here("citius")
+  sha   <- system2("git", c("-C", pkg_dir, "rev-parse", "--short=12", "HEAD"),
+                   stdout = TRUE, stderr = FALSE)
+  ok    <- length(sha) == 1L && !identical(attr(sha, "status"), 128L)
+  if (!ok) {
+    NA_character_
+  } else {
+    dirty <- length(system2("git", c("-C", pkg_dir, "status", "--porcelain"),
+                            stdout = TRUE, stderr = FALSE)) > 0
+    paste0(sha, if (dirty) "-dirty" else "")
+  }
+}, error = function(e) NA_character_)
+if (is.na(citius_git)) cli::cli_alert_warning(
+  "Could not read the citius package's git SHA; the fingerprint cannot detect a package change.")
+
 arm_fingerprint <- list(
+  # CODE identity, not data. A script edit or a citius package change moves
+  # what an arm computes exactly as much as a new calibration file does; this
+  # is the fix for that gap. See the definitions and their own comment above.
+  script_md5 = this_script_md5, citius_git = citius_git,
   history = HISTORY, outcomes = OUTCOMES, calibration = CALIBRATION,
   calibration_md5 = md5_of(CALIBRATION), history_md5 = md5_of(HISTORY),
   history_source = if (USE_STORE) "store" else "rds", store_md5 = store_fp(),
@@ -735,6 +1164,9 @@ arm_fingerprint <- list(
   sigma_parts = paste(SIGMA_PARTS, collapse = ","),
   adjust_context = ADJUST_CONTEXT, adjust_race = ADJUST_RACE,
   use_meet_tier = USE_MEET_TIER,
+  adj_marks = ADJ_MARKS_FILE, adj_marks_md5 = if (nzchar(ADJ_MARKS_FILE)) md5_of(ADJ_MARKS_FILE) else "",
+  adj_skip = if (nzchar(ADJ_MARKS_FILE)) Sys.getenv("CITIUS_BT_ADJ_SKIP", "road") else "",
+  adj_terms = if (nzchar(ADJ_MARKS_FILE)) Sys.getenv("CITIUS_BT_ADJ_TERMS", "wind,venue,indoor") else "",
   tier_filter = TIER_FILTER, elite_history = ELITE_HISTORY,
   # Without this, a T1+T2-trained arm and its full-history control share a
   # cache: the second one read back the first's predictions and the A/B came
@@ -744,9 +1176,20 @@ arm_fingerprint <- list(
   train_tiers = paste(TRAIN_TIERS, collapse = ","),
   # Same reason as every other field here: an arm with the add-back and one
   # without it must not share a cache and come home a dead heat.
-  shock_addback = SHOCK_FILE,
+  shock_addback = SHOCK_FILE, alt_addback = ALT_ADDBACK,
   shock_addback_md5 = if (nzchar(SHOCK_FILE)) md5_of(SHOCK_FILE) else NA_character_,
   history_days = HISTORY_DAYS, n_sims = N_SIMS, cohort = COHORT,
+  sigma_k_hoist = SIGMA_K_HOIST,
+  # CITIUS_SIGMA_K_BY_EVENT is read DIRECTLY by estimate_ability() from the
+  # environment, not passed through this script at all -- so without this
+  # line it is invisible to the ability cache key. Two arms differing only by
+  # this flag would share the same calibration_md5 (per-event k is a runtime
+  # behaviour, not a calibration file), so the SECOND arm would silently
+  # cache-hit the FIRST arm's pooled-k ability and test nothing. Caught before
+  # it cost an arm, not after: the same class of silent-cache bug this file
+  # has already hit twice today (ABIL_ON/ABIL_DIR missing from export_vars,
+  # alt_m missing from keep_cols).
+  sigma_k_by_event = identical(Sys.getenv("CITIUS_SIGMA_K_BY_EVENT", "0"), "1"),
   athletes = ATHLETES, peak_gamma = PEAK_GAMMA,
   robust_location = ROBUST_LOCATION, decouple_peak = DECOUPLE_PEAK,
   # Without these two, a tier arm would read the control's cached meets back as
@@ -762,6 +1205,9 @@ arm_fingerprint <- list(
   # A sigma scale changes every simulated probability, so an arm run with one
   # must never read back cached meets from an arm run without it.
   sigma_scale = if (is.na(SIGMA_SCALE)) "" else format(SIGMA_SCALE),
+  # post-ability spread lever; in the fingerprint (a different arm) but excluded
+  # from the ability-cache key (same ability) -- see ABIL_EXCLUDE
+  spread_scale = if (is.na(SPREAD_SCALE)) "" else format(SPREAD_SCALE),
   family_debias = FAMILY_DEBIAS,
   cond_context = COND_CONTEXT,
   # Hash the file this arm ACTUALLY read, not the default name. Hashing the
@@ -787,7 +1233,30 @@ arm_fingerprint <- list(
   # a refit instead of recomputing. Caught in review, 2026-09-09.
   event_params_md5 = if (nzchar(Sys.getenv("CITIUS_EVENT_PARAMS", ""))) md5_of(Sys.getenv("CITIUS_EVENT_PARAMS")) else NA_character_,
   sel_shrink = if (is.na(SEL_SHRINK)) "" else format(SEL_SHRINK),
-  sel_sigma = SEL_SIGMA)
+  sel_sigma = SEL_SIGMA,
+  # THE CROSS-EVENT ARMS WERE ABSENT FROM THIS LIST ENTIRELY (found 2026-09-14).
+  # backtest_cache_neighbour_treat_full and _ctrl_full, run overnight on
+  # 2026-09-13, carry BYTE-IDENTICAL `_arm.rds` stamps (md5 1477e9ae0ca4ba0a
+  # 4fd4eeeb3299ea57) -- the treatment and its own control were
+  # indistinguishable to the guard whose entire job is telling them apart. They
+  # survived only because they were pointed at different directories by hand.
+  # Same failure class as project_tier, family_debias and marks_only above, each
+  # of which is here because it once produced a dead heat.
+  #
+  # The r2 file is hashed, not named: fit scripts rewrite it in place under the
+  # same name, exactly the gap event_params_md5 exists to close.
+  neighbour_transfer = NEIGHBOUR_TRANSFER,
+  neighbour_r2_file = if (NEIGHBOUR_TRANSFER) NEIGHBOUR_R2_FILE else NA_character_,
+  neighbour_r2_md5 = if (NEIGHBOUR_TRANSFER) md5_of(NEIGHBOUR_R2_FILE) else NA_character_,
+  neighbour_combine = NEIGHBOUR_COMBINE,
+  # The event list changes which ratings may speak to which, so two combine arms
+  # over different event sets are different arms and must not share a cache.
+  neighbour_combine_events = paste(sort(NEIGHBOUR_COMBINE_EVENTS), collapse = ","),
+  # Both change the fitted links, so they change every prediction this arm
+  # makes. A run with a 5-year link window must not read back cached meets from
+  # one fitted on 12 years.
+  neighbour_link_days = if (NEIGHBOUR_COMBINE) NEIGHBOUR_LINK_DAYS else NA_integer_,
+  neighbour_link_athletes = if (NEIGHBOUR_COMBINE) NEIGHBOUR_LINK_ATHLETES else NA_integer_)
 
 # A cache that predates this check is stamped by the first run after it, which
 # is the best that can be done retrospectively -- an existing directory carries
@@ -848,7 +1317,7 @@ if (ELITE_HISTORY) {
                      .(competition_id = as.character(competition_id),
                        athlete_id = as.character(athlete_id))]
   ec <- merge(ec, ctl, by = "competition_id", all.x = TRUE)
-  elite_ids <- unique(ec[meet_tier == "T1_elite"]$athlete_id)
+  elite_ids <- unique(ec[meet_tier == "M1"]$athlete_id)
   cli::cli_alert_info("Elite history mode: {length(elite_ids)} athlete{?s} have a T1 final.")
   # Zero would silently mean "history is just the entrants", which is a
   # different and much worse model, not a faster one.
@@ -876,7 +1345,25 @@ if (nzchar(TIER_FILTER)) {
 # backtest is not all one era.
 pool <- unique(finals[, .(competition_id, comp_start)])[!is.na(comp_start) &
                                                           comp_start >= as.Date("2016-01-01")]
-setorder(pool, comp_start)
+# competition_id, NOT just comp_start. setorder() on comp_start ALONE leaves
+# ties in whatever order the input arrived in, and pool[round(seq(1, .N,
+# length.out = TARGET))] below is an evenly spaced SAMPLE -- so a tie-break
+# that depends on input order changes WHICH MEETS an arm scores whenever
+# anything upstream reorders `finals`/`outcome_rows`, silently. Measured
+# 2026-09-18: adding a merge() without sort = FALSE reordered outcome_rows and
+# two arms that should have shared a pool overlapped on only 87 of 120 meets --
+# both caches looked complete, neither had an empty meet, no guard fired, and
+# the resulting comparison numbers were meaningless. competition_id makes the
+# order a pure function of the data: two meets can share a start date, never a
+# competition_id, so this is deterministic regardless of what order the rows
+# arrived in.
+#
+# INVALIDATES EVERY EXISTING ARM CACHE. The pool for a given TARGET can shift
+# meet-for-meet the moment ties are broken a different way, so a resumed run
+# against an old cache is comparing (potentially) different meets under one
+# fingerprint. This is why the fix waited for a moment with nothing running --
+# see DECISIONS.md 2026-09-18.
+setorder(pool, comp_start, competition_id)
 # All meets with finals, not a sample. The old 250 cap dated from when each
 # refit took 17s; restricting history to the meet's own events made it 2.5s. At
 # 250 meets the backtest used only 13% of the 13,108 available finals.
@@ -894,6 +1381,99 @@ setorder(pool, comp_start)
 # check, because the history is identical either way.
 TARGET <- .env_int("CITIUS_BT_TARGET", "900")
 if (nrow(pool) > TARGET) pool <- pool[round(seq(1, .N, length.out = TARGET))]
+
+# ---- ABILITY CACHE -----------------------------------------------------------
+# estimate_ability() is 93% of an arm's runtime (measured: ability 336s, simulate
+# 19s, read 8s on 25 meets) and NOTHING cached it. On 2026-09-17 three 120-meet
+# arms each recomputed it from scratch and discarded it -- 180 minutes by the
+# runtime log, 61% of everything logged that day.
+#
+# THE KEY IS THE ARM FINGERPRINT MINUS THE FIELDS THAT CANNOT CHANGE AN ABILITY.
+# An EXCLUSION list, deliberately, not an inclusion list: a field added to the
+# fingerprint later is then cached-on by default, so the failure mode of
+# forgetting to update this is a missed cache HIT (slow, correct) rather than a
+# wrong cache HIT (fast, silently wrong). The reverse choice is how an A/B comes
+# home a dead heat.
+#
+# The excluded four are simulation and projection settings applied AFTER ability
+# exists, which is what makes a marks-only arm and its full-simulation twin share
+# one cache -- the case that motivated this.
+ABIL_EXCLUDE <- c("n_sims", "marks_only", "project_tier", "project_round", "spread_scale")
+ABIL_KEY <- substr(digest::digest(
+  arm_fingerprint[setdiff(names(arm_fingerprint), ABIL_EXCLUDE)], algo = "md5"), 1, 16)
+ABIL_DIR <- file.path(OUT, "ability_cache", ABIL_KEY)
+ABIL_ON  <- !identical(Sys.getenv("CITIUS_BT_ABILITY_CACHE", "1"), "0")
+if (ABIL_ON) {
+  dir.create(ABIL_DIR, recursive = TRUE, showWarnings = FALSE)
+  # NB the variable is NOT dot-prefixed. cli reads a leading dot inside braces
+  # as an inline style tag, so `{.n_hit}` is parsed as an unknown style and
+  # throws -- the same trap this file already documents for `{tier_src}` a few
+  # hundred lines down. A dot-prefixed local is fine everywhere EXCEPT inside a
+  # cli string.
+  n_abil_cached <- length(list.files(ABIL_DIR, pattern = "\\.rds$"))
+  cli::cli_alert_info("Ability cache {ABIL_KEY}: {n_abil_cached} meet{?s} already cached.")
+}
+# Counted by FILE, not by an env counter. A PSOCK worker gets its own copy of
+# any environment, so increments inside run_meet() never come back to the parent
+# -- the count would read 0 in exactly the parallel mode this cache exists for.
+.abil_before <- if (ABIL_ON) length(list.files(ABIL_DIR, pattern = "\\.rds$")) else 0L
+
+# ---- THE ARM-LEVEL SIGMA SCALE ----------------------------------------------
+# One estimate_ability() pass over the whole pool's events and history window,
+# purely to derive k per event. Expensive once; it replaces the n>=10 population
+# being carried through the per-group body in all 120 per-meet calls.
+#
+# as_of is the LATEST cutoff in the pool, so the window covers every meet's
+# history. An earlier as_of would estimate k from less data than some meets
+# actually see.
+SIGMA_K <- NULL
+if (SIGMA_K_HOIST) {
+  .t_k <- Sys.time()
+  .ev_all  <- unique(finals$event_id)
+  .cut_max <- max(pool$comp_start, na.rm = TRUE)
+  .hist_k <- if (USE_STORE) {
+    read_results_store(STORE, events = .ev_all,
+                       from = .cut_max - HISTORY_DAYS, to = .cut_max - 1L,
+                       columns = STORE_COLS)
+  } else {
+    clean[date < .cut_max & date >= .cut_max - HISTORY_DAYS &
+            event_id %in% .ev_all]
+  }
+  .ab_k <- estimate_ability(.hist_k, as_of = .cut_max, half_life = half_life,
+                            calibration = calibration,
+                            adjust_context = ADJUST_CONTEXT,
+                            adjust_race = ADJUST_RACE,
+                            sigma_mode = SIGMA_MODE, sigma_parts = SIGMA_PARTS,
+                            robust_location = ROBUST_LOCATION,
+                            decouple_peak = DECOUPLE_PEAK)
+  .ab_k <- data.table::as.data.table(.ab_k)
+  .ref_k <- .ab_k[n >= 10L & is.finite(sigma_rob) & sigma_rob > 0 &
+                    is.finite(sigma_raw) & sigma_raw > 0]
+  # Same rule estimate_ability() applies: an event with fewer than 20
+  # well-observed athletes uses the pooled k. It has to be filled in HERE,
+  # from the whole population -- inside a per-meet call the hoist has already
+  # dropped that population, so its own pooled k would be computed from a
+  # handful of entrants and fall to 1.
+  .k_pool <- if (nrow(.ref_k) >= 20L) stats::median(.ref_k$sigma_raw / .ref_k$sigma_rob) else 1
+  if (!is.finite(.k_pool) || .k_pool <= 0) .k_pool <- 1
+  SIGMA_K <- .ref_k[, .(k_ev = stats::median(sigma_raw / sigma_rob), n_ref = .N),
+                    by = event_id][n_ref >= 20L & is.finite(k_ev) & k_ev > 0,
+                                   .(event_id, k_ev)]
+  # Every pool event, not just those with rows in this window: an earlier meet's
+  # window starts before .cut_max - HISTORY_DAYS, so it can hold an event this
+  # pass never saw, and estimate_ability() now refuses a gap on the only= path.
+  .thin <- setdiff(union(as.character(.ev_all), as.character(.ab_k$event_id)),
+                   SIGMA_K$event_id)
+  if (length(.thin))
+    SIGMA_K <- rbind(SIGMA_K, data.table::data.table(event_id = .thin, k_ev = .k_pool))
+  cli::cli_alert_info("sigma k: {length(.thin)} thin event{?s} use the pooled k {round(.k_pool, 3)}.")
+  rm(.ab_k, .hist_k, .ref_k); invisible(gc())
+  if (!nrow(SIGMA_K)) cli::cli_abort(c(
+    "x" = "{.envvar CITIUS_BT_SIGMA_K_HOIST} is on but the history window produced no ability rows to estimate k from.",
+    "i" = "Check the pool's events and HISTORY_DAYS before re-running."))
+  cli::cli_alert_success(
+    "sigma k hoisted: {nrow(SIGMA_K)} event{?s} in {round(as.numeric(difftime(Sys.time(), .t_k, units = 'secs')))}s (k {round(min(SIGMA_K$k_ev),3)}-{round(max(SIGMA_K$k_ev),3)}).")
+}
 
 todo <- pool[!file.exists(file.path(BT_CACHE, paste0(competition_id, ".rds")))]
 cli::cli_alert_info("{nrow(todo)} of {nrow(pool)} meet{?s} remaining.")
@@ -941,6 +1521,7 @@ AGE_WARN$n <- 0L; AGE_WARN$last <- NA_character_
 # Races that actually received the shock add-back. Reported at the end so a
 # lookup that matched nothing is visible instead of looking like a null arm.
 SHOCK <- new.env(parent = emptyenv()); SHOCK$n <- 0L; SHOCK$fallback <- 0L
+ALT <- new.env(parent = emptyenv()); ALT$n <- 0L; ALT$novenue <- 0L; ALT$zerofam <- 0L
 # Races that actually received the championship offset, counted for the same
 # reason SHOCK is: the gate is invisible when it misfires. project_championship()
 # shifts a whole field by one per-family constant, so it cancels out of every
@@ -967,7 +1548,35 @@ CHAMP_OK <- !is.null(calibration$championship) && nrow(calibration$championship)
 NOFAM <- new.env(parent = emptyenv())
 NOFAM$rows <- 0L; NOFAM$meets <- 0L; NOFAM$events <- character()
 
+# Meets skipped because their history carried no usable meet_tier. Counted, not
+# fatal. The guard below used to abort the WHOLE run for ONE such meet, which
+# killed a 150-meet arm on 2026-09-17 after 8 meets. Skipping is NOT the silent
+# fallback the guard exists to prevent -- that was falling back to the FEED tier
+# and scoring the meet anyway. This excludes the meet and says so, and both arms
+# skip the same meets because the condition depends on history data alone, not
+# on the calibration under test.
+TIER_SKIP <- new.env(parent = emptyenv())
+TIER_SKIP$n <- 0L; TIER_SKIP$ids <- character()
+
 n <- min(nrow(todo), MAX_PER_RUN)
+
+# SPREAD THE CAPPED SELECTION ACROSS TIME. `pool` is sampled evenly across the
+# calendar (line ~1123) but then `setorder(pool, comp_start)` leaves it in
+# ascending date order, and `todo` inherits that. The run loop below is
+# `seq_len(n)`, so a run that does NOT complete the whole pool scores the OLDEST
+# meets in it -- with a cap, processing order IS selection.
+#
+# Measured 2026-09-15: a 100-meet cap on a 900-meet pool scored 2016-01-29 to
+# 2019-03-19 ONLY -- 81% of it 2016-2018, nothing at all from 2023 onward -- and
+# reported it as a backtest of the corpus. This is the same symptom
+# DECISIONS.md:890 recorded on 2026-09-02 ("landed entirely on 2016-2018 meets
+# despite the underlying T1+T2 pool spanning 2016-2026") and concluded was "in
+# per-meet scoring, not pool selection". It is neither: it is date-ordered
+# processing plus a cap.
+#
+# Deterministic, so both arms of an A/B still walk the same meets in the same
+# order from the same cache state.
+if (nrow(todo) > n) todo <- todo[round(seq(1, .N, length.out = n))]
 
 # Embarrassingly parallel across meets: every iteration reads its own history
 # window, refits, simulates and would write its own cache file -- no meet
@@ -994,6 +1603,7 @@ run_meet <- function(i) {
   # every prediction un-shifted and come back looking exactly like a null
   # result -- the vacuous pass this file's other guards exist to prevent.
   local_shock_applied <- 0L
+  local_alt_applied <- 0L; local_alt_novenue <- 0L; local_alt_zerofam <- 0L
   local_shock_fallback <- 0L
   local_champ_applied <- 0L
   local_champ_na <- 0L
@@ -1024,6 +1634,19 @@ run_meet <- function(i) {
             event_id %in% meet_events]
   })
   if (!is.null(dev_ids)) past <- past[as.character(athlete_id) %in% dev_ids]
+  if (!is.null(ADJ_MARKS)) {
+    # cleaned marks for the history; the meet being forecast is untouched
+    # (its outcome is scored as run). Coverage is printed per meet so a broken
+    # join cannot read as a null result.
+    .n0 <- nrow(past)
+    past[, athlete_id := as.character(athlete_id)]
+    past <- ADJ_MARKS[past, on = c("race_key", "athlete_id", "event_id")]
+    stopifnot("adjusted-marks join changed the history row count" = nrow(past) == .n0)
+    .hit <- is.finite(past$adj_total) & past$adj_total != 0
+    past[.hit, perf := perf - adj_total]
+    past[, adj_total := NULL]
+    if (mean(.hit) < 0.5) cli::cli_warn("adjusted marks reached only {round(100 * mean(.hit), 1)}% of this meet's history rows.")
+  }
   # Training-tier restriction. Applied to the HISTORY only -- the meet being
   # forecast is chosen by TIER_FILTER and is untouched by this.
   if (length(TRAIN_TIERS)) {
@@ -1067,10 +1690,23 @@ run_meet <- function(i) {
     # this flag exists to avoid, so it aborts rather than reports.
     .fill <- if ("meet_tier" %in% names(past)) mean(!is.na(past$meet_tier)) else NA_real_
     if (!is.finite(.fill) || .fill == 0) {
-      cli::cli_abort(c(
-        "x" = "{.envvar CITIUS_BT_MEET_TIER} is on but no usable {.field meet_tier} reached the history.",
-        "i" = "Columns present: {.val {grep('^meet_tier', names(past), value = TRUE)}}.",
-        "i" = "Without it the context adjustment falls back to the feed tier, silently."))
+      # SKIP THE MEET, DO NOT KILL THE RUN. Aborting here cost a 150-meet arm
+      # after 8 meets on 2026-09-17. The defect this guard was written for is
+      # scoring a meet while silently falling back to the FEED tier; excluding
+      # the meet and reporting it is not that. The caller counts these and
+      # aborts if the rate is material, so a systemic break still fails loudly
+      # -- what changes is that ONE bad meet no longer costs 150.
+      cli::cli_alert_warning(
+        "{cid}: no usable meet_tier in its history -- SKIPPED (not scored). Columns present: {.val {grep('^meet_tier', names(past), value = TRUE)}}.")
+      return(list(cid = cid, out = list(), rows = nrow(past), timing = local_timing,
+                  age_warn = local_age_warn, nofam = local_nofam,
+                  shock_applied = local_shock_applied,
+                alt_applied = local_alt_applied, alt_novenue = local_alt_novenue,
+                alt_zerofam = local_alt_zerofam,
+                  shock_fallback = local_shock_fallback,
+                  champ_applied = local_champ_applied,
+                  champ_na = local_champ_na, champ_mixed = local_champ_mixed,
+                  tier_skip = TRUE))
     }
     if (i == 1L) cli::cli_alert_info(
       # NB `{tier_src}`, not `{.src}` -- cli reads a leading dot as an inline
@@ -1082,6 +1718,8 @@ run_meet <- function(i) {
     return(list(cid = cid, out = list(), rows = rows, timing = local_timing,
                 age_warn = local_age_warn, nofam = local_nofam,
                 shock_applied = local_shock_applied,
+                alt_applied = local_alt_applied, alt_novenue = local_alt_novenue,
+                alt_zerofam = local_alt_zerofam,
                 shock_fallback = local_shock_fallback,
                 champ_applied = local_champ_applied,
                 champ_na = local_champ_na, champ_mixed = local_champ_mixed))
@@ -1089,7 +1727,23 @@ run_meet <- function(i) {
   # The event-params table drives the single-call path: it carries a half-life
   # per event, so the per-family split has nothing to add.
   if (!is.null(EVENT_PARAMS)) hl_map <- NULL
-  ability <- if (is.null(hl_map)) {
+  # `only` is part of the key: the same meet scored for a different entrant set
+  # is a different computation, and estimate_ability(only=) changes what is
+  # returned. Hashing it is cheaper than being wrong about it.
+  # The entrant set is taken from `block` directly, NOT from `only_ids`, which
+  # is defined further down inside the per-family branch and does not exist at
+  # this point -- every parallel worker died on "object 'only_ids' not found"
+  # the first time this ran. This is the same expression the single-call branch
+  # passes to estimate_ability(only=).
+  .abil_only <- unique(as.character(block$athlete_id))
+  .abil_f <- if (ABIL_ON) file.path(
+    ABIL_DIR, sprintf("%s-%s.rds", cid,
+                      substr(digest::digest(list(sort(.abil_only),
+                                                 as.character(cut_date)), algo = "md5"), 1, 8))) else ""
+  .abil_cached <- ABIL_ON && file.exists(.abil_f)
+  ability <- if (.abil_cached) {
+    readRDS(.abil_f)
+  } else if (is.null(hl_map)) {
     tick("ability", estimate_ability(past, as_of = cut_date,
                                      half_life = if (is.null(EVENT_PARAMS)) half_life else
                                        EVENT_PARAMS[, .(event_id, family, half_life)],
@@ -1105,6 +1759,7 @@ run_meet <- function(i) {
                                      sigma_mode = SIGMA_MODE,
                                      sigma_parts = SIGMA_PARTS,
                                      only = unique(as.character(block$athlete_id)),
+                                     sigma_k = SIGMA_K,
                                      peak_gamma = if (is.null(EVENT_PARAMS) || !"peak_gamma" %in% names(EVENT_PARAMS))
                                        PEAK_GAMMA else EVENT_PARAMS[, .(event_id, family, peak_gamma)],
                                      robust_location = ROBUST_LOCATION,
@@ -1176,6 +1831,7 @@ run_meet <- function(i) {
                        calibration = calibration, adjust_context = ADJUST_CONTEXT,
                        adjust_race = ADJUST_RACE, sigma_mode = SIGMA_MODE, sigma_parts = SIGMA_PARTS,
                        only = only_ids,
+                       sigma_k = SIGMA_K,
                        # Unreachable with EVENT_PARAMS set (line ~1047 forces hl_map to
                        # NULL whenever EVENT_PARAMS is non-NULL, which routes to the
                        # single-call branch above instead) -- kept consistent with it
@@ -1187,13 +1843,51 @@ run_meet <- function(i) {
                        decouple_peak = DECOUPLE_PEAK)
     }), fill = TRUE))
   }
+  if (ABIL_ON && !.abil_cached) {
+    {
+      # Write via a temp file and rename: a killed run must never leave a
+      # half-written .rds that a later run reads back as a valid ability table.
+      # This machine kills long jobs routinely, so that is a when, not an if.
+      .tmp <- paste0(.abil_f, ".tmp", Sys.getpid())
+      tryCatch({ saveRDS(ability, .tmp); file.rename(.tmp, .abil_f) },
+               error = function(e) { unlink(.tmp); invisible(NULL) })
+    }
+  }
+  # Spread-only scale: AFTER the cache write, so the cache holds the unscaled
+  # table and every scale in a sweep reads the same one. Only the two columns
+  # simulate_event() draws with; kappa/shrinkage/ability are already fixed.
+  if (!is.na(SPREAD_SCALE)) {
+    ability <- data.table::copy(ability)
+    ability[, sigma := sigma * SPREAD_SCALE]
+    if ("sigma_marks" %in% names(ability)) ability[, sigma_marks := sigma_marks * SPREAD_SCALE]
+  }
+
+  # Cross-event ability transfer, gated by NEIGHBOUR_TRANSFER (see the flag
+  # definition above for the cost this is designed around). Applied to
+  # WHICHEVER branch just ran, once, rather than duplicated inside each --
+  # `ability` here already carries every entrant's OWN rows in both the
+  # target and any neighbour events (the `only=` restriction above is by
+  # athlete_id, not by event, and `past` was never filtered to one event), so
+  # only the population reference needs building separately.
+  if (NEIGHBOUR_TRANSFER && nrow(ability)) {
+    ability <- tick("ability", transfer_neighbour_ability(
+      ability, neighbour_r2 = NEIGHBOUR_R2,
+      rank_reference = .neighbour_reference_for(cut_date)))
+  }
+  # The combine arm, same placement and the same reasoning about `ability`
+  # already carrying each entrant's neighbour-event rows. Mutually exclusive
+  # with the transfer arm, enforced at the flag definition rather than here.
+  if (NEIGHBOUR_COMBINE && nrow(ability)) {
+    ability <- tick("ability", combine_neighbour_ability(
+      ability, links = .neighbour_links_for(cut_date)))
+  }
 
   # CHAMPIONSHIP OFFSET -- NOW GATED ON THE RACE ACTUALLY BEING A CHAMPIONSHIP.
   # Applied per race inside the loop below, not here.
   #
   # This used to run unconditionally on every meet, on the stated assumption
   # that "every meet scored here is a championship". That was true when the
-  # backtest only scored global championships. It is false for a T1_elite
+  # backtest only scored global championships. It is false for a M1
   # population: measured 2026-09-09, 347 of 4,273 scored races (8.1%) are OW
   # championships and the other 3,926 (91.9%) were getting a championship
   # uplift they should never have had.
@@ -1281,9 +1975,9 @@ run_meet <- function(i) {
     # 4,273 scored races disagree with themselves on tier (none currently mix OW
     # with non-OW, so no verdict actually flips today), and 449 races carry no
     # tier at all. Said out loud rather than left to a silent modal pick.
-    .tier_race <- .mode1(field$tier)
+    .tier_race <- .mode1(field$race_code)
     if (CHAMP_OK && is.na(.tier_race)) local_champ_na <- local_champ_na + 1L
-    if (CHAMP_OK && data.table::uniqueN(field$tier, na.rm = TRUE) > 1L)
+    if (CHAMP_OK && data.table::uniqueN(field$race_code, na.rm = TRUE) > 1L)
       local_champ_mixed <- local_champ_mixed + 1L
     if (CHAMP_OK && isTRUE(citius:::.is_championship(.tier_race))) {
       entrants <- project_championship(entrants, calibration)
@@ -1375,7 +2069,7 @@ run_meet <- function(i) {
       entrants[, ability := ability + cw * (prior_mu - ability)]
     }
     if (!is.na(TIER_SHRINK)) {
-      entrants <- project_tier(entrants, .mode1(field$tier), calibration,
+      entrants <- project_tier(entrants, .mode1(field$race_code), calibration,
                                shrink = TIER_SHRINK)
     }
     if (!is.na(ROUND_SHRINK)) {
@@ -1450,6 +2144,65 @@ run_meet <- function(i) {
         local_shock_applied <- local_shock_applied + 1L
       }
     }
+    # THE TARGET-RACE ALTITUDE ADD-BACK -- the missing counterpart of the
+    # altitude subtraction in estimate_ability(), and the exact same asymmetry
+    # the shock add-back above exists to fix.
+    #
+    # estimate_ability() SUBTRACTS the fitted altitude effect from every
+    # historical mark, which makes ability altitude-neutral -- a Kenyan's
+    # Eldoret marks stop being read as slow. Nothing put it back for the race
+    # being forecast, so a race AT altitude was predicted from sea-level-neutral
+    # ability and came out systematically fast. Built only as the subtract half
+    # on 2026-09-17; Pete identified the missing half by asking why a correction
+    # that should hit a field evenly was hitting it unevenly.
+    #
+    # UNIFORM ACROSS THE FIELD, and that is the point. Venue altitude is a
+    # property of the RACE, so every entrant shifts by the same amount and the
+    # ordering cannot change -- placings are bit-identical by construction, the
+    # same property the tier/round projections and the shock add-back rely on.
+    # The per-ATHLETE part of altitude already happened, correctly, in history.
+    #
+    # SIGN: history does perf - beta*alt_km to remove the effect, so predicting
+    # AT the venue adds it back, ability + beta*alt_km. distance beta is
+    # negative, so a 2,000 m venue lowers ability and predicts a slower mark.
+    if (ALT_ADDBACK && !is.null(calibration$altitude) && NROW(calibration$altitude)) {
+      .alt_tbl <- as.data.table(calibration$altitude)
+      # Venue altitude of the race being predicted, from the outcome rows --
+      # one venue per race, so .mode1() guards against a mixed value rather
+      # than taking whichever row sorts first.
+      .v_alt <- if ("alt_m" %in% names(field)) suppressWarnings(
+        as.numeric(.mode1(field$alt_m[is.finite(field$alt_m)]))) else NA_real_
+      if (is.finite(.v_alt)) {
+        # has_cr = TRUE matches the regime the ability was built in when the
+        # race strip is on. Using the wrong scope would add back a coefficient
+        # fitted against a different quantity.
+        # Family computed HERE, not borrowed from the shock block above: .fam1
+        # is defined inside `if (!is.null(shock_tbl))`, so with the shock
+        # add-back off it does not exist and every worker dies on it. Third
+        # instance of this trap today (only_ids, ABIL_ON, now .fam1) -- a
+        # variable defined in a conditional branch is not available to the code
+        # after it.
+        .alt_fam <- .citius_event_registry$family[
+          match(ev, .citius_event_registry$event_id)]
+        .k <- .alt_tbl[family == .alt_fam & has_cr == isTRUE(ADJUST_RACE)]
+        if (nrow(.k) && is.finite(.k$beta[1]) && .k$beta[1] != 0) {
+          entrants[, ability := ability + .k$beta[1] * (.v_alt / 1000)]
+          local_alt_applied <- local_alt_applied + 1L
+        } else {
+          # Known venue, but this family's coefficient is zero -- deliberately,
+          # for every family the calibration zeroed. Counted separately so the
+          # three categories SUM to the race count. Without this bucket the
+          # report said "7 applied, 28 no venue" out of 35 races, which implied
+          # no race had a known venue with a zeroed family -- impossible with
+          # sprints in the pool, and the inconsistency was the only signal that
+          # a category was missing rather than the join being broken.
+          local_alt_zerofam <- local_alt_zerofam + 1L
+        }
+      } else {
+        local_alt_novenue <- local_alt_novenue + 1L
+      }
+    }
+
     # FAMILY-POOL DEBIAS, applied LAST -- after aging and the tier/round
     # projections, immediately before simulation. Order matters less here than
     # for selection shrinkage: this offset was fit against the FINAL predicted
@@ -1584,6 +2337,8 @@ run_meet <- function(i) {
   list(cid = cid, out = out, rows = rows, timing = local_timing,
        age_warn = local_age_warn, nofam = local_nofam,
        shock_applied = local_shock_applied,
+                alt_applied = local_alt_applied, alt_novenue = local_alt_novenue,
+                alt_zerofam = local_alt_zerofam,
        shock_fallback = local_shock_fallback,
        champ_applied = local_champ_applied,
        champ_na = local_champ_na, champ_mixed = local_champ_mixed)
@@ -1609,7 +2364,7 @@ if (N_WORKERS > 1L) {
                     "dev_ids", "elite_ids", "USE_MEET_TIER", "calibration", "PRIOR_WEIGHT",
                     "mom_eff", "aging", "N_SIMS", "hl_map", "half_life", "ADJUST_CONTEXT",
                     "ADJUST_RACE", "SIGMA_MODE", "SIGMA_PARTS", "PEAK_GAMMA",
-                    "ROBUST_LOCATION", "DECOUPLE_PEAK", "CHAMP_OK",
+                    "ROBUST_LOCATION", "DECOUPLE_PEAK", "CHAMP_OK", "SPREAD_SCALE",
                     # run_meet() reads these at the project_tier()/
                     # project_round() calls. Without them here the serial path
                     # works (lexical scoping) and every PSOCK worker dies with
@@ -1640,7 +2395,24 @@ if (N_WORKERS > 1L) {
                     # run_meet() reads shock_tbl and ADJUST_RACE on every worker
                     # regardless of whether the add-back is on, so both bindings
                     # must exist even when NULL -- the FAMILY_DEBIAS trap again.
-                    "shock_tbl", "ADJUST_RACE")
+                    "shock_tbl", "ADJUST_RACE",
+                    # Same FAMILY_DEBIAS trap: run_meet()'s
+                    # `if (NEIGHBOUR_TRANSFER && ...)` runs on every worker
+                    # regardless of the flag, so NEIGHBOUR_TRANSFER must exist
+                    # even FALSE. The other three are small (a handful of rows
+                    # / an empty env each) and only ever read when the flag is
+                    # TRUE, but exported unconditionally too rather than adding
+                    # a fifth instance of the conditional-export trap this file
+                    # has already hit four times.
+                    "NEIGHBOUR_TRANSFER", "NEIGHBOUR_R2", "NEIGHBOUR_EVENTS",
+                    "NEIGHBOUR_REF_CACHE", ".neighbour_reference_for",
+                    # Same reason as the transfer trio above: the
+                    # `if (NEIGHBOUR_COMBINE && ...)` branch runs on every
+                    # worker, so all four names must resolve there or parallel
+                    # mode dies on a lookup the single-process run never makes.
+                    "NEIGHBOUR_COMBINE", "NEIGHBOUR_COMBINE_EVENTS",
+                    "NEIGHBOUR_LINK_CACHE", ".neighbour_links_for",
+                    "NEIGHBOUR_LINK_DAYS", "NEIGHBOUR_LINK_ATHLETES", ".rss_mb")
   # `clean` is the in-memory fallback corpus, potentially gigabytes -- exporting
   # it would copy that to every worker. Only export it when it will actually be
   # read (no store), which is exactly the case the memory cost is unavoidable.
@@ -1650,6 +2422,17 @@ if (N_WORKERS > 1L) {
   # selection-shrinkage call. Caught before running this time, not after a
   # crashed parallel arm -- the pattern from earlier today generalises.
   export_vars <- c(export_vars, "SEL_SHRINK", "SEL_SIGMA")
+  # The ability cache must reach the workers. run_meet() reads ABIL_ON and
+  # ABIL_DIR unconditionally, so without these every parallel worker dies on
+  # "object 'ABIL_ON' not found" -- the conditional-export trap this file has
+  # already hit four times (FAMILY_DEBIAS, TRAIN_TIERS, shock_tbl, NEIGHBOUR_*).
+  # Caught before running this time, by reading the patch rather than the diff.
+  export_vars <- c(export_vars, "ABIL_ON", "ABIL_DIR", "ALT_ADDBACK", "SIGMA_K")
+  # The conditional-export trap, fifth time (2026-09-19): run_meet() reads
+  # ADJ_MARKS unconditionally (`if (!is.null(ADJ_MARKS))`), so the parallel
+  # workers died with "object 'ADJ_MARKS' not found" on the first real arm
+  # after a one-worker smoke test had passed. NULL exports fine.
+  export_vars <- c(export_vars, "ADJ_MARKS")
   # Same TIER_SHRINK trap, same day: run_meet() calls family_pool_offset(),
   # whose closure reads `.fp`/`.fp_fs_by_event` from this script's top-level
   # environment. clusterExport() re-homes an exported function's environment
@@ -1660,24 +2443,52 @@ if (N_WORKERS > 1L) {
   if (FAMILY_DEBIAS) export_vars <- c(export_vars, "family_pool_offset",
                                       ".fp", ".fp_fs_by_event")
   parallel::clusterExport(cl, export_vars, envir = environment())
-  # parLapply schedules statically -- a worker's whole chunk runs before ANY of
-  # its results come back, so there is no way to print per-meet as it happens.
-  # Silence here is expected; it was NOT expected on the serial path below,
-  # which is why that one stays a plain for-loop instead of reusing this batch
-  # shape for both.
-  results <- tryCatch(parallel::parLapply(cl, seq_len(n), run_meet),
-                      finally = parallel::stopCluster(cl))
+  # CHUNKED, so an interrupted run keeps the work it has already done.
+  #
+  # parLapply collects the WHOLE batch before returning, so a single call over
+  # every meet wrote NOTHING to the cache until the last meet finished. This
+  # file's header advertises "the script is resumable" and that was only ever
+  # true BETWEEN complete runs: a 2.5h arm killed at 2.4h lost all 2.4h.
+  # Measured 2026-09-17 -- a run stopped after 30 minutes had two workers at
+  # ~1,500 CPU-seconds each and left exactly one file behind, `_arm.rds`, the
+  # fingerprint. Roughly 50 CPU-minutes, unrecoverable, with nothing to resume
+  # from. This repo kills arms often enough (OOM, the memory watchdog, a
+  # deliberate stop) that "loses everything on interruption" is a routine cost,
+  # not a tail risk.
+  #
+  # The chunk size trades two things. Smaller loses less when a run dies but
+  # pays parLapply's static-scheduling tail more often, because every chunk
+  # waits for its slowest worker. N_WORKERS * 4 keeps each worker holding ~4
+  # meets per round while capping the loss at about one chunk's wall time.
+  # Override with CITIUS_BT_CHUNK when meets are unusually uneven in size.
+  #
+  # Progress still cannot print per meet WITHIN a chunk -- that limit is
+  # parLapply's, not this loop's -- but it now prints once per chunk instead of
+  # once at the very end, so a long parallel run stops reading like a hang.
+  BT_CHUNK <- .env_int("CITIUS_BT_CHUNK", as.character(max(1L, N_WORKERS * 4L)))
+  chunks <- split(seq_len(n), ceiling(seq_len(n) / BT_CHUNK))
   cli::cli_alert_info(
-    "Loop wall time: {round(as.numeric(difftime(Sys.time(), t_loop0, units = 'secs')))}s for {n} meet{?s}.")
-  for (i in seq_len(n)) {
-    r <- results[[i]]
+    "Parallel chunking: {length(chunks)} chunk{?s} of up to {BT_CHUNK} meet{?s}; the cache is written after each.")
+  i <- 0L
+  tryCatch({
+  for (.ch in chunks) {
+  results <- parallel::parLapply(cl, .ch, run_meet)
+  for (.k in seq_along(.ch)) {
+    i <- i + 1L
+    r <- results[[.k]]
     saveRDS(r$out, file.path(BT_CACHE, paste0(r$cid, ".rds")))
+    if (isTRUE(r$tier_skip)) {
+      TIER_SKIP$n <- TIER_SKIP$n + 1L; TIER_SKIP$ids <- c(TIER_SKIP$ids, r$cid)
+    }
     TIMING$rows <- TIMING$rows + r$rows
     TIMING$read <- TIMING$read + r$timing$read
     TIMING$ability <- TIMING$ability + r$timing$ability
     TIMING$sim <- TIMING$sim + r$timing$sim
     AGE_WARN$n <- AGE_WARN$n + r$age_warn
     SHOCK$n <- SHOCK$n + (if (is.null(r$shock_applied)) 0L else r$shock_applied)
+    ALT$n <- ALT$n + (if (is.null(r$alt_applied)) 0L else r$alt_applied)
+    ALT$novenue <- ALT$novenue + (if (is.null(r$alt_novenue)) 0L else r$alt_novenue)
+    ALT$zerofam <- ALT$zerofam + (if (is.null(r$alt_zerofam)) 0L else r$alt_zerofam)
     SHOCK$fallback <- SHOCK$fallback + (if (is.null(r$shock_fallback)) 0L else r$shock_fallback)
     CHAMP$n <- CHAMP$n + (if (is.null(r$champ_applied)) 0L else r$champ_applied)
     CHAMP$na_tier <- CHAMP$na_tier + (if (is.null(r$champ_na)) 0L else r$champ_na)
@@ -1689,6 +2500,10 @@ if (N_WORKERS > 1L) {
     }
     cli::cli_alert("  {i}/{n}: {r$cid} -> {length(r$out)} race{?s}")
   }
+  }
+  }, finally = parallel::stopCluster(cl))
+  cli::cli_alert_info(
+    "Loop wall time: {round(as.numeric(difftime(Sys.time(), t_loop0, units = 'secs')))}s for {n} meet{?s}.")
 } else {
   # Serial path stays a plain for-loop, printing as each meet finishes -- byte-
   # for-byte the original script's live feedback, just calling run_meet() for
@@ -1698,12 +2513,18 @@ if (N_WORKERS > 1L) {
   for (i in seq_len(n)) {
     r <- run_meet(i)
     saveRDS(r$out, file.path(BT_CACHE, paste0(r$cid, ".rds")))
+    if (isTRUE(r$tier_skip)) {
+      TIER_SKIP$n <- TIER_SKIP$n + 1L; TIER_SKIP$ids <- c(TIER_SKIP$ids, r$cid)
+    }
     TIMING$rows <- TIMING$rows + r$rows
     TIMING$read <- TIMING$read + r$timing$read
     TIMING$ability <- TIMING$ability + r$timing$ability
     TIMING$sim <- TIMING$sim + r$timing$sim
     AGE_WARN$n <- AGE_WARN$n + r$age_warn
     SHOCK$n <- SHOCK$n + (if (is.null(r$shock_applied)) 0L else r$shock_applied)
+    ALT$n <- ALT$n + (if (is.null(r$alt_applied)) 0L else r$alt_applied)
+    ALT$novenue <- ALT$novenue + (if (is.null(r$alt_novenue)) 0L else r$alt_novenue)
+    ALT$zerofam <- ALT$zerofam + (if (is.null(r$alt_zerofam)) 0L else r$alt_zerofam)
     SHOCK$fallback <- SHOCK$fallback + (if (is.null(r$shock_fallback)) 0L else r$shock_fallback)
     CHAMP$n <- CHAMP$n + (if (is.null(r$champ_applied)) 0L else r$champ_applied)
     CHAMP$na_tier <- CHAMP$na_tier + (if (is.null(r$champ_na)) 0L else r$champ_na)
@@ -1725,11 +2546,34 @@ cli::cli_alert_info(
   "read {round(TIMING$read)}s ({round(100*TIMING$read/tot)}%) | ability {round(TIMING$ability)}s ({round(100*TIMING$ability/tot)}%) | simulate {round(TIMING$sim)}s ({round(100*TIMING$sim/tot)}%) | {format(TIMING$rows, big.mark=',')} history rows read"
 )
 
+# These three numbers were PRINTED and then thrown away, which is why "which
+# stage dominated?" needed a special profiling run to answer instead of a query.
+# They now land in the same central log the long-run hook and runtime_log.R
+# write, so the question is answerable after the fact for every arm ever run:
+#   bash ~/.claude/lib/runtimes.sh citiusdata
+# Wrapped in tryCatch because a logging failure must never fail an arm that has
+# already done its work.
+tryCatch({
+  .rt <- file.path(Sys.getenv("USERPROFILE"), ".claude", "runtime-log.csv")
+  if (nzchar(Sys.getenv("USERPROFILE")) && dir.exists(dirname(.rt))) {
+    if (!file.exists(.rt)) cat("ts_end,secs,repo,tool,source,label\n", file = .rt)
+    .arm <- basename(BT_CACHE)
+    for (.st in c("read", "ability", "sim")) {
+      .v <- round(TIMING[[.st]])
+      if (is.finite(.v) && .v >= 1)
+        cat(sprintf("%s,%d,citiusdata,R,backtest,backtest_athletics.R / %s / %s (%d meets)\n",
+                    format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
+                    as.integer(.v), .st, .arm, nrow(pool)),
+            file = .rt, append = TRUE)
+    }
+  }
+}, error = function(e) invisible(NULL))
+
 # --- assemble and score ------------------------------------------------------
 # Assemble THIS RUN'S POOL, not the whole directory. The cache outlives the pool
 # that filled it: narrowing CITIUS_BT_TIER or lowering CITIUS_BT_TARGET leaves
 # the earlier meets on disk, and reading the directory scored them anyway -- so a
-# T1-only arm reported T1+T2+T3 races under a `tier_filter = T1_elite` stamp,
+# T1-only arm reported T1+T2+T3 races under a `tier_filter = M1` stamp,
 # which score_arm.R then trusts to decide comparability. `_arm.rds` is skipped by
 # construction here rather than filtered out downstream.
 cache_files <- file.path(BT_CACHE, paste0(pool$competition_id, ".rds"))
@@ -1770,12 +2614,12 @@ if (nzchar(SHOCK_FILE)) {
   if (SHOCK$n == 0L) cli::cli_abort(c(
     "x" = "The shock add-back was configured but applied to ZERO races.",
     "i" = "Every prediction is unshifted, so this arm is identical to its control
-           and would score as a clean null. Check the tier/round/family keys in
+           and would score as a clean null. Check the race_code/round/family keys in
            {.file {SHOCK_FILE}} against what the scored races actually carry."))
   cli::cli_alert_success("Shock add-back applied to {SHOCK$n} race{?s}.")
   if (SHOCK$fallback > 0L) cli::cli_alert_warning(
     "{SHOCK$fallback} of those {round(100*SHOCK$fallback/SHOCK$n)}% used the
-     family-agnostic fallback cell (exact tier x round x family cell missing) --
+     family-agnostic fallback cell (exact race_code x round x family cell missing) --
      another family's expected shock, not this race's own.")
 }
 # CHAMPIONSHIP OFFSET COVERAGE. Reported every run, because a gate that fires on
@@ -1789,7 +2633,7 @@ if (CHAMP_OK) {
     "!" = "calibration$championship is present but the offset was applied to ZERO races.",
     "i" = "Expected on a population with no OW-tier meets (Diamond League, national
            championships), and wrong if this run was meant to include Olympics or
-           World Championships. Check what {.code tier} the scored races carry."))
+           World Championships. Check what {.code race_code} the scored races carry."))
 } else {
   cli::cli_alert_warning(
     "No calibration$championship table; championship races were NOT offset.")
@@ -1804,6 +2648,38 @@ if (NOFAM$rows > 0L) {
   cli::cli_alert_warning(
     "{format(NOFAM$rows, big.mark = ',')} history row{?s} across {length(NOFAM$events)} event{?s} had no registry family on {NOFAM$meets} meet{?s}; estimated at half_life = {half_life}.")
   cli::cli_alert_info("Events: {.val {utils::head(NOFAM$events, 5)}}")
+}
+# Meets excluded for having no usable meet_tier. A handful is a data fact about
+# old or thinly-catalogued meets; a large share means the join is broken and the
+# arm is being scored on a population nobody chose, so that still aborts. The
+# bar is 10% -- high enough that the long tail of odd meets passes, low enough
+# that a systemic break cannot hide as "a few skips".
+# ZERO-APPLICATION GUARD for the altitude add-back. The shock add-back's own
+# comment records that this exact guard caught a lookup returning NA for every
+# race -- without it that arm "would have run to completion with every
+# prediction unshifted and scored as a clean null". The altitude term has
+# already produced one silently-inert arm today; it does not get a second.
+if (ALT_ADDBACK) {
+  if (ALT$n == 0L) {
+    cli::cli_abort(c(
+      "x" = "{.envvar CITIUS_BT_ALT_ADDBACK} is on but the add-back applied to ZERO races.",
+      "i" = "{ALT$novenue} race{?s} had no usable venue alt_m; the rest matched no (family, has_cr) row in calibration$altitude.",
+      "i" = "Refusing to report an arm whose mechanism never fired -- that is indistinguishable from a null result."))
+  }
+  cli::cli_alert_success(
+    "altitude add-back: applied to {ALT$n} race{?s}, {ALT$zerofam} skipped for a zeroed family, {ALT$novenue} for an unknown venue altitude ({ALT$n + ALT$zerofam + ALT$novenue} total).")
+}
+if (TIER_SKIP$n > 0L) {
+  .skip_share <- 100 * TIER_SKIP$n / max(1L, nrow(pool))
+  cli::cli_alert_warning(
+    "meet_tier: {TIER_SKIP$n} of {nrow(pool)} meet{?s} ({round(.skip_share,1)}%) had no usable meet_tier and were SKIPPED, not scored.")
+  cli::cli_alert_info("Skipped: {.val {utils::head(TIER_SKIP$ids, 12)}}{if (TIER_SKIP$n > 12) ' ...' else ''}")
+  if (.skip_share > 10) cli::cli_abort(c(
+    "x" = "{round(.skip_share,1)}% of meets had no usable meet_tier -- that is a broken join, not a tail of odd meets.",
+    "i" = "Rebuild the store with {.code join_tier = TRUE}, or check the catalogue's competition_id type (character in parquet, integer in the harvest).",
+    "i" = "Refusing to report an arm scored on a population chosen by a defect."))
+} else if (USE_MEET_TIER) {
+  cli::cli_alert_success("meet_tier: usable on every scored meet.")
 }
 if (AGE_WARN$n > 0L) {
   cli::cli_alert_warning(

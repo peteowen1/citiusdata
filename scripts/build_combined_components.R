@@ -30,7 +30,7 @@ cat(sprintf("scoring table: %d discipline-slots across %d combined events\n",
 
 # --- load ---------------------------------------------------------------------
 cols <- c("event_id", "discipline", "competition_id", "race_key", "athlete_id",
-          "mark", "place", "date", "round", "tier", "sex", "indoor")
+          "mark", "place", "date", "round", "race_code", "sex", "indoor")
 c0 <- setDT(read_parquet(file.path(D, "athletics_corpus.parquet"), col_select = cols))
 c0[, athlete_id := as.character(athlete_id)]
 cat(sprintf("corpus %s rows\n", format(nrow(c0), big.mark = ",")))

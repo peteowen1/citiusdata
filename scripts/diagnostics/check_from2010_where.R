@@ -23,7 +23,7 @@
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 source(here::here("citiusdata", "scripts", "_env.R"))
 D    <- here::here("citiusdata", "data")
-TIER <- Sys.getenv("TIER_ONLY", "T2_strong")
+TIER <- Sys.getenv("TIER_ONLY", "M2")
 YR   <- .env_int("ARMS_FROM_YEAR", "2021")
 BAR  <- "|"
 

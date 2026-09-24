@@ -306,6 +306,6 @@ cli::cli_h1("{ARM} vs {BLAB}   (holdout from {HOLDOUT})")
 # decisions are made on T1 and confirmed on majors.
 MAJ <- c("olympics", "world_champs", "commonwealth")
 pop(d[class %in% MAJ], "PRIMARY: majors (the goal)")
-pop(d[meet_tier == "T1_elite"], "DECISIONS: T1 elite")
-pop(d[meet_tier == "T2_strong"], "T2 strong")
+pop(d[meet_tier == "M1"], "DECISIONS: T1 elite")
+pop(d[meet_tier == "M2"], "T2 strong")
 pop(d, "CONTEXT: all scored finals")

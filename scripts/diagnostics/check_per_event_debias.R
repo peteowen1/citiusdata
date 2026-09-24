@@ -139,7 +139,7 @@ say("train raw MAE  %.4f -> %.4f  (%s)", mean(abs(tr2$em)),
 
 cat("\n================ OUT-OF-SAMPLE TEST (the only result that counts) ================\n")
 blk(te, "TEST, all tiers")
-blk(te[meet_tier == "T1_elite"], "TEST, T1_elite")
+blk(te[meet_tier == "M1"], "TEST, M1")
 
 cat("\n---- largest fitted model offsets (train, n>=MIN_N) ----\n")
 print(head(off[n >= MIN_N][order(-abs(om)), .(grp, n, model_off = round(om,2), last5_off = round(ob,2))], 12))

@@ -1,4 +1,4 @@
-# Meet strength from CURRENT FORM, exponentially weighted -- the deployed basis
+# Meet meet_strength from CURRENT FORM, exponentially weighted -- the deployed basis
 # from 2026-09-03.
 #
 # WHY THIS REPLACED CAREER-BEST. The previous basis scored each finalist by
@@ -164,7 +164,7 @@ out[, all_road := NULL]
 stopifnot("no meets scored" = nrow(out) > 0,
           "strength_ew out of range" =
             all(is.na(out$strength_ew) | (out$strength_ew >= 0 & out$strength_ew <= 100)))
-cat(sprintf("\ncompetitions with an EW strength: %s (of %s scored)\n",
+cat(sprintf("\ncompetitions with an EW meet_strength: %s (of %s scored)\n",
             format(out[!is.na(strength_ew), .N], big.mark = ","),
             format(nrow(out), big.mark = ",")))
 write_parquet(out, file.path(OUT, "strength_ew.parquet"))

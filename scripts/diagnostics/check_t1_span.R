@@ -17,7 +17,7 @@ c0[, competition_id := as.character(competition_id)]
 h <- merge(h, c0[, .(competition_id, comp_name, meet_tier, is_major)],
            by = "competition_id", all.x = TRUE)
 
-t1 <- h[meet_tier == "T1_elite"]
+t1 <- h[meet_tier == "M1"]
 cat(sprintf("T1 scored rows: %s across %s competitions\n",
             format(nrow(t1), big.mark = ","),
             format(t1[, uniqueN(competition_id)], big.mark = ",")))

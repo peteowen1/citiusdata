@@ -346,7 +346,7 @@ st[, peak_mark := NA_real_]
 # discipline form_ratings_swimming.R applies to its own crosswalk joins):
 #   1. a row with a non-NA/non-empty athlete_name over one without
 #   2. worldaquatics as source over any other (it is the primary source: 64 of
-#      the tracked competitions are its own T1_elite catalogue, and it is the
+#      the tracked competitions are its own M1 catalogue, and it is the
 #      source this engine's own SEQ_SEED step resolves through)
 #   3. first remaining row, arbitrary
 cw <- setDT(read_parquet(file.path(OUT, "athlete_crosswalk_swimming.parquet")))

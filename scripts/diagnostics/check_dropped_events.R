@@ -19,6 +19,10 @@ dep <- d[, .(rated = .N, lead_n = round(max(n_eff[rk == 1]), 1)), by = .(event_i
 drop <- dep[rated < 10][order(rated)]
 cat("=== DROPPED: fewer than 10 rated athletes ===\n")
 print(drop[, .(discipline, sex, family, rated, lead_n)])
+# Nothing dropped is the PASSING case, and the merge below errors on an empty
+# table (rbindlist over zero events has no columns) -- which read as a guard
+# FAIL on 2026-09-19 for exactly the outcome the guard exists to confirm.
+if (nrow(drop) == 0L) { cat("no event is below ten rated athletes; nothing to explain\n"); quit(status = 0) }
 
 # how much RAW data does each dropped event actually have, before the T1/T2 cut?
 cat("\n=== what exists upstream for each ===\n")
@@ -32,9 +36,9 @@ res <- rbindlist(lapply(drop$event_id, function(EV) {
   x[, competition_id := as.character(competition_id)]
   x <- merge(x, cat0[, .(competition_id, meet_tier)], by = "competition_id", all.x = TRUE)
   data.table(event_id = EV, corpus_rows = nrow(x),
-             t1 = x[meet_tier == "T1_elite", .N], t2 = x[meet_tier == "T2_strong", .N],
+             t1 = x[meet_tier == "M1", .N], t2 = x[meet_tier == "M2", .N],
              uncat = x[is.na(meet_tier), .N],
-             other = x[!is.na(meet_tier) & !meet_tier %chin% c("T1_elite","T2_strong"), .N])
+             other = x[!is.na(meet_tier) & !meet_tier %chin% c("M1","M2"), .N])
 }))
 m <- merge(drop[, .(event_id, discipline, sex, rated)], res, by = "event_id")
 setorder(m, rated)

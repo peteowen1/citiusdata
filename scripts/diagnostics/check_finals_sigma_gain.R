@@ -64,7 +64,7 @@ d <- merge(d, reg, by = "event_id")
 cat_tbl <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
 cat_tbl[, competition_id := as.character(competition_id)]
 d <- merge(d, cat_tbl[, .(competition_id, meet_tier)], by = "competition_id", all.x = TRUE)
-d <- d[meet_tier == "T1_elite"]
+d <- d[meet_tier == "M1"]
 
 evs <- as.data.table(deployed_calibration(OUT)$events)[calibrated %in% TRUE,
                                                        .(event_id, sigma_within)]

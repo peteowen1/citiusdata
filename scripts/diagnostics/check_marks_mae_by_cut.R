@@ -135,7 +135,7 @@ sweep <- function(dd, byvar, label) {
   invisible(r)
 }
 
-POP <- full[meet_tier == "T1_elite"]
+POP <- full[meet_tier == "M1"]
 cli::cli_h1("T1 elite: where does the model lose to last-5?")
 o <- gap(POP)
 say("B3  POOLED T1: rel %+0.2f%% (+/- %.2f se), p=%.3g, n=%s, races=%d  [expect ~+3.3%%]",

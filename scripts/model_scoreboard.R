@@ -31,7 +31,10 @@ files <- setdiff(files, c("backtest_cache"))
 # and ties can duplicate an athlete within a race; keeping both would weight
 # those races twice.
 truth <- tryCatch(
-  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  # `columns=` is load-bearing: without it this is SELECT * (33 cols x 5M
+  # rows). Add any column you start reading off `truth`.
+  with_citius_db_connection(function(conn) load_championship_results(
+    conn, columns = c("race_key", "athlete_id", "mark", "event_id")), read_only = TRUE),
   error = function(e) {
     cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
     NULL

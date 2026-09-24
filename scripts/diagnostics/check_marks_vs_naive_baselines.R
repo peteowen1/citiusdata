@@ -260,8 +260,8 @@ rep_pop <- function(dd, label) {
 
 cli::cli_h1("Predicted mark vs naive baselines (deployed model, holdout {HOLDOUT})")
 rep_pop(full[class %in% c("olympics", "world_champs", "commonwealth")], "PRIMARY: majors")
-rep_pop(full[meet_tier == "T1_elite"], "DECISIONS: T1 elite")
-rep_pop(full[meet_tier == "T2_strong"], "T2 strong")
+rep_pop(full[meet_tier == "M1"], "DECISIONS: T1 elite")
+rep_pop(full[meet_tier == "M2"], "T2 strong")
 rep_pop(full, "CONTEXT: all scored finals")
 
 # ---- is the edge only in weak-baseline rows? --------------------------------

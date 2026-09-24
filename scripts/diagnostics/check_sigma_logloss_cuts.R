@@ -92,7 +92,7 @@ run_cut <- function(dd, by_col, label, min_races = MIN_RACES) {
 cat("\n================ medal LOGLOSS: sigma scale vs control, by tier ================\n")
 run_cut(m, "meet_tier", "meet tier")
 
-t2 <- m[meet_tier == "T2_strong"]
+t2 <- m[meet_tier == "M2"]
 cat("\n================ T2 ONLY -- where the significant loss lives ================\n")
 run_cut(t2, "family", "family (T2)")
 t2[, fs := paste(family, sex, sep = "|")]
@@ -100,7 +100,7 @@ run_cut(t2, "fs", "family x sex (T2)", min_races = 6L)
 run_cut(t2, "discipline", "discipline (T2)", min_races = 6L)
 
 cat("\n================ T1 for comparison ================\n")
-t1 <- m[meet_tier == "T1_elite"]
+t1 <- m[meet_tier == "M1"]
 run_cut(t1, "family", "family (T1)")
 
 cat("\n================ VERDICT ================\n")

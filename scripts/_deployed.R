@@ -26,7 +26,13 @@ DEPLOYED <- list(
   # stamp is the only thing a reader of a published card can use to tell which
   # model produced it. Dropping the `_0904` made the stamp name a different arm
   # from the file it actually loads.
-  stamp = "2026-09-09 wac_coast_0904_full2 ctxsd strip4fam evparams5 (debias OFF, blend OFF)",
+  # The wiring test extracts `arm` as the filename minus prefix/suffix, VERBATIM
+  # with its underscores intact, and demands it appear as one contiguous fixed
+  # substring of the stamp -- not just "the same words somewhere". Splitting it
+  # with other tags in between (my first attempt) failed the check even though
+  # every token was present, because the check is on the literal filename
+  # remainder, not on token membership.
+  stamp = "2026-09-20 wac_coast_0904_full2_altitude_banded_noroad_refit_ss080 (corpus to 2026-09-13; sigma_context x0.8, ctxsd strip4fam evparams5, debias OFF, blend OFF)",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -82,7 +88,7 @@ DEPLOYED <- list(
   #
   # This exact change was REJECTED on 2026-08-29 (T1 marks MAE +3.15% worse,
   # p=3e-15) and that verdict stood until the catalogue underneath it was
-  # rebuilt. Re-run 2026-09-04 on 53,311 paired T1_elite predictions across 74
+  # rebuilt. Re-run 2026-09-04 on 53,311 paired M1 predictions across 74
   # events: marks MAE 2.495% -> 2.428% (-2.68%, p=1.9e-283), gold logloss
   # 0.1675 -> 0.1662 (p=1.3e-04), medal logloss a tie (p=0.785). No metric
   # traded against another, which is the shape of a real fix rather than a
@@ -114,7 +120,48 @@ DEPLOYED <- list(
   # arm vs the control: medal logloss pooled -0.41% (sprint -1.93%, throw
   # -0.29%, jump +0.40%, hurdles +0.10%), marks MAE pooled -0.27% (sprint
   # -0.85%, jump -1.08%, throw -1.12%). Jumps are the watch item.
-  calibration = "calibration_corpus_wac_coast_0904_full2.rds",
+  #
+  # PROMOTED 2026-09-18: _altitude_banded_noroad adds $altitude
+  # (compose_altitude_calibration.R), a per-(family, sex, band) correction, road
+  # zeroed. A LINEAR per-km fit was tried first and rejected: it made 9,677
+  # sea-level races significantly worse (t=4.36) because a slope predicts a
+  # shift where the true effect is ~0 -- the fit's own banded diagnostic had
+  # already shown this and it was read past twice. Refit as a step function,
+  # <200m the reference band, beta=0 there by construction. Full-simulation arm
+  # vs the control, same 120-meet pool, 748 races: marks significantly better
+  # (pooled -0.0027pp, t=-4.14, p<0.0001; MAE -0.0028pp, p=0.0037), concordance
+  # flat (+0.0161pp, p=0.685), gold Brier flat (-0.09%, p=0.336), medal Brier
+  # flat (+0.05%, p=0.539). Road excluded throughout: its regressor is invalid
+  # for the family (alt_m is a start-city point elevation; a road course climbs
+  # and descends away from it), confirmed by the >2200m band staying
+  # significantly damaged (t=3.46) under banding alone and vanishing exactly
+  # (0.0000) only once road was also zeroed.
+  # HONEST LIMIT: does not clear the pre-registered gold<=-1% relative
+  # threshold that promoted the race-shock strip above -- this is a marks
+  # improvement with no measured placings cost, not a placings win. Full
+  # evidence: docs/reviews/altitude-arm-2026-09-17.md, DECISIONS.md 2026-09-18.
+  #
+  # PROMOTED 2026-09-20: `_refit` is the SAME composition refitted on the
+  # current corpus (33,431 meets to 2026-09-13, against 32,089 to 08-27). The
+  # `0904` in the name is the chain's family name, not the corpus date -- the
+  # provenance carries the real dates. Found by the leakage audit
+  # (docs/plans/leakage-noleak-chain-2026-09-19.md): seeing its own outcomes
+  # bought the old file ~0.2% Brier, while the fresher corpus alone bought gold
+  # Brier -0.85% and marks -0.013pp on the same 60-meet M1 pool. Rebuilt with
+  # `_run_noleak_chain.ps1` (CITIUS_NL_TAG=refit CITIUS_NL_EXCLUDE=0), ~50 min.
+  # Refresh again whenever the corpus moves a season: the vintage is worth
+  # more than any single term.
+  #
+  # PROMOTED 2026-09-20 (Pete, "promote sigma 0.8"): `_ss080` is the refit with
+  # `sigma_context$ratio` x 0.8 (the finals-spread scale), nothing else changed;
+  # provenance$sigma_scale records it. Measured on the pre-refit file, same
+  # composition, 60 M1 meets: gold Brier -2.27% (p=0.0001), medal -1.34%
+  # (p=0.0002), log-loss no cost, concordance flat, favourites' gap +9.9pp ->
+  # +4.9pp; 0.8 is an interior optimum on log-loss (0.7 turns medal log-loss
+  # +1.27%). Not re-measured on the refit itself. Evidence:
+  # docs/reviews/sigma-scale-arm-2026-09-19.md. Reversible: name the `_refit`
+  # file and drop `_ss080` from the stamp.
+  calibration = "calibration_corpus_wac_coast_0904_full2_altitude_banded_noroad_refit_ss080.rds",
 
   # AGING -- the blended curve, adopted 2026-07-29.
   aging = "aging.rds",
@@ -175,7 +222,7 @@ DEPLOYED <- list(
   # moves together and placings, p_gold and p_medal are unchanged bit-for-bit;
   # only the predicted mark moves. check_deployed_debias.R asserts both.
   #
-  # WHY GATED. Applied blanket on the T1_elite 2020+ goal set the debias took
+  # WHY GATED. Applied blanket on the M1 2020+ goal set the debias took
   # events beating last-5 on marks from 18 to 25 of 54 with zero event-level
   # regressions, but pooled MAE got WORSE (+23.7%) because road/marathon are
   # 36% of predictions and were pushed the wrong way. Per family, control ->
@@ -259,7 +306,7 @@ DEPLOYED <- list(
   # shock and the mark-distribution spread are the cell's values (a T1 final
   # shares 0.33-0.96 of the event-wide shock by family) rather than the
   # corpus-wide ones. Judged by pit_coverage_check.R on 2024 and 2025 finals.
-  race_context = list(enabled = TRUE, meet_tier = "T1_elite"),
+  race_context = list(enabled = TRUE, meet_tier = "M1"),
 
   # MARKS RECENCY BLEND: OFF, and it is a diagnostic lever rather than a model
   # component. Deployed at 0.5 on 2026-09-07 and withdrawn the same day.
@@ -313,7 +360,7 @@ DEPLOYED <- list(
   #
   # WHAT THE GATE ACTUALLY SAID. `_run_event_params_arm_chunked.ps1` ran both
   # arms to completion over 395 meets (2026-09-09), ctrl = this config without
-  # the table, event = with it. On T1_elite, 1,760 races / 28,457 predictions:
+  # the table, event = with it. On M1, 1,760 races / 28,457 predictions:
   #   medal Brier   -3.16%  p = 4.5e-06
   #   medal logloss -2.34%  p = 0.000138
   #   gold logloss  -1.66%  p = 0.041
@@ -343,7 +390,47 @@ DEPLOYED <- list(
   # `adjust_race` and so would have turned the race-shock strip off for every
   # family while the stamp still read `strip4fam`. Fixed in the same session;
   # see that branch's own comment.
-  event_params = "event_params.rds"
+  event_params = "event_params.rds",
+
+  # CROSS-EVENT NEIGHBOUR COMBINE. PROMOTED 2026-09-16, Pete's call despite a
+  # null result -- read this before trusting or extending it.
+  #
+  # combine_neighbour_ability() (citius/R/neighbour_combine.R) lets an
+  # athlete's OTHER middle/long-distance events inform their rating in this
+  # one: Ingebrigtsen was rated 2nd-worst of 844 Budapest finalists because
+  # his own 5000m history was three tactical championship finals, while three
+  # fast Diamond League 1500ms the same month were invisible to that card.
+  #
+  # MEASURED ON THE PROPERLY-POWERED TEST, 2026-09-16: 1,766 R1 races (races
+  # whose OWN tier code is elite, not their meet's -- see
+  # docs/reference/modelling-traps.md, "R1 vs M1"), 201 M1 meets,
+  # 376,674 pairwise comparisons for concordance.
+  #   gold Brier    +0.04%  p=0.54  (wrong direction)
+  #   medal Brier   +0.00%  p=0.96  (exactly flat)
+  #   marks, target -0.84%  p=0.13
+  #   concordance   +0.08pp p=0.10  (closest to significant all session)
+  # NOTHING CLEARS SIGNIFICANCE. The marks gain also SHRANK every time the
+  # sample got bigger (meet-tier n=166: -2.2% -> race-tier n=269: -1.6% ->
+  # this run n=1,808: -0.84%) -- the signature of a real-zero effect
+  # regressing as noise washes out, not a real effect becoming clearer with
+  # more power.
+  #
+  # SHIPPED ANYWAY. It targets a real, named defect and passes do-no-harm: no
+  # metric moved significantly in either direction, on any of the three cuts
+  # tried (meet-tier T1, small race-tier, this properly-powered race-tier
+  # run). It is NOT validated to help; it is validated not to measurably
+  # hurt. The population-average correlation this uses treats every athlete
+  # as an equally-plausible cross-event double, which is very plausibly why
+  # it is a wash rather than a win -- revisit by restricting the neighbour
+  # term to athletes who have genuinely raced both events recently, per
+  # docs/reference/modelling-traps.md, before trusting this further.
+  neighbour_combine = list(
+    enabled = TRUE,
+    events = c("AT-800Metres-M", "AT-1500Metres-M", "AT-3000Metres-M",
+               "AT-5000Metres-M", "AT-10000Metres-M"),
+    link_days = 1825L,
+    link_athletes = 25000L
+  )
 )
 Sys.setenv(CITIUS_MARKS_BLEND = as.character(DEPLOYED$marks_blend))
 
@@ -414,6 +501,26 @@ deployed_aging <- function(dir) {
 #' and it is the only route fast enough to use during a live meet.
 #'
 #' TODO(pete): decide the missing-store behaviour -- see the note below.
+#'
+#' DELIBERATELY DOES NOT widen `events` for `DEPLOYED$neighbour_combine`.
+#' Reviewed 2026-09-16 (silent-failure-hunter): an earlier version of this
+#' function unconditionally unioned in the 5 neighbour events for every one
+#' of this function's ~30 callers, on the claim that it "mirrors
+#' backtest_athletics.R's per-meet widening" -- checked directly and that
+#' claim was WRONG. The backtest's per-meet read (`meet_events <-
+#' unique(block$event_id)`, backtest_athletics.R:1258) is NEVER unioned with
+#' `NEIGHBOUR_COMBINE_EVENTS`; only the once-a-year population-reference
+#' builder that FITS the links does that widening (`.neighbour_links_for()`,
+#' via the separate `NEIGHBOUR_EVENTS` global). So the validated arm only
+#' ever gave an athlete's own OTHER-event history to `combine_neighbour_ability()`
+#' when that athlete's CURRENT meet happened to also contest a neighbour
+#' event on its own card -- which is common for a multi-day championships
+#' (Ingebrigtsen's Budapest 1500m and 5000m were both on that programme) but
+#' NOT for a standalone Diamond League leg. Widening here would have shipped
+#' a materially richer information flow than the one the do-no-harm result
+#' was measured on. `deployed_neighbour_links()` still gets the full 5-event
+#' population it needs for FITTING the links, because it requests
+#' `cfg$events` explicitly -- it never relied on this widening.
 deployed_history <- function(dir, events, from, to) {
   store <- file.path(dir, DEPLOYED$history_store)
   if (dir.exists(store)) {
@@ -496,12 +603,17 @@ deployed_history <- function(dir, events, from, to) {
       cli::cli_abort(c(
         "Rescue rebuild needs {.file competition_catalogue.parquet} and it is missing.",
         i = "DEPLOYED$calibration is fitted on the catalogue's meet_tier; without
-             it this store can only carry the feed's tier, which is the wrong
+             it this store can only carry the feed's race_code, which is the wrong
              label set for those offsets."))
     }
+    # alt_m is here for the same reason meet_tier is: estimate_ability() applies
+    # a per-family altitude term when the calibration carries one, and a column
+    # the rescue rebuild drops is a term that silently stops firing on exactly
+    # the path taken when something has already gone wrong.
     keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "round",
-              "tier", "meet_tier", "competition_id", "comp_start", "place",
-              "race_key", "sex", "discipline", "wind", "indoor", "comp_name")
+              "race_code", "meet_tier", "competition_id", "comp_start", "place",
+              "race_key", "sex", "discipline", "wind", "indoor", "comp_name",
+              "alt_m")
     d <- d[, intersect(keep, names(d)), with = FALSE]
     data.table::setorderv(d, intersect(c("event_id", "date"), names(d)))
     write_results_store(d, file.path(dir, DEPLOYED$history_store))
@@ -540,7 +652,203 @@ deployed_race_context <- function(round_class = "final",
 deployed_ability <- function(past, as_of, calibration,
                              debias = deployed_debias_offsets(),
                              event_params = deployed_event_params()) {
-  deployed_debias(.deployed_ability_raw(past, as_of, calibration, event_params), debias)
+  ab <- .deployed_ability_raw(past, as_of, calibration, event_params)
+  if (isTRUE(DEPLOYED$neighbour_combine$enabled)) {
+    links <- deployed_neighbour_links(as_of, calibration)
+    if (!is.null(links) && nrow(links)) {
+      before <- data.table::copy(ab$ability_raw)
+      ab <- combine_neighbour_ability(ab, links)
+      # LOGGED, not silent. Reviewed 2026-09-16: a genuinely broken instance
+      # (empty history, every pair failing fit_neighbour_links()'s min_n) is
+      # otherwise statistically indistinguishable from a healthy run, because
+      # this mechanism's own validated effect is near-zero either way -- so
+      # "nothing visibly happened" is the expected good outcome AND the
+      # silent-failure symptom. Same shape as deployed_debias()'s own
+      # "shifted N of M rows" line just below.
+      n_hit <- sum(!is.na(before) & !is.na(ab$ability_raw) &
+                     abs(before - ab$ability_raw) > 1e-12)
+      cli::cli_alert_info(
+        "neighbour_combine ({nrow(links)} link{?s}): adjusted {n_hit} of {nrow(ab)} ability rows.")
+    } else {
+      cli::cli_alert_info("neighbour_combine: 0 usable links this call; no rows adjusted.")
+    }
+  }
+  deployed_debias(ab, debias)
+}
+
+# One set of links per calendar year of `as_of` PER (calibration, config),
+# not per call -- an offset, a correlation and a quantile are population
+# quantities that move slowly, but they are fitted FROM a specific
+# calibration and event set and must not leak across a different one.
+#
+# KEYED ON MORE THAN THE YEAR, fixed 2026-09-16 (silent-failure-hunter): the
+# first version keyed only on `format(as_of, "%Y")`, so two calls in the same
+# R session for the same year but DIFFERENT calibrations -- e.g. a
+# diagnostic comparing a candidate calibration against the deployed one --
+# would have silently served the FIRST call's links, fitted under the wrong
+# calibration, to the second. No caller in this repo triggers it today (every
+# existing call site sources one calibration per process), but the function's
+# own signature takes `calibration` as a real argument, so the cache must
+# honour it rather than assume it never varies.
+.NEIGHBOUR_LINK_CACHE <- new.env(parent = emptyenv())
+
+#' Fit (and cache) the cross-event links `DEPLOYED$neighbour_combine` names
+#'
+#' Same sampling as the backtest arm that measured this: a uniform sample of
+#' up to `link_athletes` athletes and `estimate_ability(..., only = ids)`,
+#' which is citius/CLAUDE.md's fast path -- population priors are computed
+#' over everyone regardless, `only=` skips the expensive per-athlete body for
+#' the rest. `NULL` if the mechanism is off, so callers can `if (!is.null())`
+#' without checking the flag twice.
+#'
+#' Reads `cfg$events` directly via `deployed_history()`, not through a
+#' widened caller request -- this is the ONE place the neighbour events'
+#' history genuinely needs a full-population read, matching how
+#' backtest_athletics.R's `.neighbour_links_for()` reads `NEIGHBOUR_EVENTS`
+#' straight from the store rather than via any per-meet widening.
+deployed_neighbour_links <- function(as_of, calibration,
+                                     dir = here::here("citiusdata", "data")) {
+  cfg <- DEPLOYED$neighbour_combine
+  if (!isTRUE(cfg$enabled)) return(NULL)
+  key <- digest::digest(list(year = format(as.Date(as_of), "%Y"),
+                             calibration = calibration, cfg = cfg))
+  cached <- mget(key, envir = .NEIGHBOUR_LINK_CACHE, ifnotfound = list(NULL))[[1]]
+  if (!is.null(cached)) return(cached)
+  nb_hist <- deployed_history(dir, events = cfg$events,
+                              from = as.Date(as_of) - cfg$link_days,
+                              to = as.Date(as_of) - 1L)
+  nb_hist <- nb_hist[!is.na(perf)]
+  # sort(): the store read returns rows in partition order, which is not stable
+  # between runs, so the seeded sample below drew a different 25,000 each time
+  # (24,809 vs 24,805 rows adjusted on two back-to-back Zurich runs, 2026-09-20).
+  ids <- sort(unique(as.character(nb_hist$athlete_id)))
+  if (length(ids) > cfg$link_athletes) {
+    set.seed(20260914L)   # same sample as the backtest arm that measured this
+    ids <- sample(ids, cfg$link_athletes)
+  }
+  pop <- estimate_ability(nb_hist, as_of = as.Date(as_of) - 1L,
+                          calibration = calibration, only = ids)
+  links <- fit_neighbour_links(pop, target_events = cfg$events,
+                               neighbour_events = cfg$events)
+  cli::cli_alert_info(
+    "neighbour_combine links {format(as.Date(as_of), '%Y')}: {nrow(links)} pair{?s} fitted across {length(ids)} athlete{?s}.")
+  assign(key, links, envir = .NEIGHBOUR_LINK_CACHE)
+  links
+}
+
+#' Persist the ability table a card run has already computed.
+#'
+#' Every prediction script calls deployed_ability() without `only=`, so it rates
+#' EVERY athlete in every carded event, then keeps five columns for the entrants
+#' of their own event and discards the rest when the function returns. The
+#' Budapest 2026 run rated tens of thousands of athlete-events and persisted 326
+#' rows. Ingebrigtsen's 1500m rating was computed on 2026-09-09 and dropped on
+#' the floor, and answering "how would the 1500m have ranked that 5000m field"
+#' then cost a four-minute re-estimate per question (2026-09-14).
+#'
+#' The table is the input the card was built from, so it carries the same
+#' provenance stamp: a snapshot whose config or cutoff cannot be read back is
+#' indistinguishable from one built under a different model.
+#'
+#' Since 2026-09-20 the snapshot is also READ BACK: `deployed_ability_or_snapshot()`
+#' returns it instead of re-estimating when the stamp, as_of, cutoff and the
+#' history the card was built from all match. Predict was 80-90% of every card
+#' run and a repeat run under an unchanged model recomputed it every time.
+#'
+#' The file therefore holds the RAW table (before the two publication guards)
+#' with a `kept` column marking rows that survived drop_impossible_sigma() and
+#' temper_unevidenced(); the guards are deterministic and take under a second,
+#' so a reader re-runs them. "What the card used" is `kept == TRUE` (the
+#' tempered rows differ only in ability_se; re-run temper_unevidenced() for
+#' those exact values).
+#'
+#' @param ability_raw Ability table straight from deployed_ability().
+#' @param ability_kept The same table after both guards (its keys mark `kept`).
+#' @param dir,meet Output directory and meet_id.
+#' @param cutoff The stamped cutoff (the data boundary, not the requested date).
+#' @param as_of The as_of the ability was estimated at.
+#' @param history_key Fingerprint of the history rows, from
+#'   `deployed_history_key()`.
+#' @param stamp Configuration stamp; defaults to the deployed one.
+#' @return The path written, invisibly.
+deployed_ability_snapshot <- function(ability_raw, ability_kept, dir, meet, cutoff,
+                                      as_of, history_key, stamp = DEPLOYED$stamp) {
+  ab <- data.table::copy(data.table::as.data.table(ability_raw))
+  if (!nrow(ab)) {
+    cli::cli_alert_warning("Ability snapshot skipped: table is empty.")
+    return(invisible(NULL))
+  }
+  kept <- unique(data.table::as.data.table(ability_kept)[, .(event_id, athlete_id = as.character(athlete_id))])
+  ab[, kept := data.table::`%chin%`(paste(event_id, as.character(athlete_id)),
+                                    paste(kept$event_id, kept$athlete_id))]
+  ab[, `:=`(meet = meet, cutoff = as.Date(cutoff), as_of = as.Date(as_of),
+            history_key = history_key, config = stamp, generated_at = Sys.time())]
+  f <- .ability_snapshot_path(dir, meet, cutoff)
+  arrow::write_parquet(ab, f)
+  cli::cli_alert_success(
+    "Ability snapshot: {format(nrow(ab), big.mark = ',')} athlete-event{?s} across {data.table::uniqueN(ab$event_id)} event{?s} ({sum(!ab$kept)} not kept by the guards) -> {.path {basename(f)}}")
+  invisible(f)
+}
+
+.ability_snapshot_path <- function(dir, meet, cutoff) {
+  file.path(dir, paste0(meet, "_ability_", format(as.Date(cutoff), "%Y%m%d"), ".parquet"))
+}
+
+#' Fingerprint of everything the ability estimate reads besides the stamp.
+#'
+#' The history rows (only the columns the estimate reads, so a store rebuild
+#' that changes nothing the model sees still hits; ~0.5s on a few hundred
+#' thousand rows) PLUS the md5 of the deployed input files -- calibration,
+#' event_params, debias -- and the neighbour_combine config. The stamp is a
+#' hand-typed string, so `event_params.rds` overwritten in place without a
+#' stamp bump would otherwise serve a stale snapshot (review, 2026-09-20).
+deployed_history_key <- function(past, dir = here::here("citiusdata", "data")) {
+  p <- data.table::as.data.table(past)
+  cols <- intersect(c("athlete_id", "event_id", "date", "perf", "wind", "race_key",
+                      "competition_id", "round", "place", "alt_m"), names(p))
+  files <- c(DEPLOYED$calibration, DEPLOYED$event_params, DEPLOYED$family_debias$file)
+  files <- file.path(dir, files[!vapply(files, is.null, logical(1))])
+  md5 <- unname(tools::md5sum(files[file.exists(files)]))
+  digest::digest(list(n = nrow(p), cols = cols,
+                      body = p[, cols, with = FALSE][order(athlete_id, event_id, date, perf)],
+                      inputs = md5, neighbour = DEPLOYED$neighbour_combine,
+                      adjust_race = DEPLOYED$adjust_race))
+}
+
+#' deployed_ability(), or the snapshot of the last identical call.
+#'
+#' Returns the RAW ability table (guards not yet applied) either from
+#' `deployed_ability()` or, when a snapshot for this meet/cutoff exists whose
+#' stamp, as_of and history fingerprint all match, from that file. Set
+#' `CITIUS_CARD_NOCACHE=1` to force the estimate. The result carries
+#' `attr(, "snapshot_hit")` and `attr(, "history_key")`; a caller that got a
+#' miss writes the snapshot with `deployed_ability_snapshot()` after the guards.
+deployed_ability_or_snapshot <- function(past, as_of, calibration, dir, meet, cutoff,
+                                         stamp = DEPLOYED$stamp) {
+  hk <- deployed_history_key(past, dir)
+  f <- .ability_snapshot_path(dir, meet, cutoff)
+  meta <- c("meet", "cutoff", "as_of", "history_key", "config", "generated_at", "kept")
+  if (!nzchar(Sys.getenv("CITIUS_CARD_NOCACHE")) && file.exists(f)) {
+    ab <- data.table::as.data.table(arrow::read_parquet(f))
+    if (all(meta %in% names(ab)) && nrow(ab) &&
+        identical(ab$config[1], stamp) && identical(ab$history_key[1], hk) &&
+        isTRUE(as.Date(ab$as_of[1]) == as.Date(as_of))) {
+      cli::cli_alert_success(
+        "Ability read from snapshot {.path {basename(f)}} (written {format(ab$generated_at[1], '%Y-%m-%d %H:%M')}; stamp, as_of and history all match) -- {format(nrow(ab), big.mark = ',')} rows.")
+      ab[, (meta) := NULL]
+      data.table::setattr(ab, "snapshot_hit", TRUE)
+      data.table::setattr(ab, "history_key", hk)
+      return(ab[])
+    }
+    why <- if (!all(meta %in% names(ab))) "written before read-back existed" else
+      if (!identical(ab$config[1], stamp)) "stamp differs" else
+      if (!isTRUE(as.Date(ab$as_of[1]) == as.Date(as_of))) "as_of differs" else "history differs"
+    cli::cli_alert_info("Ability snapshot {.path {basename(f)}} not reused: {why}; re-estimating.")
+  }
+  ab <- deployed_ability(past, as_of = as_of, calibration = calibration)
+  data.table::setattr(ab, "snapshot_hit", FALSE)
+  data.table::setattr(ab, "history_key", hk)
+  ab
 }
 
 .deployed_ability_raw <- function(past, as_of, calibration, event_params = deployed_event_params()) {
@@ -677,7 +985,37 @@ deployed_debias <- function(ab, offsets = deployed_debias_offsets()) {
 #' @param entrants ability rows for this field, in the order to simulate in
 #' @param ages named vector or data.table of athlete_id -> age on the day, or
 #'   NULL to skip the aging projection
-deployed_field <- function(entrants, aging = NULL, ages = NULL) {
+#' @param venue_alt_m Venue altitude in metres for the race being predicted, or
+#'   NULL. Supplying it applies the ALTITUDE ADD-BACK: the counterpart of the
+#'   subtraction `estimate_ability()` performs on history.
+#'
+#'   Two halves, and shipping only the first is a known defect. History is made
+#'   altitude-neutral so a Kenyan's Eldoret marks stop reading as slow; without
+#'   putting the target venue's altitude back, a race AT altitude is then
+#'   predicted from sea-level-neutral ability and comes out systematically fast.
+#'   `backtest_athletics.R` documents the identical asymmetry for the race shock
+#'   ("nothing put it back for the race being forecast"), which is the same bug
+#'   found twice in two different terms.
+#'
+#'   UNIFORM ACROSS THE FIELD. Venue altitude is a property of the race, so every
+#'   entrant shifts by the same amount and the ordering cannot change -- placings
+#'   are bit-identical by construction, the property the family-pool debias also
+#'   relies on. The per-ATHLETE part of altitude already happened in history.
+#'
+#'   Inert unless the calibration carries `$altitude`, so passing it against the
+#'   deployed calibration changes nothing.
+#' @param calibration Required only when `venue_alt_m` is supplied; the add-back
+#'   reads `$altitude` from it. Defaults to NULL rather than to
+#'   `deployed_calibration()`, which takes a `dir` argument and would error the
+#'   moment it was evaluated -- surviving only on R's lazy defaults, which is a
+#'   trap rather than a design.
+deployed_field <- function(entrants, aging = NULL, ages = NULL,
+                           venue_alt_m = NULL, calibration = NULL) {
+  if (!is.null(venue_alt_m) && is.null(calibration)) {
+    cli::cli_abort(c(
+      "x" = "{.arg venue_alt_m} was supplied without a {.arg calibration}.",
+      "i" = "The add-back reads {.field $altitude} from the calibration; without it the call would silently do nothing."))
+  }
   entrants <- data.table::as.data.table(entrants)
   if (DEPLOYED$prior_weight > 0) {
     entrants <- condition_prior(entrants, field = entrants$athlete_id,
@@ -697,6 +1035,33 @@ deployed_field <- function(entrants, aging = NULL, ages = NULL) {
     if (nrow(ok)) {
       proj <- suppressWarnings(project_ability(ok, aging))
       entrants[proj, on = "athlete_id", ability := i.ability]
+    }
+  }
+
+  # ALTITUDE ADD-BACK, after aging and the prior, immediately before the caller
+  # simulates -- the same position the backtest applies it, so the two paths
+  # cannot drift.
+  if (!is.null(venue_alt_m) && is.finite(venue_alt_m) &&
+      !is.null(calibration$altitude) && NROW(calibration$altitude) &&
+      "event_id" %in% names(entrants)) {
+    .at <- data.table::as.data.table(calibration$altitude)
+    .fam <- citius::citius_events()
+    .fv <- .fam$family[match(entrants$event_id, .fam$event_id)]
+    # has_cr = TRUE is the regime the deployed ability is built in: the deployed
+    # calibration carries $race and $race_shock, so estimate_ability() applies
+    # the field-size-shrunk race strip. Using the other scope would add back a
+    # coefficient fitted against a different quantity.
+    .b <- .at$beta[match(paste(.fv, "TRUE"), paste(.at$family, .at$has_cr))]
+    .b[!is.finite(.b)] <- 0
+    if (any(.b != 0)) {
+      entrants[, ability := ability + .b * (as.numeric(venue_alt_m) / 1000)]
+      cli::cli_alert_info(
+        "altitude add-back: {venue_alt_m} m applied to {sum(.b != 0)} of {nrow(entrants)} entrant{?s} ({length(unique(.fv[.b != 0]))} famil{?y/ies}).")
+    } else {
+      # Loud, because a calibration WITH $altitude that moves nothing is the
+      # silently-inert shape that cost two arms on 2026-09-17.
+      cli::cli_alert_warning(
+        "altitude add-back requested at {venue_alt_m} m but every family coefficient is zero -- nothing applied.")
     }
   }
   entrants[]

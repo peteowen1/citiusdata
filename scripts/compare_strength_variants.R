@@ -1,4 +1,4 @@
-# Compare meet-strength bases: career best (deployed) vs recency variants.
+# Compare meet-meet_strength bases: career best (deployed) vs recency variants.
 #
 # See docs/plans/STRENGTH-METRIC-EXPERIMENT-2026-09-03.md for why and for
 # the constraints. Adopts nothing -- writes a comparison table only.
@@ -73,13 +73,13 @@ strength_from <- function(dt, col) {
   r[, .(competition_id, s)]
 }
 
-cat("computing EW-based strength...\n")
+cat("computing EW-based meet_strength...\n")
 s_ew <- strength_from(ch, "form_ew")
 setnames(s_ew, "s", "s_ew")
 
 ct <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
 r5 <- setDT(read_parquet(file.path(OUT, "strength_recency.parquet")))
-cmp <- merge(ct[, .(competition_id, comp_name, class, meet_tier, year, s_pb = strength)],
+cmp <- merge(ct[, .(competition_id, comp_name, meet_type, meet_tier, year, s_pb = meet_strength)],
              r5[, .(competition_id, s_r5 = strength_r)], by = "competition_id", all.x = TRUE)
 cmp <- merge(cmp, s_ew, by = "competition_id", all.x = TRUE)
 
@@ -88,9 +88,9 @@ cat(sprintf("\ncomparable on %s meets\n", format(nrow(ok), big.mark = ",")))
 cat(sprintf("cor(pb, r5) = %.3f | cor(pb, ew) = %.3f | cor(r5, ew) = %.3f\n",
             cor(ok$s_pb, ok$s_r5), cor(ok$s_pb, ok$s_ew), cor(ok$s_r5, ok$s_ew)))
 
-cat("\n=== BIAS CHECK: mean strength by class (does a variant inflate weak classes?) ===\n")
+cat("\n=== BIAS CHECK: mean meet_strength by meet_type (does a variant inflate weak classes?) ===\n")
 print(ok[, .(n = .N, pb = round(mean(s_pb),1), r5 = round(mean(s_r5),1),
-             ew = round(mean(s_ew),1)), by = class][order(-n)][1:12])
+             ew = round(mean(s_ew),1)), by = meet_type][order(-n)][1:12])
 
 cat("\n=== KNOWN-ANSWER PANEL ===\n")
 PANEL <- c("Olympic Games","World Athletics Championships","Weltklasse",
@@ -108,9 +108,9 @@ for (p in PANEL) {
 }
 
 cat("\n=== DISAGREEMENT: EW high, career-best low ===\n")
-print(ok[order(s_ew - s_pb)][.N:(.N-9)][, .(comp_name, class, s_pb, s_r5, s_ew)])
+print(ok[order(s_ew - s_pb)][.N:(.N-9)][, .(comp_name, meet_type, s_pb, s_r5, s_ew)])
 cat("\n=== DISAGREEMENT: career-best high, EW low ===\n")
-print(ok[order(s_pb - s_ew)][.N:(.N-9)][, .(comp_name, class, s_pb, s_r5, s_ew)])
+print(ok[order(s_pb - s_ew)][.N:(.N-9)][, .(comp_name, meet_type, s_pb, s_r5, s_ew)])
 
 write_parquet(cmp, file.path(OUT, "strength_variant_comparison.parquet"))
 cat("\nwrote strength_variant_comparison.parquet\n")

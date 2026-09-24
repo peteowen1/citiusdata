@@ -23,7 +23,7 @@ suppressMessages(library(arrow)); suppressMessages(library(data.table))
 source(here::here("citiusdata", "scripts", "_env.R"))
 D    <- here::here("citiusdata", "data")
 TAG  <- Sys.getenv("FORM_TAG", "final")
-TIER <- Sys.getenv("TIER_ONLY", "T1_elite")
+TIER <- Sys.getenv("TIER_ONLY", "M1")
 
 h <- setDT(read_parquet(file.path(D, sprintf("seqv3_history_%s.parquet", TAG))))
 if (!"r_use" %chin% names(h)) h[, r_use := r_pre]

@@ -41,23 +41,59 @@ suppressMessages(library(data.table))
 suppressMessages(library(httr2))
 D <- file.path(VERSE, "citiusdata", "data")
 
-# The edge number rotates independently of the key -- 4881 503'd (retired CDN
-# edge) on 2026-09-09 while the key that had always been paired with it still
-# worked fine against 4883, extracted live from worldathletics.org's own "Road
-# to the Ultimate" page. Configurable the same way as the key so the next
-# rotation is a flag, not a code edit.
-GQL_URL <- getOption("citius.wa_graphql_url",
-                     Sys.getenv("CITIUS_WA_GRAPHQL_URL",
-                                "https://graphql-prod-4883.edge.aws.worldathletics.org/graphql"))
 PAUSE <- 1.0
 
-WA_KEY <- getOption("citius.wa_graphql_key", Sys.getenv("CITIUS_WA_GRAPHQL_KEY", ""))
-if (!nzchar(WA_KEY)) {
-  cli::cli_abort(c(
-    "No World Athletics GraphQL key configured.",
-    i = "Set {.envvar CITIUS_WA_GRAPHQL_KEY} or {.code options(citius.wa_graphql_key=)}.",
-    i = "The key rotates (docs/reference/harvesting.md), so it is deliberately not baked into this script."
-  ))
+# DISCOVER THE PAIR, do not require one to be configured.
+#
+# This previously demanded CITIUS_WA_GRAPHQL_KEY and defaulted the URL to edge
+# 4883 -- which stopped resolving in DNS on 2026-09-12, so the default was dead
+# and a correctly-set key would still have failed. Chasing that by hand is a
+# Chrome session per rotation, and the rotations are frequent: 4881 retired
+# 09-09, 4883 gone by 09-12, 4888 then, 4892 by 09-14.
+#
+# Neither value is a secret -- both are compiled into the public Next.js bundle
+# every visitor downloads -- so discover_wa_endpoint.R reads them fresh in
+# about three seconds. That is strictly better than a stored secret, which is
+# wrong the moment WA rotates and cannot be made right by refreshing it on a
+# schedule: a key refreshed at 03:00 can be dead by noon.
+#
+# Same pattern harvest_wa_results.R already uses. An explicitly configured
+# option or env var still wins, for a deliberate override.
+.ep <- NULL
+GQL_URL <- getOption("citius.wa_graphql_url", Sys.getenv("CITIUS_WA_GRAPHQL_URL", ""))
+WA_KEY  <- getOption("citius.wa_graphql_key", Sys.getenv("CITIUS_WA_GRAPHQL_KEY", ""))
+if (!nzchar(GQL_URL) || !nzchar(WA_KEY)) {
+  .ep <- local({
+    o <- capture.output(v <- source(
+      file.path(VERSE, "citiusdata", "scripts", "discover_wa_endpoint.R"))$value)
+    v
+  })
+  if (is.na(.ep$status) || .ep$status != 200L) {
+    cli::cli_abort(c(
+      "Endpoint discovery returned HTTP {.ep$status}.",
+      i = "Run {.file discover_wa_endpoint.R} on its own to see why."))
+  }
+  # THE PAIR IS ATOMIC -- take BOTH discovered values, never one of each.
+  # The bundle carries several `da2-` keys and only the one sitting in the same
+  # chunk as this hostname works, so a fresh edge with a stale key fails with
+  # CloudFront's 503 "Lambda function is invalid" -- indistinguishable from a
+  # retired edge, and it cost an hour on 2026-09-12 before nearly being written
+  # up as "WA now blocks non-browser clients".
+  #
+  # Filling in only the missing half is what produced exactly that pairing in
+  # CI: meet-forecast.yml sets CITIUS_WA_GRAPHQL_KEY (a secret stored
+  # 2026-09-09, the day edge 4881 was retired) and does NOT set
+  # CITIUS_WA_GRAPHQL_URL, so the URL was discovered fresh while the dead key
+  # was kept. A half-configured override is not an override; it is a broken pair.
+  if (nzchar(GQL_URL) != nzchar(WA_KEY)) {
+    cli::cli_alert_warning(c(
+      "Only one half of the WA endpoint pair was configured; ignoring it and using
+       the discovered pair. Set BOTH {.envvar CITIUS_WA_GRAPHQL_URL} and
+       {.envvar CITIUS_WA_GRAPHQL_KEY} to override deliberately."))
+  }
+  GQL_URL <- .ep$url
+  WA_KEY  <- .ep$key
+  cli::cli_alert_success("Endpoint discovered: {.val {.ep$edge}}")
 }
 
 args <- commandArgs(trailingOnly = TRUE)

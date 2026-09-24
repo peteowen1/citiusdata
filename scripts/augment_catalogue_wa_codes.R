@@ -1,12 +1,12 @@
 # Stop dropping meets that World Athletics itself labels as top-category.
 #
-# THE ENGINE IS BLIND TO T3. form_ratings.R keeps only T1_elite and T2_strong and
-# inner-joins, so a T3_development competition is not down-weighted - it is gone.
+# THE ENGINE IS BLIND TO T3. form_ratings.R keeps only M1 and M2 and
+# inner-joins, so a M3 competition is not down-weighted - it is gone.
 # 446 competitions carrying an OW/GW/DF/GL/A code sit in T3, which is 24,562
 # scoreable results, 5,338 of them since 2025. Among them is the 2025 Valencia
 # Marathon: 1,193 results, one of the fastest road races in the world.
 #
-# WHY VALENCIA SCORES AS WEAK. `strength` is the percentile of each race winner's
+# WHY VALENCIA SCORES AS WEAK. `meet_strength` is the percentile of each race winner's
 # mark averaged over the meet - an excellent measure for a championship-shaped
 # meeting with a selected field, and the wrong one for a mass-participation race
 # where the elite start alongside forty thousand club runners. The average is
@@ -27,7 +27,7 @@
 #
 # THE FLOOR STOPS AT T2, DELIBERATELY. A first version lifted to T1 and broke two
 # anchors - "no unclassified meet is T1" (141 found) and "no T1 meet sits below
-# strength 40". Both anchors are right and neither was weakened. T1 is the
+# meet_strength 40". Both anchors are right and neither was weakened. T1 is the
 # population the model is JUDGED on, and the rule that a meet we cannot name has
 # no business there still holds: a category code says a meet MATTERS, not that we
 # know what it is. T2 is enough anyway, because being stuck at T3 is what made
@@ -57,11 +57,11 @@ stopifnot("catalogue looks truncated - expected the full augmented table" =
 # The code lives per RESULT, so read it from the corpus rather than trusting a
 # summary column that may predate the augment steps.
 c0 <- setDT(read_parquet(file.path(D, "athletics_corpus.parquet"),
-                         col_select = c("competition_id","tier","scoreable","perf","date")))
+                         col_select = c("competition_id","race_code","scoreable","perf","date")))
 c0[, competition_id := as.character(competition_id)]
 c0 <- c0[scoreable == TRUE & is.finite(perf)]
 FLOOR_CODES <- c("OW", "GW", "DF", "GL", "A")
-codes <- c0[tier %chin% FLOOR_CODES,
+codes <- c0[race_code %chin% FLOOR_CODES,
             .(coded_results = .N, last_coded = max(date)), by = competition_id]
 stopifnot("no competition carries a top WA code - the corpus join is wrong" =
             nrow(codes) > 100)
@@ -73,21 +73,21 @@ cg[is.na(coded_results), coded_results := 0L]
 # base builder already applies, and the reason a junior meeting held under a
 # Diamond League banner stays where it is.
 NEVER_LIFT <- c("age_group", "ncaa_lower", "team_champs_lower", "club_meet")
-cg[, .liftable := meet_tier == "T3_development" & coded_results > 0 &
-                  !(class %chin% NEVER_LIFT)]
+cg[, .liftable := meet_tier == "M3" & coded_results > 0 &
+                  !(meet_type %chin% NEVER_LIFT)]
 lift <- cg[.liftable == TRUE]
 cat(sprintf("\ncompetitions carrying OW/GW/DF/GL/A but tiered T3: %d\n",
-            cg[meet_tier == "T3_development" & coded_results > 0, .N]))
+            cg[meet_tier == "M3" & coded_results > 0, .N]))
 cat(sprintf("of those, liftable (not a named development meet): %d\n", nrow(lift)))
-cat(sprintf("blocked by class: %d\n",
-            cg[meet_tier == "T3_development" & coded_results > 0 &
-               class %chin% NEVER_LIFT, .N]))
+cat(sprintf("blocked by meet_type: %d\n",
+            cg[meet_tier == "M3" & coded_results > 0 &
+               meet_type %chin% NEVER_LIFT, .N]))
 cat("\n=== the ten biggest lifts ===\n")
 print(lift[order(-coded_results)][seq_len(min(10L, .N)),
-      .(comp_name = substr(comp_name, 1, 40), class,
-        strength = round(strength, 1), coded_results, last_coded)])
+      .(comp_name = substr(comp_name, 1, 40), meet_type,
+        meet_strength = round(meet_strength, 1), coded_results, last_coded)])
 
-cg[.liftable == TRUE, meet_tier := "T2_strong"]
+cg[.liftable == TRUE, meet_tier := "M2"]
 .n_lift <- nrow(lift)
 cg[, c(".liftable", "coded_results", "last_coded") := NULL]
 
@@ -96,9 +96,9 @@ cg[, c(".liftable", "coded_results", "last_coded") := NULL]
 stopifnot("the WA-code floor lifted no meet at all - it is inert" = .n_lift > 0,
           "the floor changed the number of competitions" = nrow(cg) == n0,
           "the floor must never produce a T1 meet" =
-            cg[, sum(meet_tier == "T1_elite")] == t0[meet_tier == "T1_elite", N],
+            cg[, sum(meet_tier == "M1")] == t0[meet_tier == "M1", N],
           "a named development meet was lifted" =
-            !any(cg$class %chin% NEVER_LIFT & cg$meet_tier != "T3_development"))
+            !any(cg$meet_type %chin% NEVER_LIFT & cg$meet_tier != "M3"))
 write_parquet(cg, F_CAT)
 cat(sprintf("\nlifted %d competitions T3 -> T2. catalogue after:\n", .n_lift))
 print(cg[, .N, by = meet_tier][order(meet_tier)])

@@ -100,7 +100,7 @@ fmt <- function(mark, unit) {
 # race walk M, half marathon M each had 1-6).
 # NOVELTY DISTANCES. Pete: "think 600m and 1000m can go". The principled rule
 # is the one that catches them for a reason rather than by name: an event with
-# ZERO T1_elite races has no elite competition to rank, so a top ten of it is a
+# ZERO M1 races has no elite competition to rank, so a top ten of it is a
 # top ten of nobody in particular. Fourteen events qualify - 150m, 300m, 600m,
 # 1000m, 2000m, 2000m steeplechase, weight throw, and the short race walks -
 # and the ladder already flagged 300/600/1000m as the model's worst events.
@@ -116,15 +116,15 @@ if (DROP_ZERO_T1) {
   hh[, competition_id := tstrsplit(race_key, "[|]", keep = 1L)[[1]]]
   hh <- merge(hh, cg[, .(competition_id, meet_tier)], by = "competition_id", all.x = TRUE)
   # uniqueN(c(NA, NA, NA)) is 1, NOT 0. meet_tier is NA for every uncatalogued
-  # competition after the all.x merge, so `race_key[meet_tier == "T1_elite"]`
+  # competition after the all.x merge, so `race_key[meet_tier == "M1"]`
   # returns a vector of NAs for an event with no elite races at all - and this
   # counted that as one elite race, letting the event escape the drop below.
-  t1 <- hh[, .(t1 = uniqueN(race_key[!is.na(meet_tier) & meet_tier == "T1_elite"])),
+  t1 <- hh[, .(t1 = uniqueN(race_key[!is.na(meet_tier) & meet_tier == "M1"])),
            by = event_id]
   zero <- t1[t1 == 0, event_id]
   if (length(zero)) {
     gone <- unique(d[event_id %chin% zero, .(discipline, sex)])
-    cat(sprintf("dropping %d events with no T1_elite race: %s
+    cat(sprintf("dropping %d events with no M1 race: %s
 ", nrow(gone),
                 paste(sprintf("%s %s", gone$discipline, gone$sex), collapse = "; ")))
     d <- d[!event_id %chin% zero]

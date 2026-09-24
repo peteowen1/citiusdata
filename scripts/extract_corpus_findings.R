@@ -15,7 +15,7 @@ pr <- merge(p, o, by = c("race_id", "athlete_id"))
 ch <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
 truth <- unique(ch[!is.na(race_key) & !is.na(mark) & mark > 0,
   .(race_id = race_key, athlete_id = as.character(athlete_id), actual = mark,
-    event_id, age, tier, comp_start)], by = c("race_id", "athlete_id"))
+    event_id, age, race_code, comp_start)], by = c("race_id", "athlete_id"))
 reg <- as.data.table(citius_events()[, c("event_id","family","orientation")])
 truth <- merge(truth, reg, by = "event_id", all.x = TRUE)
 d <- merge(p[is.finite(median_mark)], truth, by = c("race_id", "athlete_id"))

@@ -188,6 +188,18 @@ cal$race_shock <- list(beta = overall$beta, beta_se = overall$se,
                        by_family = by_fam[, .(family, beta, se, n)],
                        expected = expected, gap_days = GAP, min_cell = MINC,
                        fitted_at = Sys.time(), pairs = nrow(p))
+# The deployed persist5 carries a hand-set family gate (sprint/hurdles/jump/
+# throw, 2026-09-07: the strip wins there and loses in middle/distance/road)
+# that this fitter never wrote. CITIUS_SHOCK_FAMILIES reproduces it so a refit
+# (the no-leak chain, 2026-09-19) is the same object and not a silently
+# ungated one.
+FAMS <- trimws(strsplit(Sys.getenv("CITIUS_SHOCK_FAMILIES", ""), ",")[[1]])
+FAMS <- FAMS[nzchar(FAMS)]
+if (length(FAMS)) {
+  cal$race_shock$families <- FAMS
+  cal$race_shock$families_note <- sprintf("gated via CITIUS_SHOCK_FAMILIES at fit time (%s)", format(Sys.Date()))
+  say("race_shock gated to families: %s", paste(FAMS, collapse = ", "))
+}
 saveRDS(cal, file.path(OUT, DST))
 fwrite(by_fam, file.path(OUT, "race_shock_persistence_by_family.csv"))
 fwrite(by_gap, file.path(OUT, "race_shock_persistence_by_gap.csv"))

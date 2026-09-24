@@ -58,7 +58,7 @@ d <- merge(d, reg, by = "event_id")
 cat_tbl <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
 cat_tbl[, competition_id := as.character(competition_id)]
 d <- merge(d, cat_tbl[, .(competition_id, meet_tier)], by = "competition_id", all.x = TRUE)
-d <- d[date >= HOLDOUT & meet_tier == "T1_elite"]
+d <- d[date >= HOLDOUT & meet_tier == "M1"]
 
 # A1: oriented perf scale, the same one sigma_within lives on.
 d[, resid_perf := orientation * (log(actual) - log(median_mark))]

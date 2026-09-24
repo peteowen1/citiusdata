@@ -46,6 +46,27 @@ venue_elevation <- function(D = here::here("citiusdata", "data"),
   g <- data.table::setDT(arrow::read_parquet(f))
   stopifnot("venue_elevation.parquet has no alt_m column" = "alt_m" %chin% names(g),
             "venue_elevation.parquet is implausibly small" = nrow(g) > 500)
+
+  # -9999 IS A SENTINEL, NOT AN ELEVATION. GeoNames/SRTM writes it for "no
+  # data", and `is.finite(-9999)` is TRUE -- so the filter below let it through
+  # to every consumer unchanged. Found 2026-09-17: 5 venues carry it, one being
+  # Thessaloniki with 2,016 marks, so a naive join put ~2,473 results nine
+  # kilometres below sea level. Same shape as the competition_id = 0 phantom
+  # this repo has been bitten by before: a magic number that is valid as a
+  # number and nonsense as a measurement.
+  #
+  # Dropped rather than kept as NA, because this table's contract is "venues we
+  # know the elevation of" -- a caller joining it wants a missing row, not a
+  # row with a missing value. -500 m is generous: the lowest dry land on earth
+  # is about -430 m, and the real minimum in this table is -39 m.
+  bad <- g[is.finite(alt_m) & alt_m <= -500]
+  if (nrow(bad)) {
+    if (!quiet)
+      cat(sprintf(paste0("venue elevation: dropped %d venue(s) carrying the ",
+                         "-9999 no-data sentinel: %s\n"),
+                  nrow(bad), paste(utils::head(bad$venue_city, 5), collapse = ", ")))
+    g <- g[!(is.finite(alt_m) & alt_m <= -500)]
+  }
   g <- g[is.finite(alt_m), .(venue_city, alt_m, src = "geocoded")]
   # Hand-typed entries win where they disagree: a human looked those up, and they
   # are the set the geocoder was validated against.

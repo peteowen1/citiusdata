@@ -55,7 +55,7 @@ h <- merge(h, merge(cp, cg, by = "competition_id", all.x = TRUE)[, .(race_key, c
            by = "race_key", all.x = TRUE)
 MAJ <- c("olympics","world_champs","european_champs","commonwealth")
 h[, wt := fifelse(!is.na(class) & class %chin% MAJ, 40,
-          fifelse(!is.na(meet_tier) & meet_tier == "T1_elite", 12, 1)) *
+          fifelse(!is.na(meet_tier) & meet_tier == "M1", 12, 1)) *
           fifelse(rc == "final", 1, 0.5)]
 
 # merged races out

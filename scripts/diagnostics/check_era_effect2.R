@@ -20,7 +20,7 @@ cat_tbl <- setDT(arrow::read_parquet(file.path(D, "competition_catalogue.parquet
 cat_tbl[, competition_id := as.character(competition_id)]
 corpus[, competition_id := as.character(competition_id)]
 corpus <- merge(corpus, cat_tbl[, .(competition_id, meet_tier)], by = "competition_id", all.x = TRUE)
-t1 <- corpus[meet_tier == "T1_elite" & !is.na(mark) & !is.na(date)]
+t1 <- corpus[meet_tier == "M1" & !is.na(mark) & !is.na(date)]
 t1[, year := data.table::year(date)]
 t1[, oriented := mark * orientation]
 

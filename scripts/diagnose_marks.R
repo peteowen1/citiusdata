@@ -27,7 +27,11 @@ d <- merge(as.data.table(b$predictions)[, .(race_id, athlete_id = as.character(a
            by = c("race_id", "athlete_id"))
 
 ch <- tryCatch(
-  with_citius_db_connection(function(conn) load_championship_results(conn), read_only = TRUE),
+  # `columns=` is load-bearing: without it this is SELECT * (33 cols x 5M
+  # rows). Add any column you start reading off `ch`.
+  with_citius_db_connection(function(conn) load_championship_results(
+    conn, columns = c("race_key", "athlete_id", "mark", "place",
+                      "event_id", "date", "competition_id")), read_only = TRUE),
   error = function(e) {
     cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to championship_results.rds.")
     NULL
@@ -40,8 +44,8 @@ act <- ch[!is.na(mark) & !is.na(race_key) & !is.na(place) & place > 0,
 d <- merge(d, act, by = c("race_id", "athlete_id"))
 d <- merge(d, as.data.table(citius_events())[, .(event_id, orientation, family)], by = "event_id")
 cat_tbl <- setDT(arrow::read_parquet(file.path(OUT, "competition_catalogue.parquet")))
-d <- merge(d, cat_tbl[, .(competition_id, meet_tier, strength)], by = "competition_id", all.x = TRUE)
-d <- d[meet_tier == "T1_elite" & date >= HOLDOUT]
+d <- merge(d, cat_tbl[, .(competition_id, meet_tier, meet_strength)], by = "competition_id", all.x = TRUE)
+d <- d[meet_tier == "M1" & date >= HOLDOUT]
 
 # The baseline, rebuilt exactly as score_arm.R builds it: the mean of an
 # athlete's last five oriented performances before the race.
@@ -98,8 +102,8 @@ d[, prior_band := cut(n_prior, c(-1, 5, 10, 20, 40, Inf),
                       labels = c("1-5", "6-10", "11-20", "21-40", "40+"))]
 report("by number of prior races (the harvest's lever)", "prior_band")
 
-d[, qb := cut(strength, c(-1, 60, 75, 85, 101), labels = c("<60", "60-75", "75-85", "85+"))]
-report("by meet strength", "qb")
+d[, qb := cut(meet_strength, c(-1, 60, 75, 85, 101), labels = c("<60", "60-75", "75-85", "85+"))]
+report("by meet meet_strength", "qb")
 
 d[, yr := year(date)]
 report("by year", "yr")

@@ -47,7 +47,7 @@ fit   <- readRDS(file.path(OUT, "marks_fit_params.rds"))
 # scoring them together would mix two different populations. That reasoning
 # is right about the population difference and wrong about the fix: WAC class
 # weighting already discounts a weak field's races almost to nothing (a
-# T1_elite/OW row outweighs a T2_strong/F row 5,454:1 -- see
+# M1/OW row outweighs a M2/F row 5,454:1 -- see
 # fit_event_params.R's TIER_W comment for the fit-side version of this same
 # measurement), so a WAC-weighted score across T1+T2 is not "mixing two
 # populations equally", it is scoring the SAME championship-weighted question
@@ -58,7 +58,7 @@ fit   <- readRDS(file.path(OUT, "marks_fit_params.rds"))
 #
 # CITIUS_SCORE_ALL_TIERS=FALSE (or 0) restricts back to the old T1-only
 # behaviour, for when the question is specifically and only about the
-# T1_elite population.
+# M1 population.
 #
 # ACCEPTS "0"/"1" AS WELL AS "TRUE"/"FALSE", DELIBERATELY. R's as.logical()
 # maps "1" and "0" to NA, not TRUE/FALSE -- which silently took the T1-only
@@ -72,9 +72,9 @@ if (score_all_tiers) {
   say("scoring every meet_tier in the cache, not T1 only (CITIUS_SCORE_ALL_TIERS default)")
 } else if ("meet_tier" %in% names(test)) {
   n_all <- nrow(test)
-  test <- test[meet_tier == "T1_elite"]
+  test <- test[meet_tier == "M1"]
   if (nrow(test) < n_all)
-    say("scoring T1_elite only: %s of %s rows kept",
+    say("scoring M1 only: %s of %s rows kept",
         format(nrow(test), big.mark = ","), format(n_all, big.mark = ","))
 }
 

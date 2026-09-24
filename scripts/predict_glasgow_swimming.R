@@ -102,7 +102,7 @@ stopifnot("Glasgow swimmer linkage regressed well below the post-citius#3 fix le
 pre <- g[!grepl("final", round, ignore.case = TRUE) | grepl("semi", round, ignore.case = TRUE)]
 pre_hist <- pre[!is.na(perf) & !is.na(event_id),
                 .(athlete_id = fifelse(is.na(hist_id), paste0("CRS:", key), hist_id),
-                  event_id, perf, date, round, tier = "top",
+                  event_id, perf, date, round, race_code = "top",
                   sport = "Swimming", competition_id = -1L, race_key = race_key)]
 hist <- flag_implausible(sw)[!is.na(event_id) & !is.na(perf) & date < CUT]
 hist <- rbind(hist, pre_hist, fill = TRUE)

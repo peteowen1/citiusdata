@@ -343,6 +343,17 @@ RESULTS_META <- tryCatch(
 )
 if (!is.null(RESULTS_META)) RESULTS_META[, athlete_id := as.character(athlete_id)]
 
+# Altitude per race, for the live adjusted-marks columns below. alt_m lives
+# only in the store; one row per race_key, cached beside it (10s to build).
+alt_f <- file.path(D, "alt_by_race.parquet")
+if (!file.exists(alt_f) || file.mtime(alt_f) < max(file.mtime(list.files(file.path(D, "athletics_corpus_store"), recursive = TRUE, full.names = TRUE)))) {
+  .a <- setDT(open_dataset(file.path(D, "athletics_corpus_store")) |> dplyr::select(race_key, alt_m) |> dplyr::collect())
+  .a <- unique(.a[!is.na(race_key) & is.finite(alt_m)], by = "race_key")
+  write_parquet(.a, alt_f); rm(.a)
+}
+ALT_BY_RACE <- setDT(read_parquet(alt_f))
+cli::cli_alert_info("altitude lookup: {format(nrow(ALT_BY_RACE), big.mark = ',')} races.")
+
 for (i in seq_len(nrow(cal))) {
   mid <- cal$meet_id[i]
   # Deliberately NOT gated on wanted(): results are independent of which
@@ -356,16 +367,73 @@ for (i in seq_len(nrow(cal))) {
   # negative value here must never join to that block.
   if (is.na(comp_id) || comp_id <= 0L) next
   sub <- CH[competition_id == comp_id & !is.na(event_id)]
+
+  # LIVE SUPPLEMENT, added 2026-09-12. A meet running TODAY is not in
+  # championship_results.rds and should not be: that file is training and
+  # scoring input, and a meet quietly appended mid-competition is how a model
+  # ends up evaluated on its own training data (the same reasoning
+  # append_meet_to_championship_results.R opens with). But the blog results
+  # table needs only nine display columns, none of them the ones that make
+  # corpus ingestion delicate -- `tier` above all, where a fabricated value
+  # silently reweights the corpus.
+  #
+  # So: when the corpus has NOTHING for this competition and a direct harvest
+  # exists, publish from the harvest. This never overrides corpus rows, only
+  # fills a hole, and it says out loud which source each meet published from --
+  # a results table whose provenance is ambiguous is worse than one that is
+  # late.
+  if (!nrow(sub)) {
+    live_f <- file.path(D, sprintf("%s_raw_results.rds", mid))
+    if (file.exists(live_f)) {
+      live <- setDT(readRDS(live_f))
+      need_live <- c("event_id", "athlete_id", "athlete_name", "place",
+                     "mark", "mark_string", "wind", "round")
+      miss <- setdiff(need_live, names(live))
+      if (length(miss)) {
+        cli::cli_warn("{mid}: live harvest is missing {.field {miss}} -- results file skipped.")
+        next
+      }
+      sub <- live[!is.na(event_id)]
+      # LIVE ROWS GET THE ADJUSTED-MARK INPUTS TOO (2026-09-19): perf from the
+      # mark and the registry's orientation, venue from the calendar row, altitude
+      # from the elevation table, indoor unknown (NA -> page applies no indoor
+      # term). Without these a meet in progress showed a Result and no Adjusted
+      # column until the corpus caught up the next morning.
+      sub[, athlete_id := as.character(athlete_id)]
+      sub <- merge(sub, orient[, .(event_id, orientation)], by = "event_id", all.x = TRUE, sort = FALSE)
+      sub[, perf := to_perf(mark, orientation)]
+      sub[, venue_city := cal$city[i]]
+      sub[, venue_stadium := NA_character_]
+      sub[, indoor := NA]
+      .ve <- tryCatch(setDT(read_parquet(file.path(D, "venue_elevation.parquet"), col_select = c("venue_city", "alt_m"))), error = function(e) NULL)
+      sub[, alt_m := if (!is.null(.ve) && cal$city[i] %chin% .ve$venue_city) .ve[venue_city == cal$city[i], alt_m][1] else NA_real_]
+      sub[, race_key := NA_character_]
+      cli::cli_alert_warning(
+        "{mid}: publishing {nrow(sub)} row{?s} from the LIVE harvest {.file {basename(live_f)}} ({format(file.mtime(live_f))}) -- not yet in the corpus; venue {cal$city[i]}, altitude {if (is.finite(sub$alt_m[1])) paste0(round(sub$alt_m[1]), ' m') else 'unknown'}.")
+    }
+  }
   if (!nrow(sub)) { cli::cli_alert_info("{mid}: no harvested results yet -- results file skipped."); next }
 
   # Same "final" definition export_blog_data.R uses for the Commonwealth Games
   # pages, so the two never disagree about which round was the medal race.
   # Semifinals match "final" as a substring, which is why the semi exclusion
   # has to come second.
+  # INPUTS FOR LIVE ADJUSTED MARKS (2026-09-19). The page computes the adjusted
+  # mark itself with conditions.js + athletics/conditions/<event>.json -- the
+  # same arithmetic as citius::adjust_conditions()/race_shock_loo(), parity
+  # 1e-15 -- so what ships here is every input, never the answer: perf and
+  # orientation, the conditions (wind, altitude, venue, stadium, indoor) and,
+  # joined after the cards are built, the card's own expected perf. A live
+  # harvest lacks the venue columns; they publish as NA and the page then
+  # applies wind and indoor only, and says so.
+  for (cc in c("perf", "orientation", "venue_city", "venue_stadium", "indoor", "race_key"))
+    if (!cc %in% names(sub)) sub[, (cc) := NA]
+  sub <- merge(sub, ALT_BY_RACE, by = "race_key", all.x = TRUE, sort = FALSE)
   res <- sub[, .(event_id, athlete_id = as.character(athlete_id), athlete = athlete_name,
                  place, mark, mark_string, wind, round,
                  is_final = grepl("final", round, ignore.case = TRUE) &
-                            !grepl("semi", round, ignore.case = TRUE))]
+                            !grepl("semi", round, ignore.case = TRUE),
+                 perf, orientation, alt_m, venue_city, venue_stadium, indoor = indoor %in% TRUE)]
   if (!is.null(RESULTS_META)) {
     res <- merge(res, RESULTS_META, by = "athlete_id", all.x = TRUE)
   } else {
@@ -573,7 +641,101 @@ for (mid in DL_MEETS) {
     "{mid}: {nrow(dcard)} athlete-event{?s} across {uniqueN(dcard$event_id)} event{?s}.")
 }
 
+# --- adjusted-marks inputs: expected perf onto every results file ------------
+# The card's ability IS the pre-race expectation the live race shock needs
+# (citius::race_shock: shrunk field mean of cleaned perf minus expected).
+# Joined here, after every card exists, so a Diamond League meet whose card is
+# built below the results loop still gets it.
+for (nm in grep("-results[.]parquet$", names(artefacts), value = TRUE)) {
+  pn <- sub("-results", "-predictions", nm)
+  if (is.null(artefacts[[pn]])) { artefacts[[nm]][, expected_perf := NA_real_]; next }
+  ex <- artefacts[[pn]][, .(event_id, athlete_id = as.character(athlete_id), expected_perf = ability)]
+  ex <- unique(ex, by = c("event_id", "athlete_id"))
+  n0 <- nrow(artefacts[[nm]])
+  artefacts[[nm]] <- merge(artefacts[[nm]], ex, by = c("event_id", "athlete_id"), all.x = TRUE, sort = FALSE)
+  stopifnot("expected_perf join fanned out" = nrow(artefacts[[nm]]) == n0)
+  cli::cli_alert_info("{nm}: expected_perf on {sum(is.finite(artefacts[[nm]]$expected_perf))}/{n0} rows.")
+}
+
+# --- conditions parameters, one file per event ---------------------------------
+# citiusdata/data/conditions_params/_all.json is 5 MB with the venue lookups;
+# a page shows one event, so it fetches athletics/conditions/<event_id>.json
+# (~60 KB). conditions.js itself lives in the site repo beside stats-table.js.
+COND_DIR <- file.path(D, "conditions_params")
+extra_files <- character(0)
+if (file.exists(file.path(COND_DIR, "_all.json"))) {
+  dir.create(file.path(BLOG, "conditions"), showWarnings = FALSE)
+  cond_all <- fromJSON(file.path(COND_DIR, "_all.json"), simplifyVector = FALSE)
+  for (ev in names(cond_all)) {
+    f <- file.path("conditions", paste0(ev, ".json"))
+    write_json(cond_all[[ev]], file.path(BLOG, f), auto_unbox = TRUE, digits = 8, null = "null")
+    extra_files <- c(extra_files, f)
+  }
+  cli::cli_alert_success("conditions parameters: {length(extra_files)} event file{?s}.")
+} else {
+  cli::cli_alert_warning("conditions_params/_all.json missing -- adjusted marks will not render; run export_conditions_params.R.")
+}
+
+# --- athlete history, for athletics/athlete.qmd -------------------------------
+# One row per race the form engine forecast (forecast_marks_<tag>.parquet):
+# what they ran, what it was worth (adjusted), what we expected before the gun,
+# and the conditions. Scoped to athletes on any published card or results
+# file (3,041 on 2026-09-19; 113,707 rows, 4.7 MB as one file), then split
+# into 64 buckets by athlete id so a page fetches ~75 KB, not 5 MB. The page
+# computes the same bucket: Number(id) % 64.
+# CONTENT HASH (2026-09-20). A parquet's bytes change every run because
+# `generated_at` does, so the md5 memo below never skipped one: 180 objects
+# sent, 0 skipped, on a run that changed 84 files. The upload key for a table
+# is therefore a digest of its content WITHOUT generated_at; a table whose
+# content is unchanged keeps the published file, whose stamp is the truth
+# about when that content was generated (the manifest, always re-sent, carries
+# the run's own stamp).
+CONTENT <- list()
+content_hash <- function(dt) {
+  dt <- data.table::as.data.table(dt)
+  digest::digest(dt[, setdiff(names(dt), "generated_at"), with = FALSE], algo = "md5")
+}
+FM_F <- file.path(D, sprintf("forecast_marks_%s.parquet", TAG))
+if (file.exists(FM_F)) {
+  card_ids <- unique(unlist(lapply(c(grep("-(predictions|results)[.]parquet$", names(artefacts), value = TRUE)),
+                                   function(nm) as.character(artefacts[[nm]]$athlete_id))))
+  # predictions first: the card carries "Noah Lyles", the results feed "Noah
+  # LYLES", and unique() keeps the first spelling it meets
+  names_dt <- unique(rbindlist(lapply(c(grep("-predictions[.]parquet$", names(artefacts), value = TRUE),
+                                        grep("-results[.]parquet$", names(artefacts), value = TRUE)), function(nm) {
+    a <- artefacts[[nm]]; data.table(athlete_id = as.character(a$athlete_id), athlete = a$athlete, nation = if ("nation" %in% names(a)) a$nation else NA_character_)
+  }))[!is.na(athlete)], by = "athlete_id")
+  # forecast_round_mark / error_round (2026-09-19): the round-aware forecast --
+  # r_pre plus the fitted cruise offset for heats and semis -- is what a heat
+  # result should be judged against; tolerated as absent so an older
+  # forecast_marks file still publishes.
+  .fm_cols <- c("athlete_id", "event_id", "family", "date", "comp_name", "venue_city", "place", "round",
+                "mark", "adj_mark", "forecast_mark", "forecast_round_mark", "error", "error_round", "wind", "alt_m", "indoor",
+                "wind_adj", "venue_adj", "indoor_adj", "race_shock", "seen")
+  .fm_have <- names(arrow::open_dataset(FM_F))
+  fm <- setDT(read_parquet(FM_F, col_select = intersect(.fm_cols, .fm_have)))
+  for (cc in setdiff(.fm_cols, names(fm))) fm[, (cc) := if (cc == "round") NA_character_ else NA_real_]
+  fm[, athlete_id := as.character(athlete_id)]
+  fm <- fm[athlete_id %in% card_ids & is.finite(mark)]
+  fm <- merge(fm, names_dt, by = "athlete_id", all.x = TRUE, sort = FALSE)
+  fm[, bucket := suppressWarnings(as.integer(athlete_id)) %% 64L]
+  fm[is.na(bucket), bucket := 0L]
+  fm[, generated_at := NOW]
+  dir.create(file.path(BLOG, "athletes"), showWarnings = FALSE)
+  for (b in sort(unique(fm$bucket))) {
+    f <- file.path("athletes", sprintf("%02d.parquet", b))
+    fb <- fm[bucket == b][order(athlete_id, event_id, date)]
+    CONTENT[[f]] <- content_hash(fb)
+    write_parquet(fb, file.path(BLOG, f))
+    extra_files <- c(extra_files, f)
+  }
+  cli::cli_alert_success("athlete history: {format(nrow(fm), big.mark = ',')} rows for {uniqueN(fm$athlete_id)} athletes in {uniqueN(fm$bucket)} buckets (from {basename(FM_F)}).")
+} else {
+  cli::cli_alert_warning("{basename(FM_F)} missing -- athlete pages will show no history; run build_forecast_marks.R.")
+}
+
 for (nm in names(artefacts)) {
+  CONTENT[[nm]] <- content_hash(artefacts[[nm]])
   write_parquet(artefacts[[nm]], file.path(BLOG, nm))
   cli::cli_alert_success("{nm}: {nrow(artefacts[[nm]])} row{?s}")
 }
@@ -694,15 +856,27 @@ if (length(dl_blocks)) manifest <- c(manifest, dl_blocks[order(names(dl_blocks))
 write_json(manifest, file.path(BLOG, "athletics-manifest.json"),
            auto_unbox = TRUE, pretty = TRUE, na = "null")
 
+# UPLOAD-IF-CHANGED (2026-09-19). Every artefact was re-sent on every run: 116
+# objects, ~4 min, three runs a day. A local memo of the hash last uploaded per
+# key lets an unchanged file skip the put: the file's md5, or for a table the
+# content hash computed above (so `generated_at` alone cannot force a send).
+# CITIUS_FORCE_UPLOAD=1 re-sends everything. The memo is written only after a
+# successful put, so a failed upload is retried next run.
+MEMO_F <- file.path(BLOG, ".uploaded_md5.json")
+MEMO <- if (file.exists(MEMO_F)) fromJSON(MEMO_F) else list()
+FORCE <- nzchar(Sys.getenv("CITIUS_FORCE_UPLOAD"))
+n_skipped <- 0L
 upload <- function(f) {
   key <- sprintf("%s/%s/%s", BUCKET, PREFIX, f)
+  md5 <- if (!is.null(CONTENT[[f]])) CONTENT[[f]] else unname(tools::md5sum(file.path(BLOG, f)))
+  if (!FORCE && identical(MEMO[[key]], md5)) { n_skipped <<- n_skipped + 1L; return(TRUE) }
   # shQuote is not optional: the cache-control value contains a space and
   # system2() does no quoting on Windows, so it would arrive as two arguments.
   args <- c("r2", "object", "put", shQuote(key), "--file", shQuote(file.path(BLOG, f)),
             "--cache-control", shQuote("public, max-age=300"), "--remote")
   st <- suppressWarnings(system2("wrangler", args, stdout = TRUE, stderr = TRUE))
   ok <- is.null(attr(st, "status")) || attr(st, "status") == 0
-  if (ok) cli::cli_alert_success("uploaded {key}")
+  if (ok) { cli::cli_alert_success("uploaded {key}"); MEMO[[key]] <<- md5 }
   else cli::cli_alert_danger("FAILED {key}: {paste(tail(st, 3), collapse = ' ')}")
   ok
 }
@@ -710,11 +884,13 @@ upload <- function(f) {
 if (nzchar(Sys.getenv("CITIUS_SKIP_UPLOAD"))) {
   cli::cli_alert_info("CITIUS_SKIP_UPLOAD set - wrote to {.file {BLOG}} only.")
 } else {
-  ok <- vapply(names(artefacts), upload, logical(1))
+  ok <- vapply(c(names(artefacts), extra_files), upload, logical(1))
   if (!all(ok)) {
     cli::cli_abort(c("{sum(!ok)} data upload{?s} failed - manifest NOT uploaded.",
                      i = "R2 still serves the previous run's manifest, so the section
                           stays self-consistent. Re-run once the cause is fixed."))
   }
   if (!upload("athletics-manifest.json")) cli::cli_abort("Manifest upload failed.")
+  write_json(MEMO, MEMO_F, auto_unbox = TRUE)
+  cli::cli_alert_info("uploads: {length(artefacts) + length(extra_files) + 1L - n_skipped} sent, {n_skipped} unchanged and skipped.")
 }

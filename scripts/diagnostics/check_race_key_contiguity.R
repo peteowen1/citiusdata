@@ -2,7 +2,7 @@ suppressMessages(library(data.table)); suppressMessages(library(arrow))
 OUT <- "C:/dev/citiusverse/citiusdata/data"
 cat0 <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
 cat0[, competition_id := as.character(competition_id)]
-cat0 <- cat0[meet_tier %in% c("T1_elite","T2_strong"), .(competition_id, meet_tier)]
+cat0 <- cat0[meet_tier %in% c("M1","M2"), .(competition_id, meet_tier)]
 evs <- setdiff(sub("^event_id=","", list.dirs(file.path(OUT,"athletics_corpus_store"),
                    recursive=FALSE, full.names=FALSE)), "__unmatched__")
 dl <- list()

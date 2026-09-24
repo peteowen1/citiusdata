@@ -92,10 +92,10 @@ prio <- function() {
   cf <- file.path(OUT, "competition_catalogue.parquet")
   cg <- setDT(read_parquet(cf)); cg[, competition_id := as.character(competition_id)]
   h[, competition_id := tstrsplit(race_key, "[|]", keep = 1L)[[1]]]
-  h <- merge(h, cg[, .(competition_id, meet_tier, class)], by = "competition_id", all.x = TRUE)
+  h <- merge(h, cg[, .(competition_id, meet_tier, meet_type)], by = "competition_id", all.x = TRUE)
   MAJ <- c("olympics","world_champs","european_champs","commonwealth")
-  list(majors  = unique(h[class %chin% MAJ & rc == "final", athlete_id]),
-       t1      = unique(h[meet_tier == "T1_elite", athlete_id]),
+  list(majors  = unique(h[meet_type %chin% MAJ & rc == "final", athlete_id]),
+       t1      = unique(h[meet_tier == "M1", athlete_id]),
        scored  = unique(h[year(date) >= 2025 & place <= 12, athlete_id]),
        corpus  = unique(h$athlete_id))
 }

@@ -1,0 +1,142 @@
+name: Daily harvest
+
+# Fetches every completed meet that is not yet in our data, and STAGES it.
+#
+# The companion to daily-freshness.yml: that one makes staleness visible, this
+# one closes the half of it that can be closed safely. Together they replace
+# the situation audited 2026-09-14, where nothing in citiusdata fetched on a
+# schedule at all while every sibling verse ran one.
+#
+# IT STAGES, IT DOES NOT APPEND. No training input is touched -- not
+# championship_results.rds, not the corpus, not the catalogue, not a store.
+# append_meet_to_championship_results.R's own header draws that line: "quietly
+# adding a meet a calibration was not fitted on is how a model ends up
+# evaluated on its own training data". Fetching is additive and reversible;
+# appending is neither and stays a deliberate act.
+#
+# What it changes is the manual job: "nobody has fetched Budapest" becomes
+# "Budapest is fetched and waiting", so the append is one step rather than a
+# discovery-and-harvest session.
+#
+# NO SECRET IS REQUIRED, which is the reason this can be scheduled at all. The
+# World Athletics edge and client key rotate without notice -- 4881 retired
+# 2026-09-09, 4883 gone by 09-12, 4888 then, 4892 by 09-14 -- but neither is
+# secret: both are compiled into the public Next.js bundle every visitor
+# downloads. discover_wa_endpoint.R reads them fresh each run. A stored
+# CITIUS_WA_GRAPHQL_KEY was always going to be wrong within days, which is why
+# the existing one is stale and should be deleted.
+#
+# COST: measured locally at 18 seconds for two meets, plus the catalogue
+# download. Cheap enough to run daily without thinking about it.
+
+on:
+  schedule:
+    # 17:00 UTC = 03:00 AEST, an hour before daily-freshness.yml, so a morning
+    # freshness check reads the state AFTER the night's harvest rather than
+    # before it.
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      meets:
+        description: 'Comma-separated meet_ids to force (blank = auto-detect pending)'
+        type: string
+        default: ''
+      publish:
+        description: 'Also upload to the pending-harvest release'
+        type: boolean
+        default: false
+
+concurrency:
+  group: citius-daily-harvest
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out citiusdata
+        uses: actions/checkout@v4
+        with:
+          path: citiusdata
+
+      - name: Check out citius
+        uses: actions/checkout@v4
+        with:
+          repository: peteowen1/citius
+          path: citius
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # here::here() walks up for a project-root marker; without one it settles
+      # on citiusdata and sends every VERSE/citiusdata path one level too deep.
+      - name: Mark the workspace root for here()
+        run: touch .here
+
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.5.0'
+          use-public-rspm: true
+
+      - name: Setup R dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: citius
+          extra-packages: |
+            any::devtools
+            any::here
+            any::cli
+            any::data.table
+            any::arrow
+            any::httr2
+            any::jsonlite
+            any::withr
+            any::piggyback
+            any::digest
+        # withr because harvest_pending_meets.R sets CITIUS_COMP/CITIUS_MEET per
+        # meet through with_envvar; piggyback and digest because vb_publish
+        # needs them when publishing is on. All four are Suggests, not Imports,
+        # so setup-r-dependencies would not otherwise install them.
+
+      # Only the catalogue: it is what decides which meets are already in, and
+      # this job reads nothing else of the deployed set.
+      - name: Download the catalogue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd citiusdata
+          mkdir -p data
+          gh release download catalogue-data --repo peteowen1/citiusdata \
+            --pattern competition_catalogue.parquet --dir data --clobber
+          ls -la data/competition_catalogue.parquet
+
+      - name: Harvest pending meets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CITIUS_HARVEST_MEETS: ${{ inputs.meets }}
+          # Publishing is OPT-IN and currently UNTESTED from a runner: the
+          # pending-harvest release does not exist yet, and vb_publish creating
+          # a tag has not been exercised here. The artifact below is the
+          # reliable output until a dispatch with publish=true has been seen to
+          # work. Turning it on for the schedule is a one-line change once it has.
+          CITIUS_HARVEST_PUBLISH: ${{ inputs.publish && '1' || '' }}
+        run: |
+          set -o pipefail
+          Rscript citiusdata/scripts/harvest_pending_meets.R 2>&1 | tee /tmp/harvest.log
+
+      # The staged results are the point of the run, so they leave the runner
+      # even when publishing is off.
+      - name: Collect the staged results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staged-results
+          path: |
+            citiusdata/data/*_raw_results.rds
+            /tmp/harvest.log
+          if-no-files-found: warn
+          retention-days: 30

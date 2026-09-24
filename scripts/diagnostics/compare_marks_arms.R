@@ -1,0 +1,214 @@
+# Paired marks A/B between two backtest arms, marks FIRST.
+#
+# WHY NOT quick_compare.R. That one is built for placings-primary arms: it
+# reports gold/medal Brier first and treats marks as a "must stay flat" guard,
+# so on a CITIUS_BT_MARKS_ONLY arm it dies in the placings t-test before it ever
+# reaches the marks block (p_gold is NA by construction). For a mechanism that
+# can only move marks -- a whole-field shock like altitude, which cannot reorder
+# a field -- the two are the wrong way round.
+#
+# THE SPLIT THAT MATTERS IS ALTITUDE, NOT THE POOL. An altitude term changes a
+# prediction only where alt_m > 0, and most M1 meets are near sea level, so a
+# pooled MAE dilutes the effect toward zero and would read as "no effect" for a
+# term that is working exactly as designed. Reporting the pooled number alone
+# would be the "use the metric with power" failure in its most direct form.
+# Bands, and per family, are the test.
+#
+# Paired per (race_id, athlete_id) on the races BOTH arms hold, so the two arms
+# are compared on identical rows and no meet-mix difference can leak in.
+#
+# Usage:
+#   CITIUS_MA_A=bt_cache_alt_ctrl CITIUS_MA_B=bt_cache_alt_on \
+#     Rscript citiusdata/scripts/diagnostics/compare_marks_arms.R
+#
+# Run compare_arm_fingerprints.R first. This script does not verify that the two
+# arms differ only in the mechanism; it assumes someone has.
+
+suppressMessages(devtools::load_all(here::here("citius"), quiet = TRUE))
+suppressMessages(library(data.table))
+OUT <- here::here("citiusdata", "data")
+
+A <- Sys.getenv("CITIUS_MA_A", "bt_cache_alt_ctrl")
+B <- Sys.getenv("CITIUS_MA_B", "bt_cache_alt_on")
+
+load_arm <- function(dir) {
+  d <- file.path(OUT, dir)
+  fs <- setdiff(list.files(d, pattern = "\\.rds$"), "_arm.rds")
+  out <- rbindlist(lapply(fs, function(f) {
+    o <- readRDS(file.path(d, f))
+    if (!length(o)) return(NULL)
+    rbindlist(lapply(o, function(r) {
+      if (is.null(r$pred) || !"median_mark" %in% names(r$pred)) return(NULL)
+      as.data.table(r$pred)[, .(race_id, athlete_id = as.character(athlete_id), median_mark)]
+    }), fill = TRUE)
+  }), fill = TRUE)
+  unique(out, by = c("race_id", "athlete_id"))
+}
+
+pa <- load_arm(A); pb <- load_arm(B)
+cat(sprintf("%s: %s rows | %s: %s rows\n", A, format(nrow(pa), big.mark = ","),
+            B, format(nrow(pb), big.mark = ",")))
+
+# Actual marks, event and altitude from the PARQUET STORE, not DuckDB.
+# `alt_m` exists only in the stores -- build_stores.R joins venue_elevation on
+# the way out, and citius.duckdb's championship_results has no such column. That
+# is also the more faithful source: the store is what the backtest itself read,
+# so this compares against the exact alt_m the model saw rather than a
+# re-derived one.
+suppressMessages(library(arrow))
+STORE <- Sys.getenv("CITIUS_MA_STORE", "athletics_corpus_store")
+champs <- as.data.table(
+  open_dataset(file.path(OUT, STORE)) |>
+    dplyr::select(race_key, athlete_id, mark, event_id, alt_m) |>
+    dplyr::collect())
+champs[, athlete_id := as.character(athlete_id)]
+act <- champs[!is.na(mark) & !is.na(race_key) & mark > 0,
+              .(race_id = race_key, athlete_id, actual = mark, event_id, alt_m)]
+act <- unique(act, by = c("race_id", "athlete_id"))
+
+fam <- as.data.table(citius_events())[, .(event_id, family)]
+act <- merge(act, fam, by = "event_id", all.x = TRUE)
+
+ape <- function(p) {
+  m <- merge(p, act, by = c("race_id", "athlete_id"))
+  m[is.finite(median_mark) & is.finite(actual) & actual > 0][
+    , ape := abs(median_mark - actual) / actual][]
+}
+ma <- ape(pa); mb <- ape(pb)
+m <- merge(ma[, .(race_id, athlete_id, ape_a = ape, mark_a = median_mark, family, alt_m)],
+           mb[, .(race_id, athlete_id, ape_b = ape, mark_b = median_mark)],
+           by = c("race_id", "athlete_id"))
+# How much the prediction actually MOVED. This is the sharp cut, and banding by
+# the predicted race's altitude is not.
+#
+# The correction is applied to an athlete's HISTORY marks, so it changes their
+# estimated ability and therefore their prediction EVERYWHERE -- including at
+# sea level. An athlete who trains and races at Eldoret and then runs in Zurich
+# is exactly the case the term exists for, and the Zurich race has alt_m ~ 400.
+# Splitting by the race's own altitude misses that entirely, which is why the
+# first run of this script showed movement in the "unknown" and "<200m" bands
+# and nothing above 1000 m: the altitude was in the HISTORY, not the venue.
+m[, moved := abs(mark_b - mark_a) / pmax(mark_a, 1e-9)]
+if (!nrow(m)) stop("no paired rows -- do the two arms share any meets yet?")
+
+cat(sprintf("\npaired rows: %s across %s races\n",
+            format(nrow(m), big.mark = ","), format(uniqueN(m$race_id), big.mark = ",")))
+cat(sprintf("rows with a known altitude: %.1f%%; rows above 1000 m: %s\n",
+            100 * mean(is.finite(m$alt_m)), format(m[is.finite(alt_m) & alt_m > 1000, .N], big.mark = ",")))
+
+rep_block <- function(d, label) {
+  if (nrow(d) < 30) return(data.table(cut = label, n = nrow(d), mae_a = NA_real_,
+                                      mae_b = NA_real_, diff_pp = NA_real_, t = NA_real_, p = NA_real_))
+  tt <- tryCatch(stats::t.test(d$ape_b, d$ape_a, paired = TRUE), error = function(e) NULL)
+  data.table(cut = label, n = nrow(d),
+             mae_a = 100 * mean(d$ape_a), mae_b = 100 * mean(d$ape_b),
+             diff_pp = 100 * (mean(d$ape_b) - mean(d$ape_a)),
+             t = if (is.null(tt)) NA_real_ else unname(tt$statistic),
+             p = if (is.null(tt)) NA_real_ else tt$p.value)
+}
+
+cat("\n=== BY ALTITUDE BAND — this is where an altitude term must show ===\n")
+cat("MAE is mean absolute percentage error on the mark; LOWER is better.\n")
+cat("diff_pp = B minus A in percentage points; NEGATIVE means the altitude arm is better.\n")
+m[, band := cut(fifelse(is.finite(alt_m), alt_m, -1),
+                c(-Inf, -0.5, 200, 800, 1500, 2200, Inf),
+                labels = c("unknown", "<200m", "200-800m", "800-1500m", "1500-2200m", ">2200m"))]
+print(rbindlist(lapply(levels(m$band), function(b) rep_block(m[band == b], b)))[
+  , lapply(.SD, function(x) if (is.numeric(x)) round(x, 4) else x)])
+
+cat("\n=== BY FAMILY, rows above 800 m only (where the term is material) ===\n")
+hi <- m[is.finite(alt_m) & alt_m > 800]
+if (nrow(hi) < 30) {
+  cat(sprintf("only %d paired rows above 800 m -- not enough to split by family yet.\n", nrow(hi)))
+} else {
+  print(rbindlist(lapply(sort(unique(hi$family)), function(f) rep_block(hi[family == f], f)))[
+    , lapply(.SD, function(x) if (is.numeric(x)) round(x, 4) else x)])
+}
+
+cat("\n=== BY HOW MUCH THE PREDICTION MOVED — the sharpest cut ===\n")
+cat("A row the term did not touch cannot carry evidence either way; including\n")
+cat("those rows only dilutes. `moved` is |B - A| / A on the predicted mark.\n")
+cat(sprintf("rows the term moved at all (>0.01%%): %s of %s (%.1f%%)\n",
+            format(m[moved > 1e-4, .N], big.mark = ","), format(nrow(m), big.mark = ","),
+            100 * mean(m$moved > 1e-4)))
+mv <- rbindlist(list(
+  # EXACTLY zero, not "below a threshold". A bucket defined as <=0.01% contains
+  # rows that genuinely moved a little, so a nonzero diff there is expected and
+  # says nothing -- the invariance check needs rows the term provably did not
+  # touch. Getting this wrong made a healthy run look like it had failed its own
+  # guard (t = 4.53 on the <=0.01% bucket, which was real movement, not a leak).
+  rep_block(m[moved == 0], "UNTOUCHED (exactly 0)"),
+  rep_block(m[moved > 0 & moved <= 1e-4], "moved <0.01%"),
+  rep_block(m[moved > 1e-4 & moved <= 1e-3], "moved 0.01-0.1%"),
+  rep_block(m[moved > 1e-3 & moved <= 5e-3], "moved 0.1-0.5%"),
+  rep_block(m[moved > 5e-3], "moved >0.5%")))
+print(mv[, lapply(.SD, function(x) if (is.numeric(x)) round(x, 4) else x)])
+cat("\nThe untouched row should read diff_pp = 0 exactly. If it does not, the two\n")
+cat("arms differ somewhere other than the mechanism and nothing below is safe.\n")
+
+cat("\n=== BY FAMILY, rows the term actually moved ===\n")
+tm <- m[moved > 1e-4]
+if (nrow(tm) < 30) {
+  cat(sprintf("only %d moved rows -- not enough to split by family yet.\n", nrow(tm)))
+} else {
+  print(rbindlist(lapply(sort(unique(tm$family)), function(f) rep_block(tm[family == f], f)))[
+    , lapply(.SD, function(x) if (is.numeric(x)) round(x, 4) else x)])
+}
+
+cat("\n=== CONCORDANCE — does the ORDERING improve? ===\n")
+cat("Pairwise: of all athlete pairs within a race, the share the model ranks the\n")
+cat("same way the actual marks did. HIGHER is better. diff_pp = B minus A.\n\n")
+cat("WHY THIS AND NOT BRIER. Brier bundles two different questions -- is the\n")
+cat("ordering right, and does the spread turn that ordering into calibrated\n")
+cat("probabilities. A term that improves ability levels can improve the ordering\n")
+cat("while Brier worsens, because the sigma it was calibrated against no longer\n")
+cat("matches. Concordance isolates the first. Judge an ABILITY change here and a\n")
+cat("SPREAD change on Brier/logloss, or the two questions get answered as one.\n\n")
+# Orientation via to_perf(), never hand-rolled: a sign flip would silently make
+# "better" mean "slower" for every track event and the number would still look
+# plausible.
+conc <- m[is.finite(mark_a) & is.finite(mark_b)]
+# to_perf() takes the ORIENTATION (-1 lower-is-better, +1 higher-is-better), not
+# an event_id. Passing the event_id aborts, which is the good outcome -- the bad
+# one would be a function that accepted it and quietly treated every throw like
+# a sprint. Orientation comes from the registry, never from a guess about the
+# event name.
+.orient <- as.data.table(citius_events())[, .(event_id, orientation)]
+# `actual` and `event_id` both come from act, not from m -- m carries only the
+# two arms' predictions and the APEs derived from them.
+conc <- merge(conc, act[, .(race_id, athlete_id, event_id, actual)],
+              by = c("race_id", "athlete_id"))
+conc <- conc[is.finite(actual) & actual > 0]
+conc <- merge(conc, .orient, by = "event_id", all.x = TRUE)
+conc <- conc[is.finite(orientation)]
+conc[, `:=`(pa = to_perf(mark_a, orientation),
+            pb = to_perf(mark_b, orientation),
+            pt = to_perf(actual, orientation))]
+conc <- conc[is.finite(pa) & is.finite(pb) & is.finite(pt)]
+.pair_conc <- function(pred, truth) {
+  n <- length(pred)
+  if (n < 2L) return(NA_real_)
+  i <- utils::combn(n, 2)
+  dp <- pred[i[1, ]] - pred[i[2, ]]
+  dt <- truth[i[1, ]] - truth[i[2, ]]
+  ok <- dt != 0
+  if (!any(ok)) return(NA_real_)
+  mean(sign(dp[ok]) == sign(dt[ok]))
+}
+cr <- conc[, .(ca = .pair_conc(pa, pt), cb = .pair_conc(pb, pt), n = .N), by = race_id][
+  is.finite(ca) & is.finite(cb)]
+if (nrow(cr) < 30) {
+  cat(sprintf("only %d scoreable races -- too few for a concordance test.\n", nrow(cr)))
+} else {
+  tt <- stats::t.test(cr$cb, cr$ca, paired = TRUE)
+  cat(sprintf("concordance  A %.4f%%  B %.4f%%  | diff %+.4f pp  t = %+.2f  p = %.3g  races = %s\n",
+              100 * mean(cr$ca), 100 * mean(cr$cb),
+              100 * (mean(cr$cb) - mean(cr$ca)), unname(tt$statistic), tt$p.value,
+              format(nrow(cr), big.mark = ",")))
+  cat(sprintf("B better in %d races, worse in %d, identical in %d\n",
+              sum(cr$cb > cr$ca), sum(cr$cb < cr$ca), sum(cr$cb == cr$ca)))
+}
+
+cat("\n=== POOLED (expected to be near flat: most rows are sea level) ===\n")
+print(rep_block(m, "all rows")[, lapply(.SD, function(x) if (is.numeric(x)) round(x, 4) else x)])
+cat("\nA pooled null is NOT evidence against the term. Read the bands.\n")

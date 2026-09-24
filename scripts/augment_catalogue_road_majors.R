@@ -1,7 +1,7 @@
 # Put the World Marathon Majors into the competition catalogue.
 #
 # WHY THIS IS A KNOWLEDGE FIX, NOT A MEASUREMENT ONE.
-# build_competition_catalogue.R already tiers `road_race` by measured strength,
+# build_competition_catalogue.R already tiers `road_race` by measured meet_strength,
 # and its own comment gives the principle: "We do not need a statistic to
 # discover that the Olympic Games is the top tier of athletics - that is
 # knowledge, and forcing it through an estimator only gave the estimator a
@@ -47,7 +47,7 @@ cat(sprintf("competition names available: %s\n", format(nrow(nm), big.mark = ","
 cat0 <- setDT(read_parquet(CAT))
 cat0[, competition_id := as.character(competition_id)]
 cat(sprintf("catalogue before: %s competitions (%s road_race)\n",
-            format(nrow(cat0), big.mark = ","), format(cat0[class == "road_race", .N], big.mark = ",")))
+            format(nrow(cat0), big.mark = ","), format(cat0[meet_type == "road_race", .N], big.mark = ",")))
 
 # --- the knowledge -----------------------------------------------------------
 # Abbott World Marathon Majors, plus Sydney which joined for 2025. Matched on
@@ -85,25 +85,25 @@ miss[, is_plat := !is_wmm & grepl(rx(PLATINUM), competition, ignore.case = TRUE)
 add <- miss[is_wmm | is_plat]
 if (!nrow(add)) { cat("nothing to add\n"); quit(status = 0) }
 
-add[, `:=`(class = fifelse(is_wmm, "marathon_major", "road_label"),
-           meet_tier = fifelse(is_wmm, "T1_elite", "T2_strong"))]
+add[, `:=`(meet_type = fifelse(is_wmm, "marathon_major", "road_label"),
+           meet_tier = fifelse(is_wmm, "M1", "M2"))]
 cat(sprintf("\nadding %s competitions: %s majors (T1), %s label races (T2)\n",
             format(nrow(add), big.mark = ","),
             format(add[is_wmm == TRUE, .N], big.mark = ","), format(add[is_plat == TRUE, .N], big.mark = ",")))
 print(add[, .(competitions = .N, first = min(date), last = max(date)),
-          by = .(class, meet_tier)])
+          by = .(meet_type, meet_tier)])
 cat("\nnamed competitions being added (top 20 by count):\n")
 print(add[, .N, by = .(competition, meet_tier)][order(-N)][seq_len(min(20, .N))])
 
 # Carry the NAME across - without it every added row is anonymous in the
 # catalogue (54 of 54 marathon_major rows currently have comp_name NA).
-new <- data.table(competition_id = add$competition_id, class = add$class,
+new <- data.table(competition_id = add$competition_id, meet_type = add$meet_type,
                   meet_tier = add$meet_tier)
 if ("comp_name" %in% names(cat0)) new[, comp_name := add$competition]
 for (cn in setdiff(names(cat0), names(new))) new[, (cn) := NA]
 out <- rbind(cat0, new[, names(cat0), with = FALSE])
 stopifnot("duplicate competition ids" = !anyDuplicated(out$competition_id),
-          "every added row must carry a tier" = !any(is.na(out$meet_tier[out$class %chin% c("marathon_major","road_label")])))
+          "every added row must carry a tier" = !any(is.na(out$meet_tier[out$meet_type %chin% c("marathon_major","road_label")])))
 if (!file.exists(paste0(CAT, ".bak"))) file.copy(CAT, paste0(CAT, ".bak"))
 # arrow memory-maps a parquet it has read, so writing back to the same path
 # fails with "user-mapped section open". Write beside it, release the mapping,

@@ -1,7 +1,7 @@
-# Full T3_development backfill: 18,748 competitions (the real remaining gap
+# Full M3 backfill: 18,748 competitions (the real remaining gap
 # after the 2026-only pilot merged, re-derived 2026-08-31 -- union of
 # competition_catalogue.parquet + the two archived pre-corpus-rebuild
-# snapshots, T3_development rows only, diffed against the CURRENT
+# snapshots, M3 rows only, diffed against the CURRENT
 # championship_results.rds). Real multi-day background operation.
 #
 # Same resumable-cache pattern as harvest_t3_pilot_2026.R, plus a heartbeat

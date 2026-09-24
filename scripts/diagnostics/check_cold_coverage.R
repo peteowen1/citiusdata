@@ -17,8 +17,10 @@ TAG <- Sys.getenv("FORM_TAG", "final")
 
 ds <- open_dataset(file.path(D, "athletics_careers_store"))
 cat(sprintf("careers store: %s rows\n", format(nrow(ds), big.mark = ",")))
-ca <- setDT(as.data.frame(ds |> dplyr::select(athlete_id, date, perf, discipline,
-                                              sex, tier)))
+# `tier` was selected here and never read; it was renamed race_code on
+# 2026-09-16 and this script was missed by the sweep because the guard suite's
+# runner was pointing at a path that no longer existed
+ca <- setDT(as.data.frame(ds |> dplyr::select(athlete_id, date, perf, discipline, sex)))
 ca <- ca[!is.na(perf) & is.finite(perf) & !is.na(date)]
 ca[, event_id := paste0("AT-", gsub("[^A-Za-z0-9]", "", discipline), "-", sex)]
 ca[, athlete_id := as.character(athlete_id)]

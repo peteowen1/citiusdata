@@ -57,7 +57,7 @@ s <- h[seen == TRUE & place <= 12 & yr %in% c(2025, 2026)]
 s <- s[complete.cases(s[, ..PRED])]
 s[, nf := .N, by = race_key]; s <- s[nf >= 2]
 s[, stratum := fifelse(!is.na(class) & class %chin% MAJ, "majors",
-                fifelse(!is.na(meet_tier) & meet_tier == "T1_elite", "T1 other", "T2"))]
+                fifelse(!is.na(meet_tier) & meet_tier == "M1", "T1 other", "T2"))]
 
 pairs_of <- function(dt) {
   dt <- copy(dt)[, rid := .GRP, by = race_key]

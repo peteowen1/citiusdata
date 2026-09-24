@@ -56,7 +56,7 @@ cat_tbl[, competition_id := as.character(competition_id)]
 d <- merge(d, cat_tbl[, .(competition_id, meet_tier)], by = "competition_id", all.x = TRUE)
 evs <- as.data.table(deployed_calibration(OUT)$events)[calibrated %in% TRUE, .(event_id, sigma_within)]
 d <- merge(d, evs, by = "event_id")
-d <- d[meet_tier == "T1_elite"]
+d <- d[meet_tier == "M1"]
 d[, ability := orientation * log(median_mark)]
 d <- d[is.finite(ability)]
 d[, is_lose := if (TARGET == "javelinW") event_id == "AT-JavelinThrow-W" else family == "throw"]

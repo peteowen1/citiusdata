@@ -16,9 +16,17 @@ dir.create(TMP, showWarnings = FALSE, recursive = TRUE)
 
 # The reference arm: engine DEFAULTS at cap 12, which is the shipping config.
 # Update these two numbers deliberately, never to make a run pass.
-EXPECT <- c(conc25 = 69.127, conc26 = 69.387)
+# 2026-09-20: reset from 69.127 / 69.387 (2026-08-15) after the script was
+# found not to have run since the similarity gate landed; the new values are
+# today's engine defaults on the v12 adjusted_marks.parquet.
+EXPECT <- c(conc25 = 72.308, conc26 = 71.112)
 TOL <- 1e-3   # the reference is quoted to 3dp, so compare at that precision
 
+# The engine reads event_similarity_spec.parquet from FORM_OUT and refuses to
+# start without it (SEQ_XB_MINCOR gate, added after this script was written),
+# so the scratch dir needs a copy. Broken silently from that day to 2026-09-20.
+file.copy(file.path(OUT, "event_similarity_spec.parquet"),
+          file.path(TMP, "event_similarity_spec.parquet"), overwrite = TRUE)
 e <- new.env()
 Sys.setenv(SEQ_TAG = "verify", FORM_OUT = TMP)
 sys.source(file.path(ROOT, "citiusdata", "scripts", "form_ratings.R"), envir = e)

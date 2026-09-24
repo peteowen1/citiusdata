@@ -38,7 +38,7 @@ cg <- setDT(read_parquet(file.path(D, "competition_catalogue.parquet"),
 cp <- merge(cp, cg, by = "competition_id", all.x = TRUE)
 h <- merge(h, cp[, .(race_key, class, meet_tier)], by = "race_key", all.x = TRUE)
 h[, w_tier := fifelse(!is.na(class) & class %chin% MAJ, W_MAJ,
-             fifelse(!is.na(meet_tier) & meet_tier == "T1_elite", W_T1, W_T2))]
+             fifelse(!is.na(meet_tier) & meet_tier == "M1", W_T1, W_T2))]
 h[, wt := w_tier * fifelse(rc == "final", 1, W_RND)]
 stopifnot("every row must carry a finite weight" = all(is.finite(h$wt)),
           "no weight may be zero" = all(h$wt > 0),

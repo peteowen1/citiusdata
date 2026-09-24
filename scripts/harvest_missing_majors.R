@@ -35,7 +35,7 @@ dir.create(CACHE, recursive = TRUE, showWarnings = FALSE)
 # old wrapper probe (0 lost, +198 gained on this exact term set) -- every
 # competition the old method found, the new one found too, plus more. The
 # extra hits are mostly minor meets (school/inter-city championships,
-# "F"/"E"/"B" ranking_category) that the MAJOR/NOT regex below already
+# "F"/"E"/"B" meet_code) that the MAJOR/NOT regex below already
 # filters out, same as it always has -- this is a pure discovery upgrade,
 # not a change to what counts as a "major".
 cc <- setDT(readRDS(file.path(OUT, "ath_competitions.rds")))
@@ -114,7 +114,7 @@ want <- cc[grepl(MAJOR, name, ignore.case = TRUE, perl = TRUE) &
 miss <- want[!competition_id %in% have]
 cli::cli_h2("Majors in the feed: {nrow(want)} | already harvested: {sum(want$competition_id %in% have)} | missing: {nrow(miss)}")
 print(miss[order(start), .(competition_id, name = substr(name, 1, 48),
-                           start = substr(start, 1, 10), tier)])
+                           start = substr(start, 1, 10), race_code)])
 if (!nrow(miss)) { cli::cli_alert_success("Nothing missing."); quit(save = "no") }
 
 got <- list()

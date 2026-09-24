@@ -1,8 +1,8 @@
 # Tier unclassified meets by the World Athletics world-rankings category code.
 #
-# THE PROBLEM. `class` is a regex over `comp_name`. A meet named unusually falls
+# THE PROBLEM. `meet_type` is a regex over `comp_name`. A meet named unusually falls
 # to `unclassified`, and an unclassified meet is capped at T2 by a deliberate
-# rule -- 89 meets once admitted on measured strength alone were all junk. The
+# rule -- 89 meets once admitted on measured meet_strength alone were all junk. The
 # cap is right, but it also holds down meets that are unclassified only because
 # nobody wrote a pattern: the Doha Diamond League appears as "Doha Meeting", the
 # Birmingham DL as "Muller Grand Prix", Stockholm as "DN Galan", Paris as
@@ -14,7 +14,7 @@
 # World Athletics world-rankings scale, and calibrating it against the meets we
 # DO name shows a clean ordering:
 #
-#   code   meets   %T1-by-name   median athletes   median strength
+#   code   meets   %T1-by-name   median athletes   median meet_strength
 #   OW        28       100.0          1,687             88.0     Olympics/Worlds
 #   DF        11       100.0            258             94.6     DL Final
 #   GW       323        71.5            221             91.2     DL / platinum road
@@ -27,8 +27,8 @@
 #   F     10,503         1.5            141             39.3     the residual
 #
 # THE MAPPING (Pete's, 2026-09-03):  OW/DF/GW/GL -> T1,  A/B/C/D -> T2,
-# E/F -> T3. Applied ONLY where our own class rule is silent -- a meet we can
-# name keeps the tier its class gives it. 12,137 unclassified meets carry no
+# E/F -> T3. Applied ONLY where our own meet_type rule is silent -- a meet we can
+# name keeps the tier its meet_type gives it. 12,137 unclassified meets carry no
 # code at all and keep the existing quantile treatment.
 #
 # PRECEDENCE: 2,363 meets carry several codes ("A/DF/F/GW"). Highest wins, so
@@ -41,7 +41,7 @@
 # more than halving it (2025: 47,284 -> 18,625 finals). `F` is the RESIDUAL
 # category, not a quality verdict -- 10,503 meets carry it, and a large open
 # meet lands on F regardless of who turned up. The clearest casualty is
-# Mt. SAC Relays 2024: 1,675 athletes, strength 77.8, coded F, demoted to T3.
+# Mt. SAC Relays 2024: 1,675 athletes, meet_strength 77.8, coded F, demoted to T3.
 #
 # I recommended promotions-only with that evidence; Pete chose both. Reversible:
 # `tier_pre_wa` preserves the tier each meet had before this ran.
@@ -59,9 +59,9 @@ KNOWN <- c("olympics","world_champs","commonwealth","world_indoor","diamond_leag
            "african_games","panam_games","european_games","age_group","club_meet",
            "ncaa_lower","team_champs_lower","road_race")
 RANK <- c(OW = 1, DF = 2, GW = 3, GL = 4, A = 5, B = 6, C = 7, D = 8, E = 9, F = 10)
-TIER <- c(OW = "T1_elite", DF = "T1_elite", GW = "T1_elite", GL = "T1_elite",
-          A = "T2_strong", B = "T2_strong", C = "T2_strong", D = "T2_strong",
-          E = "T3_development", F = "T3_development")
+TIER <- c(OW = "M1", DF = "M1", GW = "M1", GL = "M1",
+          A = "M2", B = "M2", C = "M2", D = "M2",
+          E = "M3", F = "M3")
 
 best_code <- function(s) vapply(strsplit(s, "/"), function(v) {
   v <- v[v %in% names(RANK)]
@@ -81,12 +81,12 @@ before <- copy(ct$tier_pre_wa)
 
 ct[, wac := NA_character_]
 ct[!is.na(tier_codes), wac := best_code(tier_codes)]
-ct[, .apply := !class %chin% KNOWN & !is.na(wac)]
+ct[, .apply := !meet_type %chin% KNOWN & !is.na(wac)]
 .n_wac <- ct[.apply == TRUE, .N]
 cat(sprintf("unclassified meets: %s | with a WA code: %s | without (unchanged): %s\n",
-            format(ct[!class %chin% KNOWN, .N], big.mark=","),
+            format(ct[!meet_type %chin% KNOWN, .N], big.mark=","),
             format(.n_wac, big.mark=","),
-            format(ct[!class %chin% KNOWN & is.na(wac), .N], big.mark=",")))
+            format(ct[!meet_type %chin% KNOWN & is.na(wac), .N], big.mark=",")))
 
 ct[.apply == TRUE, meet_tier := TIER[wac]]
 if (!"tier_source" %in% names(ct)) ct[, tier_source := NA_character_]
@@ -104,8 +104,8 @@ print(ct[.from != meet_tier, .(meets = .N, finals = sum(finals, na.rm = TRUE)),
 cat("\ntier counts:\n"); print(ct[, .N, by = meet_tier][order(meet_tier)])
 cat("\nscored pool:\n")
 for (y in c(2024, 2025, 2026)) {
-  a <- sum(ct[before %chin% c("T1_elite","T2_strong") & year == y]$finals, na.rm=TRUE)
-  b <- ct[meet_tier %chin% c("T1_elite","T2_strong") & year == y, sum(finals, na.rm=TRUE)]
+  a <- sum(ct[before %chin% c("M1","M2") & year == y]$finals, na.rm=TRUE)
+  b <- ct[meet_tier %chin% c("M1","M2") & year == y, sum(finals, na.rm=TRUE)]
   cat(sprintf("  %d finals: %s -> %s (%+d)\n", y, format(a, big.mark=","),
               format(b, big.mark=","), b - a))
 }
@@ -113,10 +113,10 @@ for (y in c(2024, 2025, 2026)) {
 stopifnot("row count changed"   = nrow(ct) == length(before),
           "duplicate ids"       = !any(duplicated(ct$competition_id)),
           # Uses the .from COLUMN, not the free `before` vector: inside `[`,
-          # `before[class %chin% KNOWN]` evaluates `class` against the whole
+          # `before[meet_type %chin% KNOWN]` evaluates `meet_type` against the whole
           # table while meet_tier is already subset, so the lengths disagree.
           # Same trap as the reporting line above.
-          "a known class moved" = ct[class %chin% KNOWN, all(meet_tier == .from)],
+          "a known meet_type moved" = ct[meet_type %chin% KNOWN, all(meet_tier == .from)],
           # `all()` over a possibly-EMPTY set is TRUE in R, so "mapping not
           # applied" would pass even if .n_wac were 0 (e.g. `wac` extraction
           # silently returning nothing). Found by review 2026-09-04, same

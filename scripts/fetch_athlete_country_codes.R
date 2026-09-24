@@ -59,22 +59,42 @@ suppressMessages(library(httr2))
 D <- file.path(VERSE, "citiusdata", "data")
 
 CACHE <- file.path(D, "athlete_country_codes.rds")
-# See fetch_budapest_qualification_field.R -- the edge number rotates
-# independently of the key. 4881 503'd on 2026-09-09; 4883 is current.
-GQL_URL <- getOption("citius.wa_graphql_url",
-                     Sys.getenv("CITIUS_WA_GRAPHQL_URL",
-                                "https://graphql-prod-4883.edge.aws.worldathletics.org/graphql"))
 BATCH <- 50L
 PAUSE <- 1.5           # between batches; ~5 requests total for a full field
 MAX_CONSECUTIVE_FAIL <- 2L
 
-WA_KEY <- getOption("citius.wa_graphql_key", Sys.getenv("CITIUS_WA_GRAPHQL_KEY", ""))
-if (!nzchar(WA_KEY)) {
-  cli::cli_abort(c(
-    "No World Athletics GraphQL key configured.",
-    i = "Set {.envvar CITIUS_WA_GRAPHQL_KEY} or {.code options(citius.wa_graphql_key=)}.",
-    i = "The key is the x-api-key the worldathletics.org front end sends; it ROTATES (see docs/reference/harvesting.md), so it is not baked in here."
-  ))
+# Discover the edge/key pair rather than requiring it -- see the fuller note in
+# fetch_budapest_qualification_field.R. The hardcoded 4883 default this
+# replaced had been dead since 2026-09-12, so the fallback could never have
+# worked; by 09-14 the live edge was 4892. Neither value is secret, both are in
+# the public bundle, and discovery takes about three seconds.
+.ep <- NULL
+GQL_URL <- getOption("citius.wa_graphql_url", Sys.getenv("CITIUS_WA_GRAPHQL_URL", ""))
+WA_KEY  <- getOption("citius.wa_graphql_key", Sys.getenv("CITIUS_WA_GRAPHQL_KEY", ""))
+if (!nzchar(GQL_URL) || !nzchar(WA_KEY)) {
+  .ep <- local({
+    o <- capture.output(v <- source(
+      file.path(VERSE, "citiusdata", "scripts", "discover_wa_endpoint.R"))$value)
+    v
+  })
+  if (is.na(.ep$status) || .ep$status != 200L) {
+    cli::cli_abort(c(
+      "Endpoint discovery returned HTTP {.ep$status}.",
+      i = "Run {.file discover_wa_endpoint.R} on its own to see why."))
+  }
+  # The pair is ATOMIC -- take both discovered values, never one of each. Full
+  # reasoning in fetch_budapest_qualification_field.R: a fresh edge with a stale
+  # key returns a 503 that reads exactly like a retired edge, and filling in only
+  # the missing half is how CI produced that pairing.
+  if (nzchar(GQL_URL) != nzchar(WA_KEY)) {
+    cli::cli_alert_warning(c(
+      "Only one half of the WA endpoint pair was configured; ignoring it and using
+       the discovered pair. Set BOTH {.envvar CITIUS_WA_GRAPHQL_URL} and
+       {.envvar CITIUS_WA_GRAPHQL_KEY} to override deliberately."))
+  }
+  GQL_URL <- .ep$url
+  WA_KEY  <- .ep$key
+  cli::cli_alert_success("Endpoint discovered: {.val {.ep$edge}}")
 }
 
 args <- commandArgs(trailingOnly = TRUE)

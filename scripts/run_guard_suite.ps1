@@ -20,7 +20,14 @@ foreach ($g in $guards) {
     if ($freeGB -ge 4) { break }
     Start-Sleep -Seconds 10; $waited += 10
   }
-  $out = & Rscript "citiusdata/scripts/$g.R" 2>&1 | Out-String
+  # Guards live in scripts/diagnostics/ since de4d1c0 (the reorganise). This
+  # runner kept the old path, and Rscript answers a missing file with a
+  # SEGFAULT (exit -1073741819), not "cannot open file" -- so every guard read
+  # as an access-violation FAIL and the suite verified nothing until
+  # 2026-09-19. A missing script is now its own loud failure.
+  $path = "citiusdata/scripts/diagnostics/$g.R"
+  if (-not (Test-Path $path)) { Write-Output "===== $g : FAIL (script not found at $path) ====="; continue }
+  $out = & Rscript $path 2>&1 | Out-String
   $code = $LASTEXITCODE
   $status = if ($code -eq 0) { 'PASS' } else { 'FAIL' }
   Write-Output "===== $g : $status (exit $code) ====="

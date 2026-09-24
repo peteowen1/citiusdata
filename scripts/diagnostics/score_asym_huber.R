@@ -72,7 +72,7 @@ MAJ <- c("olympics","world_champs","european_champs","commonwealth")
 score <- function(d, yr) {
   d <- merge(d[year(date) == yr], wt_of, by = "race_key", all.x = TRUE)
   d[, wt := fifelse(!is.na(class) & class %chin% MAJ, 40,
-            fifelse(!is.na(meet_tier) & meet_tier == "T1_elite", 12, 1)) *
+            fifelse(!is.na(meet_tier) & meet_tier == "M1", 12, 1)) *
             fifelse(grepl("final", rc, ignore.case = TRUE) &
                     !grepl("semi", rc, ignore.case = TRUE), 1, 0.5)]
   # merged races out, as everywhere: a shared place with different marks means

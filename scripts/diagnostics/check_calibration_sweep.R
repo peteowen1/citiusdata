@@ -90,19 +90,19 @@ metrics_for <- function(dt) {
 cat("\n================ BY TIER ================\n")
 print(rbindlist(lapply(split(d, d$meet_tier), metrics_for), idcol = "meet_tier"))
 
-cat("\n================ BY FAMILY (T1_elite only) ================\n")
-d_t1 <- d[meet_tier == "T1_elite"]
+cat("\n================ BY FAMILY (M1 only) ================\n")
+d_t1 <- d[meet_tier == "M1"]
 print(rbindlist(lapply(split(d_t1, d_t1$family), metrics_for), idcol = "family"))
 
 cat("\n================ BY FAMILY (all tiers pooled) ================\n")
 print(rbindlist(lapply(split(d, d$family), metrics_for), idcol = "family"))
 
-cat("\n================ BY YEAR (all tiers pooled, since T1_elite has year gaps) ================\n")
+cat("\n================ BY YEAR (all tiers pooled, since M1 has year gaps) ================\n")
 by_year <- rbindlist(lapply(split(d, d$year), metrics_for), idcol = "year")
 setorder(by_year, year)
 print(by_year)
 
-cat("\n================ BY DISCIPLINE+SEX (T1_elite, min 50 preds) ================\n")
+cat("\n================ BY DISCIPLINE+SEX (M1, min 50 preds) ================\n")
 disc <- rbindlist(lapply(split(d_t1, paste(d_t1$discipline, d_t1$sex)), metrics_for), idcol = "discipline_sex")
 print(disc[n >= 50][order(-abs(bias_pct))][1:min(20, .N)])
 

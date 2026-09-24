@@ -146,7 +146,7 @@ say("last-5 signed error on shared set: %+.4f%%  -> A4 %s",
 
 cat("\n================ SHARED SET (the decisive comparison) ================\n")
 report(sh, "SHARED, all tiers")
-report(sh[meet_tier == "T1_elite"], "SHARED, T1_elite")
+report(sh[meet_tier == "M1"], "SHARED, M1")
 
 # ---- composition: what are the NEW-only races like? ------------------------
 cat("\n================ COMPOSITION of newly-scored races ================\n")

@@ -50,7 +50,7 @@ ctl <- setDT(arrow::read_parquet(file.path(OUT, "competition_catalogue.parquet")
 d[, competition_id := as.character(competition_id)]; ctl[, competition_id := as.character(competition_id)]
 d <- merge(d, ctl[, .(competition_id, meet_tier)], by = "competition_id", all.x = TRUE)
 d <- merge(d, as.data.table(citius_events())[, .(event_id, orientation)], by = "event_id")
-d <- d[meet_tier == "T1_elite" & date >= as.Date("2020-01-01")]
+d <- d[meet_tier == "M1" & date >= as.Date("2020-01-01")]
 
 # RECENT shock: mean c_r over the athlete's last NREC races in this event before
 # the scored one. Positive c_r means the race was FAST, so a positive value here

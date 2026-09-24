@@ -18,7 +18,7 @@ D <- here::here("citiusdata", "data")
 c0 <- setDT(arrow::read_parquet(file.path(D, "competition_catalogue.parquet")))
 c0[, competition_id := as.character(competition_id)]
 c0[, first_date := as.Date(first_date)]
-pre <- c0[meet_tier == "T1_elite" & first_date < as.Date("2020-01-01")]
+pre <- c0[meet_tier == "M1" & first_date < as.Date("2020-01-01")]
 cat(sprintf("pre-2020 T1 competitions in the catalogue: %d, %s catalogued results\n",
             nrow(pre), format(sum(pre$results, na.rm = TRUE), big.mark = ",")))
 

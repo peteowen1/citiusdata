@@ -9,7 +9,7 @@
 # represented, which is more than the population ticket 03 sized its DL
 # findings on (573 races). DL meets identified via the catalogue's `class`
 # field, NOT `meet_tier` -- meet_tier has severe year-coverage gaps (checked
-# directly 2026-08-29: several years show ZERO T1_elite rows across every
+# directly 2026-08-29: several years show ZERO M1 rows across every
 # discipline), but `class` is a name-matched, competition-level field with no
 # such gap for a recognisably-branded series like Diamond League.
 #

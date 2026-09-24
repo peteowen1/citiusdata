@@ -97,7 +97,7 @@ test  <- x[date >= FROM & date <= TO & !is.na(race_key)]
 if ("meet_tier" %in% names(test)) {
   say("meet_tier in hold-out rows: %s", paste(names(table(test$meet_tier, useNA = "ifany")),
                                              table(test$meet_tier, useNA = "ifany"), sep = "=", collapse = " "))
-  test <- test[meet_tier %in% c("T1_elite", "T1")]
+  test <- test[meet_tier %in% c("M1", "T1")]
 }
 is_final <- grepl("final", tolower(test$round)) & !grepl("semi|quarter", tolower(test$round))
 is_heat  <- grepl("heat|round 1|qualif|prelim", tolower(test$round))

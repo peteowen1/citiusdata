@@ -28,7 +28,7 @@ x <- setDT(readRDS(file.path(OUT, "athletics_corpus.rds")))[!is.na(date)]
 cat(sprintf("corpus: %s results | %s races\n", format(nrow(x), big.mark = ","),
             format(uniqueN(x$race_key), big.mark = ",")))
 keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "sex",
-          "round", "tier", "race_key", "competition_id", "discipline",
+          "round", "race_code", "race_key", "competition_id", "discipline",
           "orientation", "is_technical", "nomark_observable", "source")
 x <- x[, intersect(keep, names(x)), with = FALSE]
 clean <- flag_implausible(x)

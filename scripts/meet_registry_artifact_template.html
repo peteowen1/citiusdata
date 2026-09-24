@@ -195,9 +195,9 @@
     cursor: pointer;
     font-weight: 600;
   }
-  .tier-btn[data-active="true"][data-tier="T1_elite"] { background: var(--t1-bg); color: var(--t1); border-color: var(--t1); }
-  .tier-btn[data-active="true"][data-tier="T2_strong"] { background: var(--t2-bg); color: var(--t2); border-color: var(--t2); }
-  .tier-btn[data-active="true"][data-tier="T3_development"] { background: var(--t3-bg); color: var(--t3); border-color: var(--t3); }
+  .tier-btn[data-active="true"][data-tier="M1"] { background: var(--t1-bg); color: var(--t1); border-color: var(--t1); }
+  .tier-btn[data-active="true"][data-tier="M2"] { background: var(--t2-bg); color: var(--t2); border-color: var(--t2); }
+  .tier-btn[data-active="true"][data-tier="M3"] { background: var(--t3-bg); color: var(--t3); border-color: var(--t3); }
   .field.grow { flex: 1; min-width: 200px; }
   .count {
     margin-left: auto;
@@ -251,9 +251,9 @@
     font-size: 0.74rem;
     font-weight: 700;
   }
-  .pill.T1_elite { background: var(--t1-bg); color: var(--t1); }
-  .pill.T2_strong { background: var(--t2-bg); color: var(--t2); }
-  .pill.T3_development { background: var(--t3-bg); color: var(--t3); }
+  .pill.M1 { background: var(--t1-bg); color: var(--t1); }
+  .pill.M2 { background: var(--t2-bg); color: var(--t2); }
+  .pill.M3 { background: var(--t3-bg); color: var(--t3); }
   .class-tag { color: var(--text-dim); font-size: 0.8rem; }
 
   tbody tr.meet-row { cursor: pointer; }
@@ -403,9 +403,9 @@
   <div class="field">
     <label>Tier</label>
     <div class="tier-toggles">
-      <button class="tier-btn" data-tier="T1_elite" data-active="true">T1</button>
-      <button class="tier-btn" data-tier="T2_strong" data-active="true">T2</button>
-      <button class="tier-btn" data-tier="T3_development" data-active="true">T3</button>
+      <button class="tier-btn" data-tier="M1" data-active="true">T1</button>
+      <button class="tier-btn" data-tier="M2" data-active="true">T2</button>
+      <button class="tier-btn" data-tier="M3" data-active="true">T3</button>
     </div>
   </div>
   <div class="field">
@@ -469,7 +469,7 @@ const EVENTS = __MEET_EVENTS_JSON__;
 
 let sortKey = "strength", sortDir = -1, page = 0;
 const PAGE_SIZE = 100;
-const activeTiers = new Set(["T1_elite", "T2_strong", "T3_development"]);
+const activeTiers = new Set(["M1", "M2", "M3"]);
 const expanded = new Set();
 
 const classSel = document.getElementById("class");
@@ -598,7 +598,7 @@ function pbCell(d) {
   return `${pb}<span class="delta ${cls}"> ${sign}${diff.toFixed(1)}</span>`;
 }
 function tierLabel(t) {
-  return t === "T1_elite" ? "T1" : t === "T2_strong" ? "T2" : "T3";
+  return t === "M1" ? "T1" : t === "M2" ? "T2" : "T3";
 }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));

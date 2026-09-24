@@ -172,7 +172,7 @@ if (file.exists(sw)) check_corpus(readRDS(sw), "Swimming — swimming_history.rd
 #              for months -- a `competition` vs `comp_name` mismatch that the
 #              union turned into a fabricated NA column
 #   sex        the same bug again (`sex_code`), 52% populated, unnoticed
-#   meet_tier  407 meets in a tier their own class rule forbids, because the
+#   meet_tier  407 meets in a tier their own meet_type rule forbids, because the
 #              consistency pass covered .K1/.K3/road_race and not KNOWN_T2
 #   duckdb     silently stale for a day because the installed citius predated
 #              the function the write-through called
@@ -244,21 +244,21 @@ if (file.exists(cp)) {
     K2 <- c("continental","national_champs","ncaa","team_champs","continental_tour",
             "regional_games","asian_games","african_games","panam_games","european_games")
     K3 <- c("age_group","club_meet","ncaa_lower","team_champs_lower")
-    for (spec in list(list(K1, "T1_elite"), list(K2, "T2_strong"), list(K3, "T3_development"))) {
-      pop <- ct[class %chin% spec[[1]]]
+    for (spec in list(list(K1, "M1"), list(K2, "M2"), list(K3, "M3"))) {
+      pop <- ct[meet_type %chin% spec[[1]]]
       # Population-nonzero guard: without it, a band with ZERO meets (e.g. a
-      # class name typo, or a live class silently renamed upstream) reports
+      # meet_type name typo, or a live meet_type silently renamed upstream) reports
       # NOTHING -- indistinguishable from "checked, no violations found." A
       # run can look clean specifically because the classification broke.
-      if (!nrow(pop)) { flag("no meets found in any %s class -- classification may be broken", spec[[2]]); next }
+      if (!nrow(pop)) { flag("no meets found in any %s meet_type -- classification may be broken", spec[[2]]); next }
       bad <- pop[meet_tier != spec[[2]]]
-      if (nrow(bad)) flag("%d meet(s) in a %s class are not %s (e.g. %s)", nrow(bad),
+      if (nrow(bad)) flag("%d meet(s) in a %s meet_type are not %s (e.g. %s)", nrow(bad),
                           spec[[2]], spec[[2]], bad[order(-athletes)][1]$comp_name)
-      else ok("all %d %s-class meets are %s", nrow(pop), spec[[2]], spec[[2]])
+      else ok("all %d %s-meet_type meets are %s", nrow(pop), spec[[2]], spec[[2]])
     }
     unnamed <- ct[is.na(comp_name) | !nzchar(trimws(comp_name))]
     if (nrow(unnamed))
-      flag("%d catalogue meet(s) have no name -- cat_of() cannot classify them, so they fall to strength banding", nrow(unnamed))
+      flag("%d catalogue meet(s) have no name -- cat_of() cannot classify them, so they fall to meet_strength banding", nrow(unnamed))
     else ok("every catalogue meet has a name")
   }
 }

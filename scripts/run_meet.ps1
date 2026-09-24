@@ -24,7 +24,8 @@
 param(
   [Parameter(Mandatory = $true, Position = 0)][string]$MeetId,
   [switch]$SkipUpload,
-  [switch]$SkipEntries   # the entry list rarely changes; skip the PDF re-parse
+  [switch]$SkipEntries,  # the entry list rarely changes; skip the PDF re-parse
+  [switch]$SkipExport    # refresh_all_cards.ps1 publishes once at the end; skip the per-meet export (63s each)
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,6 +41,11 @@ $ErrorActionPreference = "Stop"
 
 $VERSE   = "C:\dev\citiusverse"
 $SCRIPTS = Join-Path $VERSE "citiusdata\scripts"
+# Every step script finds the verse with here::here(), which walks up from the
+# CWD to the nearest repo root -- from citiusdata\scripts that is citiusdata,
+# and load_all(file.path(VERSE, "citius")) then fails. Pin the cwd here so the
+# runner works from wherever it is invoked (2026-09-20, refresh_all_cards.ps1).
+Set-Location $VERSE
 $CAL     = Join-Path $VERSE "citiusdata\data\athletics_calendar.csv"
 
 function Fail($msg) { Write-Host "`n  ABORTED: $msg" -ForegroundColor Red; exit 1 }
@@ -64,7 +70,7 @@ $STEPS = switch ($MeetId) {
       @{ n = "build rounds";      f = "build_birmingham_rounds.R" },
       @{ n = "predict";           f = "predict_birmingham2026.R" },
       @{ n = "sanity";            f = "sanity_birmingham_card.R" },
-      @{ n = "export + publish";  f = "export_athletics_blog.R";    a = @($MeetId) }
+      @{ n = "export + publish";  f = "export_athletics_blog.R";    a = @($MeetId); optional = $SkipExport }
     )
   }
   # The finals-only shape. Every script it needs was written on 2026-08-31 and
@@ -86,7 +92,7 @@ $STEPS = switch ($MeetId) {
       @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("budapest2026") },
       @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("budapest2026") },
       @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("budapest2026") },
-      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId); optional = $SkipExport }
     )
   }
   "brussels2026" {
@@ -95,7 +101,7 @@ $STEPS = switch ($MeetId) {
       @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("brussels2026") },
       @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("brussels2026") },
       @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("brussels2026") },
-      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId); optional = $SkipExport }
     )
   }
   # Backfill (2026-09-11): lausanne2026/silesia2026/zurich2026 are the same
@@ -130,7 +136,7 @@ $STEPS = switch ($MeetId) {
       @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("lausanne2026") },
       @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("lausanne2026") },
       @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("lausanne2026") },
-      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId); optional = $SkipExport }
     )
   }
   "silesia2026" {
@@ -139,7 +145,7 @@ $STEPS = switch ($MeetId) {
       @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("silesia2026") },
       @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("silesia2026") },
       @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("silesia2026") },
-      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId); optional = $SkipExport }
     )
   }
   "zurich2026" {
@@ -148,13 +154,32 @@ $STEPS = switch ($MeetId) {
       @{ n = "predict";          f = "predict_diamond_league_final.R";       a = @("zurich2026") },
       @{ n = "nation codes";     f = "add_nation_codes.R";                   a = @("zurich2026") },
       @{ n = "sanity";           f = "sanity_diamond_league_card.R";         a = @("zurich2026") },
-      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId) }
+      @{ n = "export + publish"; f = "export_athletics_blog.R";     a = @($MeetId); optional = $SkipExport }
     )
   }
   default {
     Fail "No step list defined for '$MeetId' yet. A meet with rounds needs a Birmingham-shaped chain; a finals-only meet can usually reuse the Diamond-League one above."
   }
 }
+
+# PERSIST THE FORECAST, for every meet shape, appended here rather than added
+# to each of the six step lists above -- one place to change, and a future
+# meet gets it without anyone remembering to.
+#
+# LAST, and deliberately so. Every card run simulates a full field and keeps
+# three numbers from it; build_forecast_store.R re-runs the simulation and
+# writes the whole per-position distribution, which is the only route to
+# "what were his odds of finishing 4th" (the backtest caches never recorded
+# it -- see build_forecast_archive.R's header). Running it AFTER
+# export + publish means a forecast is archived only for a card that actually
+# shipped, and -- more importantly -- a failure here can never block a publish
+# that has already succeeded.
+#
+# nonfatal for the same reason. Persisting a forecast is valuable; it is not
+# worth painting a red FAILED on a run whose card went out correctly. This
+# file's own header is about operators learning to distrust the runner's
+# output, and a scary colour on a successful publish is exactly that.
+$STEPS += @{ n = "forecast store"; f = "build_forecast_store.R"; a = @($MeetId); nonfatal = $true }
 
 Write-Host ""
 Write-Host "  $($meet.name)" -ForegroundColor Cyan
@@ -205,6 +230,15 @@ try {
     $code = $LASTEXITCODE
     $sec = [math]::Round(((Get-Date) - $st).TotalSeconds, 1)
     if ($code -ne 0) {
+      # A nonfatal step is one whose failure must not invalidate work already
+      # done -- currently only the forecast-store append, which runs after the
+      # card has published. It still prints in red and still shows its tail:
+      # "nonfatal" means "do not abort the run", never "do not tell anyone".
+      if ($s.nonfatal) {
+        Write-Host ("`r  {0,-20} FAILED after {1}s (nonfatal, continuing)" -f $s.n, $sec) -ForegroundColor Red
+        $out | Select-Object -Last 15 | ForEach-Object { Write-Host "    $_" }
+        continue
+      }
       Write-Host ("`r  {0,-20} FAILED after {1}s" -f $s.n, $sec) -ForegroundColor Red
       Write-Host ""
       $out | Select-Object -Last 25 | ForEach-Object { Write-Host "    $_" }

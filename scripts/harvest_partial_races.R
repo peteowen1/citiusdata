@@ -56,7 +56,7 @@ say(sprintf("athletics_corpus.rds: %s rows, %s..%s", format(nrow(x), big.mark = 
 x <- x[!is.na(race_key) & !is.na(place) & place > 0]
 r <- x[, .(harvested = .N, max_place = max(place, na.rm = TRUE),
            competition_id = competition_id[1], src = source[1],
-           tier = tier[1], yr = year(date[1])), by = race_key]
+           race_code = race_code[1], yr = year(date[1])), by = race_key]
 r <- r[harvested < max_place]
 say(sprintf("partial races: %s", format(nrow(r), big.mark = ",")))
 
@@ -64,7 +64,7 @@ say(sprintf("partial races: %s", format(nrow(r), big.mark = ",")))
 tier_rank <- c(OW = 1, DF = 2, GW = 3, A = 4, B = 5, C = 6, D = 7, F = 8)
 comp <- r[, .(partial_races = .N,
               missing_rows = sum(max_place - harvested),
-              best_tier = min(tier_rank[as.character(tier)], na.rm = TRUE),
+              best_tier = min(tier_rank[as.character(race_code)], na.rm = TRUE),
               yr = max(yr)), by = competition_id]
 comp[!is.finite(best_tier), best_tier := 99]
 if (!is.na(FROM) && FROM > 0) comp <- comp[yr >= FROM]

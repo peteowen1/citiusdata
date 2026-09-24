@@ -51,7 +51,7 @@ x <- x[!is.na(date)]
 say("corpus: ", format(nrow(x), big.mark = ","), " rows, ",
     format(uniqueN(x$race_key), big.mark = ","), " races")
 keep <- c("athlete_id", "event_id", "date", "perf", "mark", "age", "sex", "round",
-          "tier", "race_key", "competition_id", "discipline", "orientation",
+          "race_code", "race_key", "competition_id", "discipline", "orientation",
           "is_technical", "nomark_observable", "source", "wind")
 x <- x[, intersect(keep, names(x)), with = FALSE]
 clean <- flag_implausible(x); rm(x); invisible(gc())

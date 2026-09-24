@@ -59,6 +59,18 @@ if (!nzchar(CID)) cli::cli_abort("Give a competition_id, e.g. {.code Rscript app
 DRY <- nzchar(Sys.getenv("CITIUS_APPEND_DRYRUN", ""))
 SKIP_CORPUS <- nzchar(Sys.getenv("CITIUS_APPEND_SKIP_CORPUS_REBUILD", ""))
 
+# --- map the direct harvest onto championship_results' shape ----------------
+#
+# harvest_wa_results.R returns the raw World Athletics shape. .map_harvest_to_championship()
+# (extracted 2026-09-17 into its own file so merge_missing_meets_batch.R can
+# reuse it without duplicating the logic) does the rename/derivation. NOTHING
+# is invented: a column the direct route genuinely does not carry is left NA
+# and named in the exempt list at the bottom of this script, with the reason,
+# rather than filled with a plausible-looking value. That distinction is the
+# whole lesson of the tier episode -- a fabricated tier silently reweighted
+# 469k corpus rows once already.
+source(file.path(VERSE, "citiusdata", "scripts", "_map_harvest_to_championship.R"))
+
 # --- what championship_results.rds already holds ----------------------------
 CH_F <- file.path(D, "championship_results.rds")
 say("loading championship_results.rds ...")
@@ -81,6 +93,26 @@ if (file.exists(RAW_F)) {
 } else if (identical(CID, "7214029") && file.exists(brussels_alias)) {
   say("reusing this session's earlier fetch %s", basename(brussels_alias))
   r <- as.data.table(readRDS(brussels_alias))
+} else if (length(staged <- Sys.glob(file.path(D, "*_raw_results.rds"))) &&
+           length(staged <- Filter(function(f) {
+             d <- tryCatch(as.data.table(readRDS(f)), error = function(e) NULL)
+             !is.null(d) && "competition_id" %in% names(d) &&
+               any(as.character(d$competition_id) == CID)
+           }, staged))) {
+  # THE DIRECT-HARVEST PATH, added 2026-09-14.
+  #
+  # The fetch below goes through athletics_competition_results(), which uses
+  # the community mirror worldathletics.nimarion.de -- returning 500 on every
+  # competition since 2026-09-12. That is what made appending Budapest look
+  # impossible. harvest_wa_results.R talks to World Athletics directly and
+  # works, so a meet staged by it is used here rather than re-fetched through
+  # the dead route.
+  #
+  # The staged file is the RAW WA shape (44 columns), not championship_results'
+  # (33), so it is mapped below rather than used as-is.
+  say("using staged direct harvest %s", basename(staged[[1]]))
+  suppressMessages(devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE))
+  r <- .map_harvest_to_championship(as.data.table(readRDS(staged[[1]])), CID, D)
 } else {
   suppressMessages(devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE))
   say("fetching %s ...", CID)
@@ -120,7 +152,19 @@ print(round(sort(extra_cov), 3))
 # append_meet_to_store.R's own gate, which this script otherwise mirrors.
 # comp_name/comp_tier are exempt because they are legitimately NA for some
 # tiers/rows even when the mapping is correct -- see the header.
-zero <- names(extra_cov)[extra_cov == 0 & !(names(extra_cov) %in% c("comp_name", "comp_tier"))]
+# EXEMPT LIST, each entry with its reason. comp_name/comp_tier were always
+# here (legitimately NA for some tiers -- see the header). The three added
+# 2026-09-14 are columns the DIRECT harvest route genuinely does not carry:
+#   discipline_code      WA's short code; not exposed on the results path
+#   value_raw            the integer performanceValue, which .resolve_mark()
+#                        distrusts anyway (round marks lose trailing zeros)
+#   birthdate_year_only  the API does not say whether a birthdate is year-only
+# They are NA rather than back-filled on purpose. An empty column that is
+# named and explained can be filled later; one quietly given a plausible value
+# cannot be found again.
+.exempt_zero <- c("comp_name", "comp_tier",
+                  "discipline_code", "value_raw", "birthdate_year_only")
+zero <- names(extra_cov)[extra_cov == 0 & !(names(extra_cov) %in% .exempt_zero)]
 if (length(zero)) cli::cli_abort(
   "column{?s} 100%% empty after mapping: {.field {zero}} -- fix the mapping rather than writing an empty column.")
 

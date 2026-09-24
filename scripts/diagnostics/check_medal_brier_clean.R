@@ -27,7 +27,7 @@ cat_tbl <- setDT(read_parquet(file.path(OUT, "competition_catalogue.parquet")))
 cat_tbl[, competition_id := as.character(competition_id)]
 d[, competition_id := as.character(competition_id)]
 d <- merge(d, cat_tbl[, .(competition_id, meet_tier)], by = "competition_id", all.x = TRUE)
-d <- d[meet_tier == "T1_elite" & date >= HOLDOUT]
+d <- d[meet_tier == "M1" & date >= HOLDOUT]
 
 hist <- deployed_history(OUT, events = unique(d$event_id), from = min(d$date) - 3650, to = max(d$date))
 hist <- hist[!is.na(perf) & !is.na(date)]; hist[, athlete_id := as.character(athlete_id)]

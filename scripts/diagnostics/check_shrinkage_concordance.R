@@ -53,7 +53,7 @@ cp <- merge(cp, cg, by = "competition_id", all.x = TRUE)
 h  <- merge(h, cp[, .(race_key, class, meet_tier)], by = "race_key", all.x = TRUE)
 MAJ <- c("olympics", "world_champs", "european_champs", "commonwealth")
 h[, w_tier := fifelse(!is.na(class) & class %chin% MAJ, 40,
-              fifelse(!is.na(meet_tier) & meet_tier == "T1_elite", 12, 1))]
+              fifelse(!is.na(meet_tier) & meet_tier == "M1", 12, 1))]
 h[, wt := w_tier * fifelse(rc == "final", 1, 0.5)]
 stopifnot("every row must carry a finite weight" = all(is.finite(h$wt)),
           "no major-weighted rows - the catalogue join failed" = any(h$w_tier == 40))

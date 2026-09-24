@@ -164,16 +164,26 @@ broken two live shipping scripts by misjudging a file as disposable (see
 `data/README.md`'s "per-file reference grep" note), this pass erred
 conservative rather than repeat that mistake for a low-value cleanup.
 
-**RDS retirement (the "flip DuckDB to be the write-source" idea mentioned
-in "`.rds` vs DuckDB vs parquet" below): not pursued, and shouldn't be
-without a real reason.** `audit_data_integrity.R` reads `.rds` directly BY
-DESIGN — it's the independent copy DuckDB gets checked against, so
-migrating it to read DuckDB would defeat its own purpose. The other
-candidates (`fit_family_pool_offsets.R`, `merge_t3_full_checkpoint.R`,
-`merge_t3_pilot_2026.R`) read `.rds` because `.rds` is still the documented
-write-source of truth — reading DuckDB instead would mean trusting a
-derived copy over the source, which is backwards while that stays true.
-Revisit only if `.rds` actually stops being the write-source.
+**RDS retirement — SUPERSEDED 2026-09-17. See
+[`docs/reference/storage-formats.md`](../../docs/reference/storage-formats.md),
+which is now the canonical statement of what goes where.**
+
+The original entry below said "not pursued, and shouldn't be without a real
+reason... revisit only if `.rds` actually stops being the write-source."
+That condition has since been met for the big three tables
+(`championship_results`, `athletics_corpus`, `athletics_history`) —
+`citius.duckdb` is the write-source and the `.rds` files are a compat
+export. The 2026-09-17 decision was NOT a blanket retirement: it was
+"pick the format that suits the shape and the access pattern", which leaves
+plenty of RDS in place.
+
+What survives unchanged from the original entry: **`audit_data_integrity.R`
+reads `.rds` directly BY DESIGN** — it's the independent copy DuckDB gets
+checked against, so migrating it to read DuckDB would defeat its own
+purpose. (One caveat now recorded in the new doc: since
+`build_athletics_corpus.R` writes rds/parquet/DuckDB from the same
+in-memory object, that independence catches write-layer corruption but not
+upstream logic errors.)
 
 ## DuckDB store (`citius.duckdb`) — added 2026-08-30
 
@@ -269,7 +279,7 @@ separate follow-on decision, not something this work already did.
   access to it**: 7189491, 7189494, 7204909, 7213160. Confirmed via a real,
   branded WA "Error 500" page in a browser, not a bot-block — retrying
   further will not fix this from citius's side.
-- **T3_development (minor/local meets) has a ~20,000-competition gap**
+- **M3 (minor/local meets) has a ~20,000-competition gap**
   against its own catalogue population (28,269 total, only 8,263 confirmed
   present as of 2026-08-30). A bounded 2026-only pilot (1,262 competitions,
   ≥20 results) ran at ~7.5 competitions/minute with a ~0.4% failure rate —

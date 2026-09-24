@@ -1,6 +1,6 @@
 # Put the World Athletics Label HALF MARATHONS into the competition catalogue.
 #
-# Same class of fix as augment_catalogue_road_majors.R, and the same principle:
+# Same meet_type of fix as augment_catalogue_road_majors.R, and the same principle:
 # the elite halves were never mis-tiered, they were ABSENT. The engine inner-
 # joins to the catalogue, so a competition with no entry is dropped before any
 # tier is consulted.
@@ -14,8 +14,8 @@
 #
 # The genuine World Athletics (formerly IAAF) World Half Marathon Championships
 # is deliberately NOT handled here: build_competition_catalogue.R's `world_other`
-# rule already matches "World Half Marathon" and tiers it T1_elite. Everything
-# this script adds is the LABEL circuit, which is T2_strong - a strong field, not
+# rule already matches "World Half Marathon" and tiers it M1. Everything
+# this script adds is the LABEL circuit, which is M2 - a strong field, not
 # a global championship.
 suppressMessages(library(arrow)); suppressMessages(library(data.table))
 D <- here::here("citiusdata", "data")
@@ -30,7 +30,7 @@ cat0 <- setDT(read_parquet(CAT))
 cat0[, competition_id := as.character(competition_id)]
 cat(sprintf("catalogue before: %s competitions (%s road_label)\n",
             format(nrow(cat0), big.mark = ","),
-            format(cat0[class == "road_label", .N], big.mark = ",")))
+            format(cat0[meet_type == "road_label", .N], big.mark = ",")))
 
 # --- the knowledge -----------------------------------------------------------
 # World Athletics Label half marathons, matched on CITY plus an explicit half
@@ -61,9 +61,9 @@ is_other <- function(x) grepl("Mini|10 ?K|5 ?K|Relay|Marathon Relay|Ekiden|Quart
 # which this script does NOT own - build_competition_catalogue.R assigns it, and
 # so does augment_catalogue_coverage.R. The delete-then-readd cycle rebuilt those
 # rows from three columns and nulled comp_name, year, results, athletes, events
-# and strength on 16 genuine World Half Marathon Championship editions in the
+# and meet_strength on 16 genuine World Half Marathon Championship editions in the
 # live catalogue. A "self-repair" must only repair its own rows.
-mine <- cat0[class == "road_label" &
+mine <- cat0[meet_type == "road_label" &
              competition_id %chin% nm[is_half(competition), competition_id]]
 if (nrow(mine)) {
   cat(sprintf("removing %d previously-placed half marathon(s) to recompute\n",
@@ -76,12 +76,12 @@ cand <- miss[is_half(competition) & !is_other(competition) &
              grepl(rx(HALF_LABEL_CITY), competition, ignore.case = TRUE)]
 # A genuine WORLD championship half is not a label race and must not be tiered
 # T2 because its host city is on the list above - the first run put "New Delhi
-# IAAF World Half Marathon Championships" in as T2_strong, demoting a global
+# IAAF World Half Marathon Championships" in as M2, demoting a global
 # championship to a city road race.
 #
 # But "Championships" ALONE is far too loose, and putting it in this pattern
 # tiered 170 NATIONAL championships - Latvian, Cyprus, Algerian, Russian - as
-# T1_elite, i.e. level with the Olympics. National championships are a different
+# M1, i.e. level with the Olympics. National championships are a different
 # question with a different tier and they are deliberately OUT OF SCOPE here:
 # this script covers the World Athletics label circuit and the world
 # championship, nothing else.
@@ -93,8 +93,8 @@ champs <- miss[is_half(competition) & !is_other(competition) & is_champs(competi
 add <- rbind(cand[!is_champs(competition) & !is_natl(competition)], champs, fill = TRUE)
 add <- unique(add, by = "competition_id")
 if (!nrow(add)) { cat("nothing to add\n"); quit(status = 0) }
-add[, `:=`(class     = fifelse(is_champs(competition), "world_other", "road_label"),
-           meet_tier = fifelse(is_champs(competition), "T1_elite", "T2_strong"))]
+add[, `:=`(meet_type     = fifelse(is_champs(competition), "world_other", "road_label"),
+           meet_tier = fifelse(is_champs(competition), "M1", "M2"))]
 
 # ANCHOR CHECK before writing: every added competition must actually be a half.
 # A full marathon reaching this set would be tiered as a half marathon's peer,
@@ -106,7 +106,7 @@ stopifnot("a non-half competition reached the add set" = nrow(bad) == 0,
             !any(add$competition_id %chin% cat0$competition_id))
 cat(sprintf("\nadding %s half marathons\n", format(nrow(add), big.mark = ",")))
 print(add[, .(competitions = .N, first = min(date), last = max(date)),
-          by = .(class, meet_tier)])
+          by = .(meet_type, meet_tier)])
 cat("\nnamed competitions being added (top 25 by edition count):\n")
 print(add[, .N, by = competition][order(-N)][seq_len(min(25, .N))])
 
@@ -114,28 +114,28 @@ print(add[, .N, by = competition][order(-N)][seq_len(min(25, .N))])
 # comp_name NA, which is why 203 of 203 road_label rows in the live catalogue
 # are anonymous - invisible to every later audit or spot-check that reports a
 # competition by name.
-new <- data.table(competition_id = add$competition_id, class = add$class,
+new <- data.table(competition_id = add$competition_id, meet_type = add$meet_type,
                   meet_tier = add$meet_tier)
 if ("comp_name" %in% names(cat0)) new[, comp_name := add$competition]
 for (cn in setdiff(names(cat0), names(new))) new[, (cn) := NA]
 out <- rbind(cat0, new[, names(cat0), with = FALSE])
 stopifnot("duplicate competition ids" = !anyDuplicated(out$competition_id),
           "every added row must carry a tier" =
-            !any(is.na(out$meet_tier[out$class == "road_label"])),
+            !any(is.na(out$meet_tier[out$meet_type == "road_label"])),
           # every failure of the first two runs, now asserted rather than hoped for
           "a substring match recruited a city nobody listed" =
             !any(grepl("Marrakesh|Marrakech|Indianapolis", add$competition, ignore.case = TRUE)),
           "a world championship was tiered as a label race" =
-            !any(is_champs(add$competition) & add$meet_tier != "T1_elite"),
-          "a national championship was tiered T1_elite" =
-            !any(add$meet_tier == "T1_elite" &
+            !any(is_champs(add$competition) & add$meet_tier != "M1"),
+          "a national championship was tiered M1" =
+            !any(add$meet_tier == "M1" &
                  !grepl("World|IAAF", add$competition, ignore.case = TRUE)),
           "national championships are out of scope for this script" =
             !any(is_natl(add$competition)),
           # a T1 addition is a global championship: there is one per year at most,
           # so a large count means the pattern has gone loose again
           "too many T1 additions to be world championships" =
-            sum(add$meet_tier == "T1_elite") <= 30)
+            sum(add$meet_tier == "M1") <= 30)
 if (!file.exists(paste0(CAT, ".bak"))) file.copy(CAT, paste0(CAT, ".bak"))
 # arrow memory-maps a parquet it has read, so writing back to the same path
 # fails with "user-mapped section open". Write beside it, release, then replace.

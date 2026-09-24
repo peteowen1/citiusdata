@@ -21,7 +21,7 @@ Remove-Item Env:CITIUS_BT_ADJUST_RACE -ErrorAction SilentlyContinue
 $env:CITIUS_BT_STORE         = "athletics_corpus_store"
 $env:CITIUS_BT_CACHE         = "bt_cache_condsd"
 $env:CITIUS_BT_OUT           = "backtest_condsd.rds"
-$env:CITIUS_BT_TIER          = "T1_elite"
+$env:CITIUS_BT_TIER          = "M1"
 $env:CITIUS_BT_MEET_TIER     = "1"
 $env:CITIUS_BT_MEETS         = "450"
 $env:CITIUS_BT_WORKERS       = "1"

@@ -177,11 +177,20 @@ jobs:
           # reads both from the environment.
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # The World Athletics key the Budapest fetch needs. Absent today, and
-          # the fetch step is skipped by dispatching with skip_entries, which
-          # runs the chain on the published field snapshot instead. Set the
-          # secret and dispatch WITHOUT skip_entries to forecast a current field.
-          CITIUS_WA_GRAPHQL_KEY: ${{ secrets.CITIUS_WA_GRAPHQL_KEY }}
+          # NO CITIUS_WA_GRAPHQL_KEY HERE, DELIBERATELY. The Budapest fetch
+          # discovers the World Athletics edge and key fresh from the public
+          # Next.js bundle on every run (discover_wa_endpoint.R, ~3s), because
+          # WA rotates the pair without notice -- 4881 retired 2026-09-09, 4883
+          # gone by 09-12, 4892 by 09-14. A stored key is wrong within days and
+          # cannot be fixed by refreshing it on a schedule.
+          #
+          # Passing the key alone was actively WORSE than passing nothing: the
+          # URL was discovered fresh while the stale secret was kept, and that
+          # mismatched pair returns CloudFront's 503 "Lambda function is
+          # invalid" -- which reads exactly like a retired edge. The fetch
+          # scripts now ignore a half-configured override, but the cleanest fix
+          # is not to send one. Set BOTH _URL and _KEY only to override on
+          # purpose.
           MEET_ID: ${{ inputs.meet_id }}
           SKIP_ENTRIES: ${{ inputs.skip_entries }}
         run: |
@@ -198,9 +207,10 @@ jobs:
             budapest2026)
               # Only Budapest has a fetch step: World Athletics answers its
               # qualification endpoint for a championship but returns a server
-              # error for Diamond League ids. It needs CITIUS_WA_GRAPHQL_KEY;
-              # without that secret, dispatch with skip_entries and the chain
-              # runs on the published field instead.
+              # error for Diamond League ids. It needs no secret: the endpoint
+              # pair is discovered fresh each run. If discovery itself fails,
+              # dispatch with skip_entries and the chain runs on the published
+              # field snapshot instead.
               STEPS="fetch_budapest_qualification_field.R:budapest2026 resolve_diamond_league_athletes.R:budapest2026 predict_diamond_league_final.R:budapest2026 add_nation_codes.R:budapest2026 sanity_diamond_league_card.R:budapest2026 export_athletics_blog.R:budapest2026"
               ;;
             brussels2026)

@@ -1,5 +1,5 @@
 # Per-event marks MAE and gold/medal logloss, control (deployed feed-tier) vs
-# treatment (WAC meet_tier context adjustment), both restricted to T1_elite,
+# treatment (WAC meet_tier context adjustment), both restricted to M1,
 # both run on the current (2026-09-04) corpus and catalogue.
 #
 # Neither backtest_athletics.R's saved predictions/outcomes nor its console
@@ -32,9 +32,9 @@ stopifnot(
     identical(ctrl$meta$history_md5, trt$meta$history_md5),
   "control/treatment tier_filter differs" =
     identical(ctrl$meta$tier_filter, trt$meta$tier_filter),
-  "control tier_filter is not T1_elite" = identical(ctrl$meta$tier_filter, "T1_elite")
+  "control tier_filter is not M1" = identical(ctrl$meta$tier_filter, "M1")
 )
-say(sprintf("provenance OK: both arms T1_elite, history_md5 %s", substr(ctrl$meta$history_md5, 1, 12)))
+say(sprintf("provenance OK: both arms M1, history_md5 %s", substr(ctrl$meta$history_md5, 1, 12)))
 
 # --- event_id map, rebuilt exactly as run_meet() built `field`/`ev` ----------
 champs <- setDT(readRDS(file.path(OUT, "championship_results.rds")))
@@ -104,7 +104,7 @@ cmp[, `:=`(mae_delta = round(mae_t - mae_c, 3),
            mll_delta = round(mll_t - mll_c, 4))]
 setorder(cmp, -mae_delta)
 
-cli::cli_h1("Per-event: control (feed tier) vs treatment (WAC meet_tier), T1_elite")
+cli::cli_h1("Per-event: control (feed tier) vs treatment (WAC meet_tier), M1")
 cat(sprintf("events scored: %d | events with n >= %d: %d\n",
             nrow(cmp), MIN_N, sum(cmp$n_c >= MIN_N)))
 
@@ -127,7 +127,7 @@ print(agg)
 paired <- merge(sc[, .(race_id, athlete_id, mark_ape_c = mark_ape, gll_c = gold_ll, mll_c = medal_ll)],
                 sw[, .(race_id, athlete_id, mark_ape_t = mark_ape, gll_t = gold_ll, mll_t = medal_ll)],
                 by = c("race_id", "athlete_id"))
-cli::cli_h3("paired significance, pooled T1_elite (t-test on the per-prediction delta)")
+cli::cli_h3("paired significance, pooled M1 (t-test on the per-prediction delta)")
 tt <- function(x, y, lab) {
   ok <- is.finite(x) & is.finite(y)
   if (sum(ok) < 5) return(cat(sprintf("%s: too few paired rows (%d)\n", lab, sum(ok))))
