@@ -74,6 +74,24 @@ ch <- rt_stage("load corpus (7 cols)", with_citius_db_connection(
 setDT(ch)
 say("corpus rows: %s", format(nrow(ch), big.mark = ","))
 
+# NO-LEAK HOOK (2026-09-24), the same one fit_spread_scales.R and the calibration
+# build carry. CITIUS_EXCLUDE_SCORED names a backtest artefact; every row from a
+# race that backtest scores is dropped, so the betas are not fitted on the
+# outcomes they are later judged on. The 2026-09-19 no-leak chain recomposed
+# THIS table unchanged and listed it as an accepted leak; altitude is the one
+# channel where that is least safe, because a handful of meets at >2200 m can be
+# a large share of that band's data.
+EXCL <- Sys.getenv("CITIUS_EXCLUDE_SCORED", "")
+if (nzchar(EXCL)) {
+  ids <- unique(as.character(as.data.table(readRDS(file.path(D, EXCL))$outcomes)$race_id))
+  stopifnot("no scored races found in the exclusion artefact" = length(ids) > 0)
+  n0 <- nrow(ch); ch <- ch[!as.character(race_key) %chin% ids]
+  say("NO-LEAK: dropped %s of %s rows from %s scored races named by %s",
+      format(n0 - nrow(ch), big.mark = ","), format(n0, big.mark = ","),
+      format(length(ids), big.mark = ","), EXCL)
+  stopifnot("the exclusion matched no rows -- race_id and race_key no longer align" = n0 > nrow(ch))
+}
+
 # INDOOR IS EXCLUDED, not controlled for. Indoor is already its own term in the
 # calibration, and an indoor track at 1,600 m (Albuquerque) mixes two effects
 # this fit cannot separate. Better to estimate altitude on the outdoor
@@ -258,7 +276,7 @@ if (!is.null(cal) && !is.null(cal$race) && !is.null(cal$race_shock)) {
   fam <- rbind(gross, res_fam, fill = TRUE)
 }
 
-out <- file.path(D, "altitude_effect.parquet")
+out <- file.path(D, Sys.getenv("CITIUS_ALT_EFFECT_OUT", "altitude_effect.parquet"))
 write_parquet(fam, out)
 say("\nwrote %s (%d rows)", basename(out), nrow(fam))
 say("NOT wired into any prediction path by this script -- that is a separate,")

@@ -28,7 +28,7 @@ stopifnot("base is not a citius_calibration" = inherits(cal, "citius_calibration
 if (!is.null(cal$altitude))
   cli::cli_abort("{BASE} already carries $altitude -- composing again would stack two vintages.")
 
-ae <- as.data.table(read_parquet(file.path(D, "altitude_effect.parquet")))
+ae <- as.data.table(read_parquet(file.path(D, Sys.getenv("CITIUS_ALT_EFFECT", "altitude_effect.parquet"))))
 # The residual coefficients, split by whether a race effect was applied. The
 # `gross` scope rows from the same file are the diagnostic fit, NOT what the
 # model applies -- taking them here would double-count the share c_r removed.
