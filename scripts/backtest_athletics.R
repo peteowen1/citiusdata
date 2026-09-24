@@ -1447,14 +1447,30 @@ if (SIGMA_K_HOIST) {
                             robust_location = ROBUST_LOCATION,
                             decouple_peak = DECOUPLE_PEAK)
   .ab_k <- data.table::as.data.table(.ab_k)
-  SIGMA_K <- .ab_k[n >= 10L & is.finite(sigma_rob) & sigma_rob > 0 &
-                     is.finite(sigma_raw) & sigma_raw > 0,
-                   .(k_ev = stats::median(sigma_raw / sigma_rob), n_ref = .N),
-                   by = event_id][n_ref >= 20L, .(event_id, k_ev)]
-  rm(.ab_k, .hist_k); invisible(gc())
+  .ref_k <- .ab_k[n >= 10L & is.finite(sigma_rob) & sigma_rob > 0 &
+                    is.finite(sigma_raw) & sigma_raw > 0]
+  # Same rule estimate_ability() applies: an event with fewer than 20
+  # well-observed athletes uses the pooled k. It has to be filled in HERE,
+  # from the whole population -- inside a per-meet call the hoist has already
+  # dropped that population, so its own pooled k would be computed from a
+  # handful of entrants and fall to 1.
+  .k_pool <- if (nrow(.ref_k) >= 20L) stats::median(.ref_k$sigma_raw / .ref_k$sigma_rob) else 1
+  if (!is.finite(.k_pool) || .k_pool <= 0) .k_pool <- 1
+  SIGMA_K <- .ref_k[, .(k_ev = stats::median(sigma_raw / sigma_rob), n_ref = .N),
+                    by = event_id][n_ref >= 20L & is.finite(k_ev) & k_ev > 0,
+                                   .(event_id, k_ev)]
+  # Every pool event, not just those with rows in this window: an earlier meet's
+  # window starts before .cut_max - HISTORY_DAYS, so it can hold an event this
+  # pass never saw, and estimate_ability() now refuses a gap on the only= path.
+  .thin <- setdiff(union(as.character(.ev_all), as.character(.ab_k$event_id)),
+                   SIGMA_K$event_id)
+  if (length(.thin))
+    SIGMA_K <- rbind(SIGMA_K, data.table::data.table(event_id = .thin, k_ev = .k_pool))
+  cli::cli_alert_info("sigma k: {length(.thin)} thin event{?s} use the pooled k {round(.k_pool, 3)}.")
+  rm(.ab_k, .hist_k, .ref_k); invisible(gc())
   if (!nrow(SIGMA_K)) cli::cli_abort(c(
-    "x" = "{.envvar CITIUS_BT_SIGMA_K_HOIST} is on but no event had enough well-observed athletes to estimate k.",
-    "i" = "Every per-meet call would silently fall back to its own pooled k, making the flag a no-op that still cost a full pass."))
+    "x" = "{.envvar CITIUS_BT_SIGMA_K_HOIST} is on but the history window produced no ability rows to estimate k from.",
+    "i" = "Check the pool's events and HISTORY_DAYS before re-running."))
   cli::cli_alert_success(
     "sigma k hoisted: {nrow(SIGMA_K)} event{?s} in {round(as.numeric(difftime(Sys.time(), .t_k, units = 'secs')))}s (k {round(min(SIGMA_K$k_ev),3)}-{round(max(SIGMA_K$k_ev),3)}).")
 }
