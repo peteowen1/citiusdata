@@ -670,11 +670,21 @@ CC <- if (file.exists(CC_F)) setDT(readRDS(CC_F))[, .(athlete_id = as.character(
 for (nm in grep("-results[.]parquet$", names(artefacts), value = TRUE)) {
   pn <- sub("-results", "-predictions", nm)
   card <- artefacts[[pn]]
+  # Codes only, in this order: the card's own nation_code (add_nation_codes.R),
+  # the WA code cache, then the card's nation ONLY where it is already a
+  # three-letter code. A Diamond League card's nation is the entry list's free
+  # text ("Trinidad and Tobago"), which would break the site's badge and split
+  # a nation's medals across two spellings (review of e8156e8).
+  cd <- if (is.null(card)) NULL else copy(card)[, athlete_id := as.character(athlete_id)]
+  # The typed empty table keeps `fb` a two-column table when a meet has no card
+  # and the cache is absent; without it rbindlist returns no columns at all.
   fb <- rbindlist(list(
-    if (!is.null(card) && "nation" %in% names(card))
-      card[!is.na(nation) & nzchar(nation), .(athlete_id = as.character(athlete_id), n2 = nation)],
-    CC), use.names = TRUE)
-  fb <- unique(fb[!is.na(n2) & nzchar(n2)], by = "athlete_id")
+    data.table(athlete_id = character(), n2 = character()),
+    if (!is.null(cd) && "nation_code" %in% names(cd)) cd[, .(athlete_id, n2 = nation_code)],
+    CC,
+    if (!is.null(cd) && "nation" %in% names(cd)) cd[grepl("^[A-Z]{3}$", nation), .(athlete_id, n2 = nation)]),
+    use.names = TRUE)
+  fb <- unique(fb[grepl("^[A-Z]{3}$", n2)], by = "athlete_id")
   r <- artefacts[[nm]]
   miss0 <- r[is.na(nation) | !nzchar(nation), .N]
   if (miss0 && nrow(fb)) r[fb, nation := fifelse(is.na(nation) | !nzchar(nation), i.n2, nation), on = "athlete_id"]
@@ -682,11 +692,21 @@ for (nm in grep("-results[.]parquet$", names(artefacts), value = TRUE)) {
   cli::cli_alert_info("{nm}: nation on {nrow(r) - miss}/{nrow(r)} rows ({miss0 - miss} filled from the card or code cache).")
   # COVERAGE, not presence (see ~/.claude/CLAUDE.md): the column was present and
   # correctly typed while 22% empty, and every check passed. A medal with no
-  # nation drops out of the site's medal table, so it stops the export.
+  # nation drops out of the site's medal table, so that meet's results file is
+  # NOT published this run: R2 keeps the last good copy (the manifest does not
+  # list results files), and every other meet still exports. Mid-competition
+  # this is the expected failure (a new medallist not yet in the code cache),
+  # which is why it is per meet rather than a whole-export abort.
+  stopifnot("results place is not numeric" = is.numeric(r$place))
   pod <- r[is_final == TRUE & !is.na(place) & place >= 1 & place <= 3 & (is.na(nation) | !nzchar(nation))]
-  if (nrow(pod)) cli::cli_abort(c(
-    "{nm}: {nrow(pod)} medallist{?s} with no nation: {paste(unique(pod$athlete), collapse = ', ')}.",
-    i = "Run {.code Rscript scripts/fetch_athlete_country_codes.R {sub('-results[.]parquet$', '', nm)}} and re-export."))
+  if (nrow(pod)) {
+    cli::cli_warn(c(
+      "{nm}: {nrow(pod)} medallist{?s} with no nation ({paste(unique(pod$athlete), collapse = ', ')}); NOT publishing this file.",
+      i = "Run {.code Rscript scripts/fetch_athlete_country_codes.R {sub('-results[.]parquet$', '', nm)}} and re-export."))
+    artefacts[[nm]] <- NULL
+    next
+  }
+  stopifnot("results nation is not a three-letter code" = all(is.na(r$nation) | !nzchar(r$nation) | grepl("^[A-Z]{3}$", r$nation)))
   if (miss / nrow(r) > 0.02) cli::cli_warn(
     "{nm}: {miss} of {nrow(r)} result rows still have no nation ({round(100 * miss / nrow(r), 1)}%).")
   artefacts[[nm]] <- r
