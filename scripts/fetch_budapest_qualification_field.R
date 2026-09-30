@@ -70,7 +70,7 @@ if (!nzchar(GQL_URL) || !nzchar(WA_KEY)) {
   })
   if (is.na(.ep$status) || .ep$status != 200L) {
     cli::cli_abort(c(
-      "Endpoint discovery returned HTTP {.ep$status}.",
+      "Endpoint discovery returned HTTP {(.ep$status)}.",
       i = "Run {.file discover_wa_endpoint.R} on its own to see why."))
   }
   # THE PAIR IS ATOMIC -- take BOTH discovered values, never one of each.
@@ -93,7 +93,7 @@ if (!nzchar(GQL_URL) || !nzchar(WA_KEY)) {
   }
   GQL_URL <- .ep$url
   WA_KEY  <- .ep$key
-  cli::cli_alert_success("Endpoint discovered: {.val {.ep$edge}}")
+  cli::cli_alert_success("Endpoint discovered: {.val {(.ep$edge)}}")
 }
 
 args <- commandArgs(trailingOnly = TRUE)
