@@ -657,6 +657,41 @@ for (nm in grep("-results[.]parquet$", names(artefacts), value = TRUE)) {
   cli::cli_alert_info("{nm}: expected_perf on {sum(is.finite(artefacts[[nm]]$expected_perf))}/{n0} rows.")
 }
 
+# --- nation gaps: fall back to the meet's own card, then the WA code cache ------
+# RESULTS_META (athlete_meta.parquet) is a snapshot: the 2026-08-22 copy held
+# none of the athletes new to Birmingham, so 501 of 2,257 result rows (22%)
+# published with no nation, three medallists among them, and the blog's medal
+# table came out three medals short. Every one of those athletes has a nation
+# on the card this run just built (and the card agreed with athlete_meta on
+# 955 of 955 athletes both had), so the card fills the gap, then the World
+# Athletics code cache. Only an EMPTY nation is filled; nothing is overwritten.
+CC_F <- file.path(D, "athlete_country_codes.rds")
+CC <- if (file.exists(CC_F)) setDT(readRDS(CC_F))[, .(athlete_id = as.character(athlete_id), n2 = country_code)] else NULL
+for (nm in grep("-results[.]parquet$", names(artefacts), value = TRUE)) {
+  pn <- sub("-results", "-predictions", nm)
+  card <- artefacts[[pn]]
+  fb <- rbindlist(list(
+    if (!is.null(card) && "nation" %in% names(card))
+      card[!is.na(nation) & nzchar(nation), .(athlete_id = as.character(athlete_id), n2 = nation)],
+    CC), use.names = TRUE)
+  fb <- unique(fb[!is.na(n2) & nzchar(n2)], by = "athlete_id")
+  r <- artefacts[[nm]]
+  miss0 <- r[is.na(nation) | !nzchar(nation), .N]
+  if (miss0 && nrow(fb)) r[fb, nation := fifelse(is.na(nation) | !nzchar(nation), i.n2, nation), on = "athlete_id"]
+  miss <- r[is.na(nation) | !nzchar(nation), .N]
+  cli::cli_alert_info("{nm}: nation on {nrow(r) - miss}/{nrow(r)} rows ({miss0 - miss} filled from the card or code cache).")
+  # COVERAGE, not presence (see ~/.claude/CLAUDE.md): the column was present and
+  # correctly typed while 22% empty, and every check passed. A medal with no
+  # nation drops out of the site's medal table, so it stops the export.
+  pod <- r[is_final == TRUE & !is.na(place) & place >= 1 & place <= 3 & (is.na(nation) | !nzchar(nation))]
+  if (nrow(pod)) cli::cli_abort(c(
+    "{nm}: {nrow(pod)} medallist{?s} with no nation: {paste(unique(pod$athlete), collapse = ', ')}.",
+    i = "Run {.code Rscript scripts/fetch_athlete_country_codes.R {sub('-results[.]parquet$', '', nm)}} and re-export."))
+  if (miss / nrow(r) > 0.02) cli::cli_warn(
+    "{nm}: {miss} of {nrow(r)} result rows still have no nation ({round(100 * miss / nrow(r), 1)}%).")
+  artefacts[[nm]] <- r
+}
+
 # --- conditions parameters, one file per event ---------------------------------
 # citiusdata/data/conditions_params/_all.json is 5 MB with the venue lookups;
 # a page shows one event, so it fetches athletics/conditions/<event_id>.json

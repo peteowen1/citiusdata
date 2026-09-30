@@ -75,7 +75,7 @@ EVENT_PARAMS <- NULL
 .ep_file <- Sys.getenv("CITIUS_EVENT_PARAMS", "")
 if (nzchar(.ep_file)) {
   .ep_path <- if (file.exists(.ep_file)) .ep_file else file.path(OUT, .ep_file)
-  if (!file.exists(.ep_path)) cli::cli_abort("CITIUS_EVENT_PARAMS: no file at {.path {.ep_path}}.")
+  if (!file.exists(.ep_path)) cli::cli_abort("CITIUS_EVENT_PARAMS: no file at {.path {(.ep_path)}}.")
   EVENT_PARAMS <- as.data.table(readRDS(.ep_path))
   .need <- c("event_id", "half_life", "races_half_life", "trim_tactical", "context_scale")
   .miss <- setdiff(.need, names(EVENT_PARAMS))
