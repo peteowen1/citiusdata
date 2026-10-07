@@ -28,9 +28,17 @@
 # card becomes the first version, under its own generated_at; if the new card
 # has the same content, that is the only version.
 
+# Canonical form, so the CI runner and a laptop (different arrow/data.table
+# versions) hash the same card alike: columns sorted by name, attributes and
+# classes dropped, every number as double, factors as their labels.
 history_hash <- function(dt) {
-  dt <- data.table::as.data.table(dt)
-  digest::digest(dt[, setdiff(names(dt), "generated_at"), with = FALSE], algo = "md5")
+  dt <- as.data.frame(dt)
+  cols <- sort(setdiff(names(dt), "generated_at"), method = "radix")
+  canon <- lapply(dt[cols], function(x) {
+    if (is.factor(x)) x <- as.character(x)
+    if (is.numeric(x) || inherits(x, c("Date", "POSIXt"))) as.double(unclass(x)) else as.vector(x)
+  })
+  digest::digest(canon, algo = "md5")
 }
 
 as_snapshot <- function(card, hash) {
