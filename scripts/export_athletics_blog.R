@@ -795,6 +795,32 @@ for (nm in names(artefacts)) {
   cli::cli_alert_success("{nm}: {nrow(artefacts[[nm]])} row{?s}")
 }
 
+# --- prediction history (inthegame-blog#610) -----------------------------------
+# <meet>-predictions-history.parquet and -nations-history.parquet: every
+# distinct version of the card ever published, stamped as_at (scripts/
+# _prediction_history.R has the rules). Built here, uploaded after the
+# manifest, and NON-FATAL throughout: a history that cannot be read or built
+# is skipped with a warning and never holds back the meet's predictions.
+source(file.path(VERSE, "citiusdata", "scripts", "_prediction_history.R"))
+PUBLISHED_BASE <- paste0("https://pub-ee4bf5b599a047f9ac2b9facc1587008.r2.dev/", PREFIX)
+hist_files <- character(0)
+for (nm in grep("-(predictions|nations)[.]parquet$", names(artefacts), value = TRUE)) {
+  hf <- sub("[.]parquet$", "-history.parquet", nm)
+  tryCatch({
+    h <- update_prediction_history(read_parquet(file.path(BLOG, nm)), paste0(PUBLISHED_BASE, "/", hf),
+                                   seed_url = paste0(PUBLISHED_BASE, "/", nm))
+    if (is.null(h)) {
+      cli::cli_alert_info("{hf}: content unchanged since the latest snapshot - no new version.")
+    } else {
+      write_parquet(h, file.path(BLOG, hf))
+      hist_files <- c(hist_files, hf)
+      cli::cli_alert_success("{hf}: {nrow(h)} row{?s}, {uniqueN(h$as_at)} version{?s}; as_at {paste(unique(h$as_at), collapse = ', ')}")
+    }
+  }, error = function(e) {
+    cli::cli_alert_warning("{hf}: history NOT updated ({conditionMessage(e)}); the card itself still publishes.")
+  })
+}
+
 # The manifest carries the freshness stamp the section trusts, so it is written
 # and uploaded LAST and only if every data artefact landed. Publishing it
 # unconditionally puts a brand-new "as at just now" over a card that failed to
@@ -946,6 +972,10 @@ if (nzchar(Sys.getenv("CITIUS_SKIP_UPLOAD"))) {
                           stays self-consistent. Re-run once the cause is fixed."))
   }
   if (!upload("athletics-manifest.json")) cli::cli_abort("Manifest upload failed.")
+  # After the manifest, so a history failure cannot hold back the card.
+  for (hf in hist_files) {
+    if (!upload(hf)) cli::cli_alert_warning("{hf}: upload failed - the history on R2 is one version behind until the next publish that changes the card.")
+  }
   write_json(MEMO, MEMO_F, auto_unbox = TRUE)
-  cli::cli_alert_info("uploads: {length(artefacts) + length(extra_files) + 1L - n_skipped} sent, {n_skipped} unchanged and skipped.")
+  cli::cli_alert_info("uploads: {length(artefacts) + length(extra_files) + length(hist_files) + 1L - n_skipped} sent, {n_skipped} unchanged and skipped.")
 }
