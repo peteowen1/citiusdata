@@ -124,12 +124,12 @@ jobs:
           # (run 38487753749, 2026-10-14: "missing from listing" x6).
           GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
           CITIUS_HARVEST_MEETS: ${{ inputs.meets }}
-          # Publishing is OPT-IN and currently UNTESTED from a runner: the
-          # pending-harvest release does not exist yet, and vb_publish creating
-          # a tag has not been exercised here. The artifact below is the
-          # reliable output until a dispatch with publish=true has been seen to
-          # work. Turning it on for the schedule is a one-line change once it has.
-          CITIUS_HARVEST_PUBLISH: ${{ inputs.publish && '1' || '' }}
+          # The schedule always publishes to pending-harvest; a manual dispatch
+          # publishes only when its publish input is ticked. Proven from a runner
+          # by run 38510865999 (2026-10-14): brussels2026_raw_results.rds and
+          # bus_manifest.json landed. Publishing is still staging -- nothing
+          # reads pending-harvest, and the append stays a deliberate local act.
+          CITIUS_HARVEST_PUBLISH: ${{ (github.event_name == 'schedule' || inputs.publish) && '1' || '' }}
         run: |
           set -o pipefail
           Rscript citiusdata/scripts/harvest_pending_meets.R 2>&1 | tee /tmp/harvest.log
