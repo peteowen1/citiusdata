@@ -117,6 +117,12 @@ jobs:
       - name: Harvest pending meets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GH_TOKEN is for the gh CLI only. piggyback uploads with
+          # gh::gh_token(), which reads GITHUB_PAT / GITHUB_TOKEN and NOT
+          # GH_TOKEN -- so with only GH_TOKEN set it uploaded with an empty
+          # token, GitHub refused, and piggyback 0.1.5 ignored the refusal
+          # (run 38487753749, 2026-10-14: "missing from listing" x6).
+          GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
           CITIUS_HARVEST_MEETS: ${{ inputs.meets }}
           # Publishing is OPT-IN and currently UNTESTED from a runner: the
           # pending-harvest release does not exist yet, and vb_publish creating
