@@ -377,8 +377,21 @@ if (n_id < 0.9 * nrow(res)) {
 print(res[, .N, by = round][order(-N)])
 
 out <- here::here("citiusdata", "data", paste0(MEET, "_raw_results.rds"))
-saveRDS(res, out)
-cli_alert_success("Wrote {.file {basename(out)}} ({nrow(res)} rows).")
+
+# harvest_meets_batch.R treats a meet as DONE once <meet>_raw_results.rds exists,
+# so that file must be the LAST thing written and must never be half-written: a
+# run killed mid-write used to leave a truncated results file (or one without its
+# two sibling files) that a re-run then skipped as finished. Each file goes to a
+# temp name and is renamed into place, siblings first, results last.
+save_rds_atomic <- function(x, f) {
+  tmp <- paste0(f, ".tmp")
+  saveRDS(x, tmp)
+  if (!file.rename(tmp, f)) {
+    unlink(f)
+    if (!file.rename(tmp, f)) stop("could not move ", tmp, " into place")
+  }
+  invisible(f)
+}
 
 # THE TWO SIBLING BRANCHES, written whether or not they have rows.
 #
@@ -391,11 +404,14 @@ cli_alert_success("Wrote {.file {basename(out)}} ({nrow(res)} rows).")
 for (nm in c("startlist", "summary")) {
   tbl <- rbindlist(SIDE[[nm]], fill = TRUE)
   f <- sub("_raw_results\\.rds$", sprintf("_raw_%s.rds", nm), out)
-  saveRDS(tbl, f)
+  save_rds_atomic(tbl, f)
   if (nrow(tbl)) {
     cli_alert_success("Wrote {.file {basename(f)}} ({nrow(tbl)} rows).")
   } else {
     cli_alert_info("Wrote {.file {basename(f)}} (0 rows -- WA returned none for this meet).")
   }
 }
+
+save_rds_atomic(res, out)
+cli_alert_success("Wrote {.file {basename(out)}} ({nrow(res)} rows).")
 cli_alert_info("Score it: {.code CITIUS_MEET={MEET} CITIUS_RESULTS_CACHE={out} Rscript citiusdata/scripts/score_meet.R}")

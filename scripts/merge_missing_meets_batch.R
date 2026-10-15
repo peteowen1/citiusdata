@@ -44,6 +44,10 @@ if (length(already)) {
   say("dropping %d id%s already in championship_results.rds", length(already), if (length(already)==1) "" else "s")
   ids <- as.character(setdiff(as.integer(ids), already))
 }
+# Without this an all-already-merged batch maps 0 rows and dies on the column
+# check below with "Batch is missing columns ...", which reads as a mapping bug
+# (2026-10-14: Brussels/Budapest, merged on 2026-09-17 but never published).
+if (!length(ids)) { say("nothing to merge: every id is already in championship_results.rds"); quit(status = 0) }
 
 # --- load every raw harvest file, map it, combine ----------------------------
 missing_files <- character(0)

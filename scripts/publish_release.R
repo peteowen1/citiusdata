@@ -139,12 +139,21 @@ for (a in todo) {
   # had in fact succeeded: a false negative produced by verifying with the same
   # cached library that caused the original bug. A check has to read something
   # the thing being checked cannot have poisoned.
-  Sys.sleep(2)
-  rel <- tryCatch(gh::gh("/repos/{owner}/{repo}/releases/tags/{tag}",
-                         owner = .owner, repo = .name, tag = a$tag),
-                  error = function(e) NULL)
-  hit <- if (is.null(rel)) NULL else
-    Filter(function(x) identical(x$name, basename(a$file)), rel$assets)
+  #
+  # RETRY THE READ, NOT THE UPLOAD. On 2026-10-14 the catalogue reported SIZE
+  # MISMATCH although the live file was correct: the release listing lagged the
+  # upload. So re-read the listing up to 5 times (2+4+8+16+16 s) and only judge
+  # the asset once it shows the local size or the attempts run out.
+  hit <- NULL
+  for (wait in c(2, 4, 8, 16, 16)) {
+    Sys.sleep(wait)
+    rel <- tryCatch(gh::gh("/repos/{owner}/{repo}/releases/tags/{tag}",
+                           owner = .owner, repo = .name, tag = a$tag),
+                    error = function(e) NULL)
+    hit <- if (is.null(rel)) NULL else
+      Filter(function(x) identical(x$name, basename(a$file)), rel$assets)
+    if (length(hit) && abs(hit[[1]]$size - file.size(p)) < 1024) break
+  }
   if (!length(hit)) {
     cat("FAILED - asset not on the release\n")
     # THE CHECK HAS TO BE ENFORCED, NOT JUST PRINTED. This block existed
