@@ -297,17 +297,13 @@ print(head(proj[, .(nation, exp_golds = round(exp_golds, 2),
                     exp_medals = round(exp_medals, 2), p10, p50, p90,
                     p_any_gold = round(p_any_gold, 3))], 10))
 
-stamp <- format(Sys.time(), "%Y%m%dT%H%M%S")
-f <- file.path(D, paste0("birmingham2026_pretournament_", stamp, ".parquet"))
-arrow::write_parquet(pred, f)
-saveRDS(pred, file.path(D, "birmingham2026_pretournament.rds"))
-
-cli::cli_alert_success(
-  "{format(nrow(pred), big.mark = ',')} row{?s} across {uniqueN(pred$event_id)} event{?s} -> {basename(f)}")
-cli::cli_alert_info("Config: {DEPLOYED$stamp} | cutoff {CUT} | {N_SIMS} sims.")
-
 # Probability columns must sum to the number of places they describe, per event.
 # A sum that is not 1 for gold is a broken simulation, not a rounding artefact.
+# This runs BEFORE the writes below, for the reason the nations table is checked
+# before its write (citiusdata#9): an abort after the write has already replaced
+# the last good pretournament table. sanity_birmingham_card.R uses the same
+# thresholds on the same table, so an abort here means the run would have failed
+# at sanity anyway -- this only stops it before the bad table is on disk.
 chk <- pred[, .(gold = round(sum(p_gold, na.rm = TRUE), 3),
                 medal = round(sum(p_medal, na.rm = TRUE), 3),
                 final = round(sum(p_final, na.rm = TRUE), 1),
@@ -316,8 +312,18 @@ cli::cli_h2("Per-event probability sums")
 print(chk[order(gold)], nrows = 50)
 bad <- chk[abs(gold - 1) > 0.01 | abs(medal - 3) > 0.05]
 if (nrow(bad)) {
-  cli::cli_alert_danger("{nrow(bad)} event{?s} with implausible probability sums:")
   print(bad)
-} else {
-  cli::cli_alert_success("Every event sums to 1 gold and 3 medals.")
+  cli::cli_abort(c(
+    "x" = "{nrow(bad)} event{?s} with implausible probability sums; the pretournament table was not written.",
+    "i" = "Gold must sum to 1 and medals to 3 per event, within 0.01 and 0.05."))
 }
+cli::cli_alert_success("Every event sums to 1 gold and 3 medals.")
+
+stamp <- format(Sys.time(), "%Y%m%dT%H%M%S")
+f <- file.path(D, paste0("birmingham2026_pretournament_", stamp, ".parquet"))
+arrow::write_parquet(pred, f)
+saveRDS(pred, file.path(D, "birmingham2026_pretournament.rds"))
+
+cli::cli_alert_success(
+  "{format(nrow(pred), big.mark = ',')} row{?s} across {uniqueN(pred$event_id)} event{?s} -> {basename(f)}")
+cli::cli_alert_info("Config: {DEPLOYED$stamp} | cutoff {CUT} | {N_SIMS} sims.")
