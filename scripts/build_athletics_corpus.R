@@ -399,8 +399,20 @@ atomic_write <- function(write_fn, target) {
   }
 }
 atomic_write(function(p) saveRDS(all, p), file.path(D, "athletics_corpus.rds"))
-atomic_write(function(p) arrow::write_parquet(all, p),
+# The parquet gets a plain data.frame, not the data.table. write_parquet()
+# serialises every R attribute into the file footer. data.table's auto-indexing
+# (from the `==` subsets above) leaves an `index` attribute on `all`, and each
+# index is a full-length row ordering: on a synthetic 2M-row table the indexes
+# were 18 MB of the file, and the plain copy took it from 72 MB to 53 MB. The
+# plain copy shares the column vectors (lapply does not copy them) and keeps
+# names, classes and column attributes. Readers setDT() or as.data.table() the
+# result, so they get the same table back. The RDS and DuckDB writes keep the
+# full data.table.
+plain <- structure(lapply(all, identity), names = names(all),
+                   row.names = .set_row_names(nrow(all)), class = "data.frame")
+atomic_write(function(p) arrow::write_parquet(plain, p),
              file.path(D, "athletics_corpus.parquet"))
+rm(plain)
 say("\nwrote athletics_corpus.{rds,parquet}")
 
 # citius.duckdb MUST be refreshed on the same cadence as the RDS/parquet
