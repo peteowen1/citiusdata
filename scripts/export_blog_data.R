@@ -814,6 +814,15 @@ mk <- mk_all[!is.na(perf)]
 # six best marks by perf are wind-aided (Jacobs 9.67 w+4.1, De Grasse 9.69 w+4.8)
 # and would otherwise publish as somebody's personal best.
 #
+# Evidence window (issue #21): deliberately NOT scoped to RATING_ACTIVE_DAYS.
+#   * PB is ALL-TIME. A PB from before the 730-day window is a PB, and the
+#     rating does not see it -- so on the page PB can sit above what the model
+#     "knows". That is the honest meaning of "personal best"; the blog should
+#     label the column "PB (all-time)" and not imply the model used it.
+#   * SB is the calendar year of AS_OF (NA if they haven't raced legally this
+#     year), which always falls inside the rating window.
+#   * latest_mark is the most recent row with no window applied; it is within
+#     the window by construction because rows are limited to active athletes.
 # Indoor and outdoor are pooled, matching how the ability model itself treats
 # them. Conventional athletics splits those records; if that becomes a complaint,
 # split here rather than in the page.
