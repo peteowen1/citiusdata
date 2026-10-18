@@ -399,8 +399,28 @@ atomic_write <- function(write_fn, target) {
   }
 }
 atomic_write(function(p) saveRDS(all, p), file.path(D, "athletics_corpus.rds"))
-atomic_write(function(p) arrow::write_parquet(all, p),
-             file.path(D, "athletics_corpus.parquet"))
+# The parquet is written WITHOUT arrow's R metadata. write_parquet() stores the
+# data frame's R attributes in the footer (key `r`, copied again inside
+# ARROW:schema); for this corpus that was an 85 MB footer on a 335 MB file, which
+# every reader parses before it reads a single row (issue #33). The .rds above
+# keeps the full object. Every reader of the parquet wraps it in setDT() /
+# as.data.table(), so none needs the data.table class restored from metadata.
+write_corpus_parquet <- function(p) {
+  tab <- arrow::arrow_table(all)
+  tab$metadata$r <- NULL
+  arrow::write_parquet(tab, p)
+  # parquet ends with <footer length: 4-byte little-endian int> "PAR1".
+  con <- file(p, "rb")
+  on.exit(close(con), add = TRUE)
+  seek(con, -8, origin = "end")
+  footer_mb <- readBin(con, "integer", n = 1L, size = 4L, endian = "little") / 1e6
+  say("parquet footer: %.2f MB", footer_mb)
+  if (footer_mb > 1)
+    cli::cli_warn(c(
+      "!" = "athletics_corpus.parquet footer is {round(footer_mb, 1)} MB; expected KB.",
+      "i" = "R metadata should have been stripped above. Check what else writes into the footer."))
+}
+atomic_write(write_corpus_parquet, file.path(D, "athletics_corpus.parquet"))
 say("\nwrote athletics_corpus.{rds,parquet}")
 
 # citius.duckdb MUST be refreshed on the same cadence as the RDS/parquet
