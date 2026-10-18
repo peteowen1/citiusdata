@@ -276,6 +276,32 @@ setorder(proj, -exp_medals)
 proj[, `:=`(meet = "birmingham2026", generated_at = Sys.time(),
             scope = "model", events_scored = uniqueN(pred$event_id),
             n_sims = N_SIMS)]
+# Probability columns must sum to the number of places they describe, per event.
+# A sum that is not 1 for gold is a broken simulation, not a rounding artefact.
+# This runs BEFORE BOTH writes (the nations table and the pretournament table),
+# for the reason given below (citiusdata#9): an abort after a write has already
+# replaced the last good copy. Both tables come from the same simulation, so a
+# broken per-event sum condemns the nations table too, and its own invariant
+# (a total over all events) can pass when individual events are wrong.
+# sanity_birmingham_card.R uses the same thresholds on the same table, so an abort
+# here means the run would have failed at sanity anyway -- this only stops it
+# before a bad table is on disk.
+chk <- pred[, .(gold = round(sum(p_gold, na.rm = TRUE), 3),
+                medal = round(sum(p_medal, na.rm = TRUE), 3),
+                final = round(sum(p_final, na.rm = TRUE), 1),
+                n = .N), by = .(event_id, n_rounds)]
+# An empty table would pass the check below with nothing checked.
+if (!nrow(chk)) cli::cli_abort("No events in the predictions; nothing was written.")
+cli::cli_h2("Per-event probability sums")
+print(chk[order(gold)], nrows = 50)
+bad <- chk[abs(gold - 1) > 0.01 | abs(medal - 3) > 0.05]
+if (nrow(bad)) {
+  cli::cli_abort(c(
+    "x" = "{nrow(bad)} event{?s} with implausible probability sums; neither the nations nor the pretournament table was written.",
+    "i" = "Gold must sum to 1 and medals to 3 per event, within 0.01 and 0.05."))
+}
+cli::cli_alert_success("Every event sums to 1 gold and 3 medals.")
+
 # Validate BEFORE writing, the way the duplicate-athlete check above does
 # (citiusdata#9). These two lines used to be the other way round, and the order
 # is the whole difference between a failure and a silent one: a tripped
@@ -296,28 +322,6 @@ cli::cli_alert_success(
 print(head(proj[, .(nation, exp_golds = round(exp_golds, 2),
                     exp_medals = round(exp_medals, 2), p10, p50, p90,
                     p_any_gold = round(p_any_gold, 3))], 10))
-
-# Probability columns must sum to the number of places they describe, per event.
-# A sum that is not 1 for gold is a broken simulation, not a rounding artefact.
-# This runs BEFORE the writes below, for the reason the nations table is checked
-# before its write (citiusdata#9): an abort after the write has already replaced
-# the last good pretournament table. sanity_birmingham_card.R uses the same
-# thresholds on the same table, so an abort here means the run would have failed
-# at sanity anyway -- this only stops it before the bad table is on disk.
-chk <- pred[, .(gold = round(sum(p_gold, na.rm = TRUE), 3),
-                medal = round(sum(p_medal, na.rm = TRUE), 3),
-                final = round(sum(p_final, na.rm = TRUE), 1),
-                n = .N), by = .(event_id, n_rounds)]
-cli::cli_h2("Per-event probability sums")
-print(chk[order(gold)], nrows = 50)
-bad <- chk[abs(gold - 1) > 0.01 | abs(medal - 3) > 0.05]
-if (nrow(bad)) {
-  print(bad)
-  cli::cli_abort(c(
-    "x" = "{nrow(bad)} event{?s} with implausible probability sums; the pretournament table was not written.",
-    "i" = "Gold must sum to 1 and medals to 3 per event, within 0.01 and 0.05."))
-}
-cli::cli_alert_success("Every event sums to 1 gold and 3 medals.")
 
 stamp <- format(Sys.time(), "%Y%m%dT%H%M%S")
 f <- file.path(D, paste0("birmingham2026_pretournament_", stamp, ".parquet"))
