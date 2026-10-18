@@ -149,8 +149,11 @@ if (n_other_na > 0)
 # sequential places and would be scored as one big race between athletes who
 # never met.
 # So blank the race_key on those rows. They stay in the corpus as individual
-# marks (ability evidence), exactly like the Swim England ranked lists, but the
-# engine can no longer pair them against each other. Groups of <=10 rows are
+# marks, exactly like the Swim England ranked lists: the mark-based ability path
+# (build_stores.R, predict_glasgow_pretournament.R) carries race_key without
+# filtering on it, so they still count there, with no race adjustment. The
+# head-to-head form ratings (form_ratings_swimming.R) drop rows with no race_key,
+# so they can no longer be paired against athletes they never raced. Groups of <=10 rows are
 # left alone: they cannot be told apart from a genuine single heat and blanking
 # them would throw away real race evidence.
 # Only career-shaped rows are considered (no competition_id, round NA, a key
@@ -167,6 +170,10 @@ if (any(rna)) {
       format(length(big_keys), big.mark = ","), MAX_ROUND_NA_FIELD,
       format(sum(blank), big.mark = ","))
   all[blank, race_key := NA_character_]
+} else {
+  # Silence here would also be what a changed source shape looks like (career
+  # rows arriving with a competition_id), so say it.
+  say("round-NA career rows: none found (no worldaquatics rows with round, competition_id and race_key as expected) -- nothing blanked")
 }
 
 # ---- one identity ----------------------------------------------------------
