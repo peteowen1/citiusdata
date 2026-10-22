@@ -47,7 +47,14 @@ stopifnot(
   "dates must be ordered within a meet" = all(cal$date_end >= cal$date_start),
   "a prediction cutoff must precede its meet" = all(cal$prediction_cutoff < cal$date_start),
   "state must be one of upcoming/live/scored" =
-    all(cal$state %in% c("upcoming", "live", "scored")))
+    all(cal$state %in% c("upcoming", "live", "scored")),
+  # citiusdata#24. `state` is the lifecycle of the meet and says nothing about
+  # whether a forecast exists: three meets were `scored` on the strength of
+  # harvested results alone. Whether a card shipped is derived below from the
+  # manifest, so a hand-edited column here would be the exact claim with no
+  # card behind it.
+  "forecast_published is derived by this script, not hand-maintained in the CSV" =
+    !"forecast_published" %in% names(cal))
 cli::cli_alert_success("Calendar: {nrow(cal)} meet{?s}, {cal[state=='upcoming', .N]} upcoming.")
 
 # --- Birmingham card ----------------------------------------------------------
@@ -933,6 +940,32 @@ manifest <- list(
 # here after every artefact had been written. Caught by running the Birmingham
 # branch on CI, which the Budapest runs never exercised.
 if (length(dl_blocks)) manifest <- c(manifest, dl_blocks[order(names(dl_blocks))])
+
+# --- forecast_published (citiusdata#24) ----------------------------------------
+# `state = scored` means results are in; it does not mean we forecast the meet.
+# This column says whether a card actually ships: TRUE iff the manifest just
+# assembled carries a block for the meet, built this run or carried forward --
+# the same test the site's index uses (`_hasCard`). Derived here, after the
+# manifest, so it can never disagree with it. NA for a meet this export does not
+# publish a card for at all (Glasgow's pages live under /multisport/), where
+# FALSE would claim a fact about a forecast we cannot see from here.
+CARD_MEETS <- c("birmingham2026", DL_MEETS)
+cal[, forecast_published := fifelse(
+  meet_id %in% CARD_MEETS,
+  vapply(meet_id, function(m) !is.null(manifest[[m]]) ||
+           (identical(m, "birmingham2026") && !is.null(manifest$birmingham)), logical(1)),
+  NA)]
+# A scored meet with no card is legitimate (results harvested into the ratings),
+# so this warns rather than aborts; aborting would hold every other meet back.
+results_only <- cal[state == "scored" & forecast_published %in% FALSE, meet_id]
+if (length(results_only)) {
+  cli::cli_alert_warning("scored but no forecast published (results only): {.val {results_only}}")
+}
+# calendar.parquet was written with the other artefacts above, before the
+# manifest existed; rewrite it with the column and re-key its upload hash.
+artefacts[["calendar.parquet"]] <- cal
+CONTENT[["calendar.parquet"]] <- content_hash(cal)
+write_parquet(cal, file.path(BLOG, "calendar.parquet"))
 
 write_json(manifest, file.path(BLOG, "athletics-manifest.json"),
            auto_unbox = TRUE, pretty = TRUE, na = "null")
