@@ -21,6 +21,10 @@ data/*
 # Not derivable from anything we harvest, and re-transcribing 32 rows from a PDF
 # is exactly the error-prone step this file exists to avoid repeating.
 !data/diamond_league_2026.csv
+# Same class: athletes the entry list cannot name a nation for (a late entry, or a
+# results-feed name that drops the middle name), each with its source. Without it
+# their medals count under NA in the Games medal table (citiusdata#36).
+!data/nation_overrides.csv
 # Documentation, not data -- names the canonical tables so `data/`'s ~1,500
 # gitignored entries don't leave every clone guessing what's real. Small,
 # reviewable, and exactly the file a repo-cleanup pass exists to write.

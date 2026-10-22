@@ -154,6 +154,12 @@ ent <- rbindlist(lapply(entries$rows, function(r) data.table(
   event = ev_names[r[[1]] + 1], nation = nz(r[[2]]), athlete = nz(r[[3]]))), fill = TRUE)
 normkey <- function(x) gsub("[^A-Z]", "", toupper(x))
 nat_lookup <- unique(ent[, .(key = normkey(athlete), nation)])[, .(nation = nation[1]), by = key]
+# Hand-checked fills for athletes the entry list misses, each with its source
+# (citiusdata#36). They only fill a gap: an entry-list nation is never replaced.
+nat_over <- fread(file.path(OUT, "nation_overrides.csv"), encoding = "UTF-8")
+nat_over[, key := normkey(athlete_name)]
+if (anyDuplicated(nat_over$key)) cli::cli_abort("{.file nation_overrides.csv} names an athlete twice.")
+nat_lookup <- rbind(nat_lookup, nat_over[!key %in% nat_lookup$key, .(key, nation)])
 
 add_nation <- function(d, name_col) {
   d[, .k := normkey(get(name_col))]
@@ -165,8 +171,19 @@ add_nation <- function(d, name_col) {
 }
 
 results <- add_nation(results, "athlete_name")
-miss <- results[is_final == TRUE & !is.na(place) & place <= 3L & is.na(nation), .N]
-if (miss) cli::cli_alert_warning("{miss} medallist{?s} still have no nation.")
+# A medallist with no nation is not a cosmetic gap: the medal tables group by
+# nation, so the medal lands in an NA row and the real country is short of it
+# (citiusdata#36: two silvers). Stop before anything is built or uploaded.
+miss <- results[is_final == TRUE & !is.na(place) & place >= 1L & place <= 3L & is.na(nation)]
+if (nrow(miss)) {
+  cli::cli_abort(c(
+    "x" = "{nrow(miss)} medallist{?s} have no nation, so the medal table would count them under NA.",
+    "i" = "Add each to {.file data/nation_overrides.csv} with a source for the nation, then re-run:",
+    stats::setNames(
+      sprintf("%s - place %d, %s (%s)", gsub("[{}]", "", miss$athlete_name), miss$place,
+              ifelse(is.na(miss$discipline), "unknown event", miss$discipline), miss$sex),
+      rep("*", nrow(miss)))))
+}
 
 # --- predictions -------------------------------------------------------------
 # TWO prediction sets, and conflating them would destroy the report card.
