@@ -165,8 +165,19 @@ add_nation <- function(d, name_col) {
 }
 
 results <- add_nation(results, "athlete_name")
-miss <- results[is_final == TRUE & !is.na(place) & place <= 3L & is.na(nation), .N]
-if (miss) cli::cli_alert_warning("{miss} medallist{?s} still have no nation.")
+# A medallist with no nation is not a cosmetic gap: the medal tables group by
+# nation, so the medal lands in an NA row and the real country is short of it
+# (citiusdata#36: two silvers). Stop before anything is built or uploaded.
+miss <- results[is_final == TRUE & !is.na(place) & place >= 1L & place <= 3L & is.na(nation)]
+if (nrow(miss)) {
+  cli::cli_abort(c(
+    "x" = "{nrow(miss)} medallist{?s} have no nation, so the medal table would count them under NA.",
+    "i" = "Add them to the nation lookup (entry list or results feed), then re-run:",
+    stats::setNames(
+      sprintf("%s - place %d, %s (%s)", gsub("[{}]", "", miss$athlete_name), miss$place,
+              ifelse(is.na(miss$discipline), "unknown event", miss$discipline), miss$sex),
+      rep("*", nrow(miss)))))
+}
 
 # --- predictions -------------------------------------------------------------
 # TWO prediction sets, and conflating them would destroy the report card.
