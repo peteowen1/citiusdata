@@ -9,7 +9,9 @@
 #   4. Provenance must be internally consistent, and field_type must be
 #      stamped as the unofficial third-party list it actually is -- NOT
 #      "official_entry_list", which would misrepresent the provenance to
-#      anyone reading the site.
+#      anyone reading the site. The config must be the DEPLOYED stamp, except
+#      on a card forecast_kind() judges "locked", which keeps the calibration
+#      deployed when it was made (see check 4).
 #   5. No duplicate athlete-event rows; every row has an athlete and nation;
 #      the stamped field_modelled must equal the rows actually present; and
 #      nation_code must be populated, which is how the pipeline enforces that
@@ -27,6 +29,7 @@ VERSE <- here::here()
 suppressMessages(devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE))
 suppressMessages(library(data.table))
 source(file.path(VERSE, "citiusdata", "scripts", "_deployed.R"))
+source(file.path(VERSE, "citiusdata", "scripts", "_forecast_kind.R"))
 D <- file.path(VERSE, "citiusdata", "data")
 
 args <- commandArgs(trailingOnly = TRUE)
@@ -84,8 +87,38 @@ say(max(abs(s$medal - 3)) < 0.05, sprintf("medals sum to 3 (max deviation %.4f)"
 say(all(s$n >= 3), sprintf("every scored event has >= 3 entrants (min %d)", min(s$n)))
 
 cat("\n4. provenance\n")
-say(length(unique(p$config)) == 1L && unique(p$config)[1] == DEPLOYED$stamp,
-    sprintf("config stamp is DEPLOYED's ('%s'), not a literal", DEPLOYED$stamp))
+# The config must be today's DEPLOYED stamp -- with ONE stated exemption: a
+# LOCKED card (forecast_kind(), scripts/_forecast_kind.R: its predict run
+# finished before 00:00 UTC on the meet's first day) was made under the
+# calibration deployed AT THAT TIME and must keep it. Re-predicting it under
+# today's calibration is exactly the after-the-fact rewrite red-team F1
+# (docs/reviews/OPUS-redteam-2026-10-25.md) found on every athletics card.
+# Budapest's 09-09 pre-meet card is the case this exists for.
+#
+# What the exemption does NOT relax: the config must still be one non-empty
+# stamp across every row, and a retrospective card (anything built on or after
+# the first day, or with no usable stamp) must still match DEPLOYED exactly.
+# Every other check below runs unchanged.
+cfg <- unique(p$config)
+cal_f <- file.path(D, "athletics_calendar.csv")
+stopifnot("athletics_calendar.csv is missing - cannot decide forecast_kind" = file.exists(cal_f))
+cal <- fread(cal_f, select = c("meet_id", "date_start"))
+ds <- cal[meet_id == MEET, as.Date(date_start)]
+stopifnot("meet must have exactly one date_start in athletics_calendar.csv" =
+            length(ds) == 1L && !is.na(ds))
+kind <- forecast_kind(p$generated_at, ds)
+one_cfg <- length(cfg) == 1L && !is.na(cfg) && nzchar(cfg)
+cat(sprintf("  forecast_kind: %s (card generated %s, meet starts %s)\n", kind,
+            format(forecast_generated_at(p$generated_at), "%Y-%m-%d %H:%M UTC", tz = "UTC"), ds))
+if (one_cfg && cfg == DEPLOYED$stamp) {
+  say(TRUE, sprintf("config stamp is DEPLOYED's ('%s'), not a literal", DEPLOYED$stamp))
+} else if (one_cfg && identical(kind, "locked")) {
+  say(TRUE, sprintf(paste("config stamp EXEMPTED: locked card keeps the calibration deployed when it was made",
+                          "('%s'); DEPLOYED today is '%s'"), cfg, DEPLOYED$stamp))
+} else {
+  say(FALSE, sprintf("config stamp is DEPLOYED's ('%s'), not a literal (card has %s; forecast_kind %s, so no exemption)",
+                     DEPLOYED$stamp, paste0("'", cfg, "'", collapse = ", "), kind))
+}
 say(all(!is.na(p$generated_at)), "every row carries generated_at")
 # The point of this check is NOT "field_type equals one specific string" -- the
 # first version asserted Brussels' literal value, which would have failed
