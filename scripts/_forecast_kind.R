@@ -26,8 +26,8 @@ forecast_kind <- function(generated_at, date_start) {
             "date_start is missing" = !is.na(date_start))
   first_day_utc <- as.POSIXct(paste(as.Date(date_start), "00:00:00"), tz = "UTC")
   st <- suppressWarnings(as.POSIXct(generated_at))
-  if (!length(st) || all(is.na(st))) {
-    warning("card has no generated_at stamp: forecast_kind set to 'retrospective'",
+  if (!length(st) || anyNA(st)) {
+    warning("card has rows with no generated_at stamp: forecast_kind set to 'retrospective'",
             call. = FALSE)
     return("retrospective")
   }

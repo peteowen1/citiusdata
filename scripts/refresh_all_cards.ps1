@@ -21,7 +21,8 @@ param(
   [string[]]$Meets = @("birmingham2026", "lausanne2026", "silesia2026", "zurich2026", "brussels2026", "budapest2026"),
   [switch]$AllowPostMeet,
   [switch]$DryRun,
-  [string]$Today = (Get-Date -Format "yyyy-MM-dd")
+  # UTC date, matching _forecast_kind.R's 00:00 UTC cut-off on date_start.
+  [string]$Today = ((Get-Date).ToUniversalTime().ToString("yyyy-MM-dd"))
 )
 $ROOT = "C:\dev\citiusverse"
 $LOG  = "$ROOT\citiusdata\refresh_cards_log.txt"
