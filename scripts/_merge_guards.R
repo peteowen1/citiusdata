@@ -78,3 +78,61 @@ citius_atomic_write <- function(obj, path) {
 citius_empty_response_is_fault <- function(expect) {
   isTRUE(!is.na(expect) && expect > 0)
 }
+
+#' Never let a thinner re-harvest replace a fuller saved one
+#'
+#' `athletics_competition_results()` fetches a competition one day page at a
+#' time and, when a day fails, warns and carries on with the days that came
+#' back. For Glasgow 2026 that meant the blog export's live harvest returned
+#' 1,000 rows over 27, 28, 30 and 31 July (no 29 July, no 1 August), the export
+#' then overwrote its saved copy with that, and the published results stopped
+#' at 31 July with the Games' finals missing (citiusdata#37). A fresh harvest
+#' on 2026-08-18 had returned 1,489 rows through 1 August, so the days existed
+#' upstream; the export simply could not tell a thin harvest from a full one.
+#'
+#' Races are the unit. For every race key the result keeps whichever of the two
+#' copies holds more rows (the live one on a tie), and keeps races that appear
+#' in only one of them. A race that only the saved copy holds is a race the live
+#' call failed to return, not one that stopped existing.
+#'
+#' @param live,saved data.tables with a `race_key` column. `saved` may be NULL.
+#' @return The merged data.table, with attribute `from_saved` giving the number
+#'   of races taken from `saved` (races absent from `live`, or thinner there) and
+#'   `saved_dates` the dates of those races.
+citius_fuller_harvest <- function(live, saved) {
+  live <- data.table::as.data.table(live)
+  if (is.null(saved) || !nrow(saved)) {
+    data.table::setattr(live, "from_saved", 0L)
+    return(live[])
+  }
+  saved <- data.table::as.data.table(saved)
+  n_live  <- live[,  .(n = .N), by = race_key]
+  n_saved <- saved[, .(n = .N), by = race_key]
+  cmp <- merge(n_live, n_saved, by = "race_key", all = TRUE, suffixes = c("_live", "_saved"))
+  use_saved <- cmp[!is.na(n_saved) & (is.na(n_live) | n_saved > n_live)]$race_key
+  live_kept <- live[!race_key %in% use_saved]
+  from <- saved[race_key %in% use_saved]
+  # race_key is not stable: .race_discriminator() falls back to a hash of the
+  # athlete ids when raceNumber is unusable, so a race whose athlete set changed
+  # between harvests gets a NEW key. Its saved copy would then look like a race
+  # the live call missed, and both copies would be kept (the same performances
+  # published twice). A saved-origin race that shares any performance with the
+  # live data under a different key is that same race: prefer live, drop it.
+  sig_cols <- intersect(c("event_id", "athlete_id", "date", "round"), intersect(names(live), names(saved)))
+  if (nrow(from) && nrow(live) && length(sig_cols) >= 2L) {
+    sig <- function(d) do.call(paste, c(lapply(sig_cols, function(j) as.character(d[[j]])), sep = "
+"))
+    # only live rows under ANOTHER key count: a thinner live copy of the same
+    # key overlaps its saved copy by design and is replaced by it
+    live_sig <- data.table::data.table(s = sig(live), k = live$race_key)
+    from_sig <- data.table::data.table(s = sig(from), k = from$race_key)
+    hit <- merge(from_sig, live_sig, by = "s", allow.cartesian = TRUE)[k.x != k.y]
+    rekeyed <- unique(hit$k.x)
+    from <- from[!race_key %in% rekeyed]
+    use_saved <- setdiff(use_saved, rekeyed)
+  }
+  out <- data.table::rbindlist(list(live_kept, from), use.names = TRUE, fill = TRUE)
+  data.table::setattr(out, "from_saved", length(use_saved))
+  data.table::setattr(out, "saved_dates", if ("date" %in% names(from)) sort(unique(as.Date(from$date))) else as.Date(character()))
+  out[]
+}
