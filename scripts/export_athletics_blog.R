@@ -16,6 +16,7 @@ VERSE <- here::here()
 suppressMessages(devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE))
 suppressMessages(library(data.table)); library(arrow); library(jsonlite)
 source(file.path(VERSE, "citiusdata", "scripts", "_deployed.R"))
+source(file.path(VERSE, "citiusdata", "scripts", "_forecast_kind.R"))
 
 D      <- file.path(VERSE, "citiusdata", "data")
 # ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
@@ -125,6 +126,31 @@ KEEP <- c("event_id", "discipline", "sex", "athlete_id", "athlete", "nation",
           "field_type", "field_source", "field_entrants", "field_unmodelled")
 
 orient <- as.data.table(citius_events())[, .(event_id, orientation, family)]
+
+# --- forecast_kind (red-team F1, 2026-10-25) ----------------------------------
+# Every card row carries `forecast_kind` ("locked" / "retrospective") and
+# `forecast_generated_at` (the predict run's own stamp, UTC). Both are computed
+# from the card's stamps against the calendar's date_start, BEFORE the
+# `generated_at := NOW` overwrite below erases the predict-run time. A card
+# re-predicted after its meet started can therefore never be shown as locked,
+# whoever ran it and however. See scripts/_forecast_kind.R.
+stamp_forecast_kind <- function(dt, src_generated_at, mid) {
+  ds <- cal[meet_id == mid, date_start]
+  if (length(ds) != 1L || is.na(ds))
+    cli::cli_abort("{mid}: no date_start in the calendar -- cannot decide forecast_kind.")
+  kind <- forecast_kind(src_generated_at, ds)
+  dt[, `:=`(forecast_kind = kind,
+            forecast_generated_at = forecast_generated_at(src_generated_at))]
+  if (identical(kind, "retrospective")) {
+    cli::cli_alert_warning(
+      "{mid}: card generated {format(forecast_generated_at(src_generated_at), '%Y-%m-%d %H:%M UTC', tz = 'UTC')}, meet started {ds} -- forecast_kind = RETROSPECTIVE.")
+  } else {
+    cli::cli_alert_success("{mid}: forecast_kind = locked (generated before {ds}).")
+  }
+  stopifnot("forecast_kind must be set on every card row" =
+              nrow(dt) > 0 && all(dt$forecast_kind %in% FORECAST_KINDS))
+  invisible(kind)
+}
 
 # --- personal / season bests ----------------------------------------------
 # athlete_pbs.parquet / athlete_sbs.parquet (assemble_athlete_profiles.R,
@@ -236,6 +262,7 @@ lab <- st[, .(event_id, round_index, round, races, advance, fastest_losers,
 # Birmingham gains field_type = "official_entry_list" and skips the rest.
 card <- pred[, intersect(KEEP, names(pred)), with = FALSE]
 card[, meet_id := "birmingham2026"]
+bham_kind <- stamp_forecast_kind(card, pred$generated_at, "birmingham2026")
 
 # --- predicted mark -----------------------------------------------------------
 # Formatted HERE rather than in the page: the page would otherwise need the
@@ -273,6 +300,7 @@ ev <- merge(ev, card[, .(field = .N, favourite = athlete[1],
             by = "event_id", all.x = TRUE)
 ev <- merge(ev, st[, .(n_rounds = max(round_index)), by = event_id],
             by = "event_id", all.x = TRUE)
+ev[, forecast_kind := bham_kind]
 
 for (x in list(cal, card, lab, ev)) if (is.data.table(x)) x[, generated_at := NOW]
 
@@ -549,6 +577,7 @@ for (mid in DL_MEETS) {
 
   dcard <- dp[, intersect(KEEP, names(dp)), with = FALSE]
   dcard[, meet_id := mid]
+  dl_kind <- stamp_forecast_kind(dcard, dp$generated_at, mid)
 
   dcard <- merge(dcard, orient, by = "event_id", all.x = TRUE)
   dcard[, c("pred_mark", "mark_unit") := predicted_mark(ability, orientation)]
@@ -570,6 +599,7 @@ for (mid in DL_MEETS) {
                               p_favourite = p_gold[1],
                               n_rounds = n_rounds[1]), by = event_id],
                by = "event_id", all.x = TRUE)
+  dev[, forecast_kind := dl_kind]
 
   dlab <- dcard[, .(round_index = 1L, round = "Final", races = 1L,
                     advance = NA_integer_, fastest_losers = NA_integer_,
@@ -627,6 +657,8 @@ for (mid in DL_MEETS) {
     athletes = uniqueN(dcard$athlete_id),
     cutoff = as.character(unique(dcard$cutoff)[1]),
     counts_source = "single_final",
+    forecast_kind = dl_kind,
+    forecast_generated_at = format(dcard$forecast_generated_at[1], "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
     field_type = fld_type,
     field_source = as.character(unique(dcard$field_source)[1]),
     caveats = c(
@@ -904,19 +936,25 @@ for (m in setdiff(DL_MEETS, names(dl_blocks))) {
   if (!is.null(prev) && !is.null(prev[[m]])) dl_blocks[[m]] <- prev[[m]]
 }
 
+BHAM_OUT <- artefacts[["birmingham2026-predictions.parquet"]]
 manifest <- list(
   generated_at = format(NOW, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
   config = DEPLOYED$stamp,
   meets = nrow(cal),
   event_notes = EVENT_NOTES,
   mark_calibration = CALIB,
+  # Read from the artefact, not from `card`: the nation-gap loop above reuses
+  # that name for each results file's card, so by here `card` is whichever meet
+  # that loop saw last, not Birmingham's.
   birmingham = if (!BHAM_BUILD) prev$birmingham else list(
-    events_modelled = uniqueN(card$event_id),
+    events_modelled = uniqueN(BHAM_OUT$event_id),
     events_in_programme = 44L,
     unmodelled = "Marathon Race Walk (men's and women's) - no registry event_id",
-    athletes = uniqueN(card$athlete_id),
-    cutoff = as.character(unique(card$cutoff)[1]),
+    athletes = uniqueN(BHAM_OUT$athlete_id),
+    cutoff = as.character(unique(BHAM_OUT$cutoff)[1]),
     counts_source = "derived",
+    forecast_kind = BHAM_OUT$forecast_kind[1],
+    forecast_generated_at = format(BHAM_OUT$forecast_generated_at[1], "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
     caveats = c(
       "Heat counts are derived, not official: Technical Delegates publish them with the start lists.",
       "Advancement assumes a seeded draw. The published draw cannot be ingested.",
