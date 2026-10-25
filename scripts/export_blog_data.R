@@ -56,7 +56,7 @@ if (!harvest_ok) {
   ath <- citius_fuller_harvest(ath, .saved)
   if (attr(ath, "from_saved") > 0L) {
     cli::cli_alert_warning(
-      "Live harvest was thinner than the saved copy: kept {attr(ath, 'from_saved')} race{?s} from the saved results (merged dates {paste(format(sort(unique(as.Date(ath$date)))), collapse = ', ')}).")
+      "Live harvest was thinner than the saved copy: kept {attr(ath, 'from_saved')} race{?s} from the saved results (dates rescued {paste(format(attr(ath, 'saved_dates')), collapse = ', ')}).")
   }
   citius_atomic_write(ath, .saved_f)
 }

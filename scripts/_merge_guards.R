@@ -97,7 +97,8 @@ citius_empty_response_is_fault <- function(expect) {
 #'
 #' @param live,saved data.tables with a `race_key` column. `saved` may be NULL.
 #' @return The merged data.table, with attribute `from_saved` giving the number
-#'   of races taken from `saved` (races absent from `live`, or thinner there).
+#'   of races taken from `saved` (races absent from `live`, or thinner there) and
+#'   `saved_dates` the dates of those races.
 citius_fuller_harvest <- function(live, saved) {
   live <- data.table::as.data.table(live)
   if (is.null(saved) || !nrow(saved)) {
@@ -109,9 +110,29 @@ citius_fuller_harvest <- function(live, saved) {
   n_saved <- saved[, .(n = .N), by = race_key]
   cmp <- merge(n_live, n_saved, by = "race_key", all = TRUE, suffixes = c("_live", "_saved"))
   use_saved <- cmp[!is.na(n_saved) & (is.na(n_live) | n_saved > n_live)]$race_key
-  out <- data.table::rbindlist(
-    list(live[!race_key %in% use_saved], saved[race_key %in% use_saved]),
-    use.names = TRUE, fill = TRUE)
+  live_kept <- live[!race_key %in% use_saved]
+  from <- saved[race_key %in% use_saved]
+  # race_key is not stable: .race_discriminator() falls back to a hash of the
+  # athlete ids when raceNumber is unusable, so a race whose athlete set changed
+  # between harvests gets a NEW key. Its saved copy would then look like a race
+  # the live call missed, and both copies would be kept (the same performances
+  # published twice). A saved-origin race that shares any performance with the
+  # live data under a different key is that same race: prefer live, drop it.
+  sig_cols <- intersect(c("event_id", "athlete_id", "date", "round"), intersect(names(live), names(saved)))
+  if (nrow(from) && nrow(live) && length(sig_cols) >= 2L) {
+    sig <- function(d) do.call(paste, c(lapply(sig_cols, function(j) as.character(d[[j]])), sep = "
+"))
+    # only live rows under ANOTHER key count: a thinner live copy of the same
+    # key overlaps its saved copy by design and is replaced by it
+    live_sig <- data.table::data.table(s = sig(live), k = live$race_key)
+    from_sig <- data.table::data.table(s = sig(from), k = from$race_key)
+    hit <- merge(from_sig, live_sig, by = "s", allow.cartesian = TRUE)[k.x != k.y]
+    rekeyed <- unique(hit$k.x)
+    from <- from[!race_key %in% rekeyed]
+    use_saved <- setdiff(use_saved, rekeyed)
+  }
+  out <- data.table::rbindlist(list(live_kept, from), use.names = TRUE, fill = TRUE)
   data.table::setattr(out, "from_saved", length(use_saved))
+  data.table::setattr(out, "saved_dates", if ("date" %in% names(from)) sort(unique(as.Date(from$date))) else as.Date(character()))
   out[]
 }
