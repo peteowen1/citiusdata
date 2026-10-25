@@ -25,6 +25,16 @@
 #   Rscript citiusdata/scripts/publish_release.R            # validate + small files
 #   CITIUS_PUBLISH_ALL=1 Rscript ...                        # include the big corpus
 suppressMessages({library(piggyback); library(data.table)})
+# gh's OWN HTTP cache, a fourth caching layer beside the three described below.
+# gh >= 1.4 wraps every GET in httr2::req_cache(), and GitHub sends
+# Cache-Control: max-age=60, so the by-tag fetch that confirms each release
+# (PASS 1) was served again, unchanged, to the post-upload verify loop for up to
+# a minute -- the "listing lagged the upload" SIZE MISMATCH of 2026-10-14 and
+# the 2+4+8+16+16 s of re-reads that could not see the new asset. torp#271
+# measured it: a just-uploaded asset stayed absent from the gh-cached listing
+# for 56 s while an uncached read showed it at once. This script does nothing
+# else with gh, so turn the cache off for the whole run.
+options(gh_cache = FALSE)
 D <- here::here("citiusdata", "data")
 REPO <- "peteowen1/citiusdata"
 
