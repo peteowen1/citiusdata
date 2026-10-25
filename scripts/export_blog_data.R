@@ -19,6 +19,7 @@ suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table); library(jsonlite); library(arrow)
 # Model inputs come from DEPLOYED, never from literals here. See _deployed.R.
 source(here::here("citiusdata", "scripts", "_deployed.R"))
+source(here::here("citiusdata", "scripts", "_merge_guards.R"))
 
 OUT     <- here::here("citiusdata", "data")
 BLOG    <- here::here("citiusdata", "blog")
@@ -45,7 +46,19 @@ if (!harvest_ok) {
   cli::cli_alert_warning("Live harvest failed or empty; falling back to saved results.")
   ath <- setDT(readRDS(file.path(OUT, "glasgow2026_results.rds")))
 } else {
-  saveRDS(ath, file.path(OUT, "glasgow2026_results.rds"))
+  # A live harvest can come back THIN without erroring: the day pages are
+  # fetched one by one and a failed day is only warned about. Never let that
+  # replace a fuller saved copy (citiusdata#37: 29 Jul and 1 Aug dropped, the
+  # export saved the 1,000-row result over 1,489 good rows, results stopped at
+  # 31 Jul). Races the live call lacks are kept from the saved copy, and said.
+  .saved_f <- file.path(OUT, "glasgow2026_results.rds")
+  .saved <- if (file.exists(.saved_f)) setDT(readRDS(.saved_f)) else NULL
+  ath <- citius_fuller_harvest(ath, .saved)
+  if (attr(ath, "from_saved") > 0L) {
+    cli::cli_alert_warning(
+      "Live harvest was thinner than the saved copy: kept {attr(ath, 'from_saved')} race{?s} from the saved results (merged dates {paste(format(sort(unique(as.Date(ath$date)))), collapse = ', ')}).")
+  }
+  citius_atomic_write(ath, .saved_f)
 }
 cli::cli_alert_info("Athletics: {nrow(ath)} result{?s}, {uniqueN(ath$race_key)} race{?s}.")
 

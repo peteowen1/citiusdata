@@ -78,3 +78,40 @@ citius_atomic_write <- function(obj, path) {
 citius_empty_response_is_fault <- function(expect) {
   isTRUE(!is.na(expect) && expect > 0)
 }
+
+#' Never let a thinner re-harvest replace a fuller saved one
+#'
+#' `athletics_competition_results()` fetches a competition one day page at a
+#' time and, when a day fails, warns and carries on with the days that came
+#' back. For Glasgow 2026 that meant the blog export's live harvest returned
+#' 1,000 rows over 27, 28, 30 and 31 July (no 29 July, no 1 August), the export
+#' then overwrote its saved copy with that, and the published results stopped
+#' at 31 July with the Games' finals missing (citiusdata#37). A fresh harvest
+#' on 2026-08-18 had returned 1,489 rows through 1 August, so the days existed
+#' upstream; the export simply could not tell a thin harvest from a full one.
+#'
+#' Races are the unit. For every race key the result keeps whichever of the two
+#' copies holds more rows (the live one on a tie), and keeps races that appear
+#' in only one of them. A race that only the saved copy holds is a race the live
+#' call failed to return, not one that stopped existing.
+#'
+#' @param live,saved data.tables with a `race_key` column. `saved` may be NULL.
+#' @return The merged data.table, with attribute `from_saved` giving the number
+#'   of races taken from `saved` (races absent from `live`, or thinner there).
+citius_fuller_harvest <- function(live, saved) {
+  live <- data.table::as.data.table(live)
+  if (is.null(saved) || !nrow(saved)) {
+    data.table::setattr(live, "from_saved", 0L)
+    return(live[])
+  }
+  saved <- data.table::as.data.table(saved)
+  n_live  <- live[,  .(n = .N), by = race_key]
+  n_saved <- saved[, .(n = .N), by = race_key]
+  cmp <- merge(n_live, n_saved, by = "race_key", all = TRUE, suffixes = c("_live", "_saved"))
+  use_saved <- cmp[!is.na(n_saved) & (is.na(n_live) | n_saved > n_live)]$race_key
+  out <- data.table::rbindlist(
+    list(live[!race_key %in% use_saved], saved[race_key %in% use_saved]),
+    use.names = TRUE, fill = TRUE)
+  data.table::setattr(out, "from_saved", length(use_saved))
+  out[]
+}
