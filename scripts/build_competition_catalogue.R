@@ -90,7 +90,9 @@ NEVER_ELITE <- paste0(
   # `m.odzie` rather than a \\u escape: PCRE2 rejects \\u outright, and the
   # Polish "mlodziezowy" (youth) carries a character we should not have to encode.
   "Stabhochsprung|Kugelsto|m.odzie|youth|junior|U1[0-9]|U2[0-3]|",
-  "Silesian Meeting|pre-programme|pre-event")
+  # A club competition held alongside a DL meeting carries the meeting's name:
+  # "Coupe des Clubs, Athletissima" (44 results, meet_strength 29) was T1.
+  "Silesian Meeting|pre-programme|pre-event|Coupe des Clubs")
 
 RULES <- list(
   list(meet_type = "age_group",      pat = "U13|U14|U15|U16|U17|U18|U20|U23|Junior|Youth|Schools|Cadet|Minime"),
@@ -278,7 +280,7 @@ RULES <- list(
     "pre-programme|pre-event|Bislett Spring|Bislett Open|Bislett 600|",
     "Bislettmila|karusell|Distanseserie|Distance challenge|",
     "Lambertseter|Sommerstevne|Nasjonalt|KM Oslo|Street Tour|",
-    "Boysen Memorial|Aspire Indoor Invitational|Challenge Games")),
+    "Boysen Memorial|Aspire Indoor Invitational|Challenge Games|Coupe des Clubs")),
   # Named international one-day meets added 2026-09-03. These were sitting
   # unclassified and reaching T2 only via the meet_strength fallback, so this is
   # mostly a meet_type correction rather than a tier move (192 classified, 30

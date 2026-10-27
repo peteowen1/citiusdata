@@ -194,7 +194,9 @@ NEVER_ELITE <- paste0(
   "karusell|Bislettmila|Distanseserie|Distance challenge|Bislett Spring|",
   "Bislett Open|KM Oslo|Nasjonalt|Sommerstevne|Elite Series|Street Tour|",
   "Stabhochsprung|Kugelsto|m.odzie|youth|junior|U1[0-9]|U2[0-3]|",
-  "Silesian Meeting|pre-programme|pre-event")
+  # A club competition held alongside a DL meeting carries the meeting's name:
+  # "Coupe des Clubs, Athletissima" (44 results, meet_strength 29) was T1.
+  "Silesian Meeting|pre-programme|pre-event|Coupe des Clubs")
 RULES <- list(
   list(meet_type = "age_group",      pat = "U13|U14|U15|U16|U17|U18|U20|U23|Junior|Youth|Schools|Cadet|Minime"),
   list(meet_type = "ncaa_lower", pat = paste0(
@@ -282,7 +284,7 @@ RULES <- list(
     "pre-programme|pre-event|Bislett Spring|Bislett Open|Bislett 600|",
     "Bislettmila|karusell|Distanseserie|Distance challenge|",
     "Lambertseter|Sommerstevne|Nasjonalt|KM Oslo|Street Tour|",
-    "Boysen Memorial|Aspire Indoor Invitational|Challenge Games")),
+    "Boysen Memorial|Aspire Indoor Invitational|Challenge Games|Coupe des Clubs")),
   # TIGHTENED (scale fix #3, see header): bare "|Meeting" dropped. It matched
   # 2,400 of the missing competitions and 2,332 (97%) were generic club/open
   # meetings, not continental-tour fixtures. Verified the named alternatives
