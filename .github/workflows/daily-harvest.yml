@@ -1,6 +1,7 @@
 name: Daily harvest
 
-# Fetches every completed meet that is not yet in our data, and STAGES it.
+# Fetches every completed meet the WA calendar lists that is not yet in our data,
+# and STAGES it.
 #
 # The companion to daily-freshness.yml: that one makes staleness visible, this
 # one closes the half of it that can be closed safely. Together they replace
@@ -26,8 +27,9 @@ name: Daily harvest
 # CITIUS_WA_GRAPHQL_KEY was always going to be wrong within days, which is why
 # the existing one is stale and should be deleted.
 #
-# COST: measured locally at 18 seconds for two meets, plus the catalogue
-# download. Cheap enough to run daily without thinking about it.
+# COST: measured locally at 18 seconds for two meets, plus the corpus and
+# catalogue downloads and one WA calendar fetch. Cheap enough to run daily
+# without thinking about it.
 
 on:
   schedule:
@@ -102,17 +104,23 @@ jobs:
         # needs them when publishing is on. All four are Suggests, not Imports,
         # so setup-r-dependencies would not otherwise install them.
 
-      # Only the catalogue: it is what decides which meets are already in, and
-      # this job reads nothing else of the deployed set.
-      - name: Download the catalogue
+      # The corpus and the catalogue: together they are the competition ids we
+      # already hold. Discovery itself comes from the live WA calendar (see
+      # harvest_pending_meets.R), NOT from either file -- both stop where our
+      # harvest stopped, which is how this job stayed green for two weeks while
+      # 105 new meets went unfetched. Either download failing must fail the run:
+      # the script aborts on a missing input rather than guessing what is held.
+      - name: Download the held-id inputs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd citiusdata
           mkdir -p data
+          gh release download corpus-data --repo peteowen1/citiusdata \
+            --pattern athletics_corpus.parquet --dir data --clobber
           gh release download catalogue-data --repo peteowen1/citiusdata \
             --pattern competition_catalogue.parquet --dir data --clobber
-          ls -la data/competition_catalogue.parquet
+          ls -la data/athletics_corpus.parquet data/competition_catalogue.parquet
 
       - name: Harvest pending meets
         env:
