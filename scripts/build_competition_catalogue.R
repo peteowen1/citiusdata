@@ -482,9 +482,14 @@ cat_tbl[, meet_type := cat_of(comp_name)]
 # "Monaco Run Herculis" (a road run). Those six were exactly the rows whose best
 # WA category code was E or F; none of the other 231 was (GW 114, GL 77, DF 12,
 # A-D 11, no code 17). The codes are noisy DOWNWARDS per result (see
-# augment_catalogue_wa_codes.R), but a real DL meeting always carries some
-# higher code, so a meet whose EVERY code is E or F has none of the evidence.
-# Meets with no code keep the name's verdict: absence says nothing.
+# augment_catalogue_wa_codes.R), but every real DL meeting in THIS script's
+# input (championship_results.rds) carries some higher code, so a meet whose
+# EVERY code is E or F has none of the evidence. Meets with no code keep the
+# name's verdict: absence says nothing.
+# ONLY VALID ON THESE CODES. In the corpus, Stockholm DN Galan 2014 (7065899)
+# and Meeting de Paris 2021 (7147614) carry F-only race codes; they escape this
+# rule only because the coverage augment adds them with tier_codes NA. Filling
+# tier_codes for augment rows from the corpus would demote two real meetings.
 # Mirrored in augment_catalogue_coverage.R's reclassification; keep both.
 wa_low_only <- function(codes) {
   !is.na(codes) & nzchar(codes) &
