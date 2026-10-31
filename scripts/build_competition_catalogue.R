@@ -474,6 +474,28 @@ cat_tbl <- ch[, .(
 ), by = competition_id]
 cat_tbl <- merge(cat_tbl, meet_strength, by = "competition_id", all.x = TRUE)
 cat_tbl[, meet_type := cat_of(comp_name)]
+# A DIAMOND LEAGUE NAME ON A MEET WA RATES E OR F IS NOT A DIAMOND LEAGUE MEETING.
+# The name rule matches fixtures, and things held under a fixture's banner or
+# sharing a word with it get swept in: on 2026-10-31 the 237 diamond_league rows
+# held "Coupe des Clubs, Athletissima" (a club meet, meet_strength 29), four
+# editions of the Nigerian "Ayo Falola Dream Mile" (via "Dream Mile") and
+# "Monaco Run Herculis" (a road run). Those six were exactly the rows whose best
+# WA category code was E or F; none of the other 231 was (GW 114, GL 77, DF 12,
+# A-D 11, no code 17). The codes are noisy DOWNWARDS per result (see
+# augment_catalogue_wa_codes.R), but a real DL meeting always carries some
+# higher code, so a meet whose EVERY code is E or F has none of the evidence.
+# Meets with no code keep the name's verdict: absence says nothing.
+# Mirrored in augment_catalogue_coverage.R's reclassification; keep both.
+wa_low_only <- function(codes) {
+  !is.na(codes) & nzchar(codes) &
+    vapply(strsplit(codes, "/", fixed = TRUE), function(v) all(v %in% c("E", "F")), logical(1))
+}
+.dl_low <- cat_tbl[, meet_type == "diamond_league" & wa_low_only(tier_codes)]
+if (any(.dl_low)) {
+  cat(sprintf("diamond_league name match but WA codes only E/F -> unclassified: %d\n", sum(.dl_low)))
+  print(cat_tbl[.dl_low, .(competition_id, comp_name, year, results, tier_codes)])
+  cat_tbl[.dl_low, meet_type := "unclassified"]
+}
 # The whole point: one boolean the rest of the pipeline can filter on.
 # ---- meet_tier: THREE bands, and the count is measured, not chosen ----------
 # Fitted within athlete-event on 154,459 marks: centre each athlete on their own
