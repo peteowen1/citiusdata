@@ -20,6 +20,7 @@ library(data.table); library(jsonlite); library(arrow)
 # Model inputs come from DEPLOYED, never from literals here. See _deployed.R.
 source(here::here("citiusdata", "scripts", "_deployed.R"))
 source(here::here("citiusdata", "scripts", "_merge_guards.R"))
+source(here::here("citiusdata", "scripts", "_display_names.R"))
 
 OUT     <- here::here("citiusdata", "data")
 BLOG    <- here::here("citiusdata", "blog")
@@ -871,6 +872,15 @@ cli::cli_alert_info(
   "Ratings: {nrow(ratings)} athlete-event row{?s} across {uniqueN(ratings$event_id)} event{?s}, as of {format(AS_OF)}.")
 
 # --- write + upload ----------------------------------------------------------
+# One display form for athlete names (citiusdata#55). The Games feeds write the
+# surname in capitals for most athletes and title case for the rest, so the same
+# person read "Edwin KURGAT" in the predictions and "Edwin Kurgat" in the
+# results. Done HERE, after every join above, because normkey()/athlete_key()
+# lookups were built on the raw strings and must keep seeing them. The raw form
+# is kept in a second column.
+pred[, athlete_raw := athlete][, athlete := citius_display_name(athlete)]
+results[, athlete_name_raw := athlete_name][, athlete_name := citius_display_name(athlete_name)]
+
 pred[, generated_at_export := NOW]
 results[, generated_at := NOW]
 
