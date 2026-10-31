@@ -113,6 +113,23 @@ if (length(forced)) {
   wa[, cid := as.character(competition_id)]
   done <- unique(wa[has_results %in% TRUE & !is.na(cid)], by = "cid")
   done <- done[!cid %in% have]
+  # Meets already staged in the release but not yet appended are not "held",
+  # yet re-fetching them every day would re-stage the whole backlog (~118 meets,
+  # ~18 min) on each run until someone appends. Skip them, as backfill_harvest.R
+  # does. A listing that fails is not fatal: re-fetching is slow but safe.
+  staged_ids <- tryCatch({
+    a <- vb_list_assets(REPO, TAG)$name
+    sub("^meet_([0-9]+)_raw_results\\.rds$", "\\1", grep("^meet_[0-9]+_raw_results\\.rds$", a, value = TRUE))
+  },
+  vb_error_absent = function(e) character(0),
+  error = function(e) {
+    cli_alert_warning("Could not list {TAG} ({conditionMessage(e)}); already-staged meets will be re-fetched.")
+    character(0)
+  })
+  if (length(staged_ids)) {
+    cli_alert_info("{TAG}: {length(staged_ids)} meet{?s} already staged, skipped")
+    done <- done[!cid %in% staged_ids]
+  }
   # meet_<id> is the name append_meet_to_championship_results.R looks for first
   # (RAW_F), so a staged calendar meet is picked up by its competition id with
   # no renaming step.
