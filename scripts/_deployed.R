@@ -32,7 +32,7 @@ DEPLOYED <- list(
   # with other tags in between (my first attempt) failed the check even though
   # every token was present, because the check is on the literal filename
   # remainder, not on token membership.
-  stamp = "2026-09-20 wac_coast_0904_full2_altitude_banded_noroad_refit_ss080 (corpus to 2026-09-13; sigma_context x0.8, ctxsd strip4fam evparams5, debias OFF, blend OFF)",
+  stamp = "2026-10-31 wac_coast_0904_full2_altitude_banded_noroad_refit1031_ss080 (corpus to 2026-10-25, catalogue tiers ed80109b; sigma_context x0.8, ctxsd strip4fam evparams5, debias OFF, blend OFF)",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -161,7 +161,20 @@ DEPLOYED <- list(
   # +1.27%). Not re-measured on the refit itself. Evidence:
   # docs/reviews/sigma-scale-arm-2026-09-19.md. Reversible: name the `_refit`
   # file and drop `_ss080` from the stamp.
-  calibration = "calibration_corpus_wac_coast_0904_full2_altitude_banded_noroad_refit_ss080.rds",
+  #
+  # PROMOTED 2026-10-31 (Pete, "go"): `_refit1031_ss080` is the same
+  # composition refitted on 33,955 meets to 2026-10-25 and on the republished
+  # catalogue (citiusdata#54: 6 Diamond-League-named E/F meets T1 -> T3), then
+  # the same x0.8 (recipe checked: it rebuilds `_refit_ss080` from `_refit`
+  # exactly). Unscaled refit vs the 09-20 `_refit`, both scored on today's
+  # 60-meet M1 pool (324 races): gold Brier -0.09% (p=0.044), medal -0.05%
+  # (p=0.025), marks MAE -0.001pp (p<0.0001, 5,464 rows), concordance +0.03pp
+  # (p=0.43); distance marks the one family worse (+0.0048pp, n=114). The
+  # pool is an evenly spaced sample of the meet list, so the control was
+  # re-run on today's list (bt_cache_refit_ctrl1031) -- the 09-20 cache scored
+  # different meets. Reversible: name the `_refit_ss080` file and restore the
+  # 2026-09-20 stamp.
+  calibration = "calibration_corpus_wac_coast_0904_full2_altitude_banded_noroad_refit1031_ss080.rds",
 
   # AGING -- the blended curve, adopted 2026-07-29.
   aging = "aging.rds",
