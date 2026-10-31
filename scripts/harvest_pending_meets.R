@@ -126,9 +126,19 @@ if (length(forced)) {
     cli_alert_warning("Could not list {TAG} ({conditionMessage(e)}); already-staged meets will be re-fetched.")
     character(0)
   })
+  # EXCEPT recent meets. The calendar gives only start_date, so a multi-day meet
+  # can carry has_results after day 1 and be staged part-done; skipping it from
+  # then on would leave the append step a truncated file. Meets that started
+  # within REFRESH days are re-fetched every run, and the publish replaces the
+  # staged copy with the fuller one.
+  REFRESH <- as.integer(Sys.getenv("CITIUS_HARVEST_REFRESH_DAYS", "7"))
+  if (is.na(REFRESH) || REFRESH < 0L) {
+    cli_abort("CITIUS_HARVEST_REFRESH_DAYS must be a whole number of days, 0 or more.")
+  }
   if (length(staged_ids)) {
-    cli_alert_info("{TAG}: {length(staged_ids)} meet{?s} already staged, skipped")
-    done <- done[!cid %in% staged_ids]
+    settled <- done$cid %in% staged_ids & as.Date(done$start_date) < Sys.Date() - REFRESH
+    cli_alert_info("{TAG}: {sum(done$cid %in% staged_ids)} meet{?s} already staged; skipping {sum(settled)} that started over {REFRESH} days ago")
+    done <- done[!settled]
   }
   # meet_<id> is the name append_meet_to_championship_results.R looks for first
   # (RAW_F), so a staged calendar meet is picked up by its competition id with
