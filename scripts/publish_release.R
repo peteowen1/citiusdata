@@ -10,7 +10,8 @@
 #     read side:
 #         https://github.com/<repo>/releases/download/<tag>/<file>
 #     (torp/R/load_utils.R:252)
-#   * upload with piggyback::pb_upload(), then VERIFY -- torp/R/load_data.R
+#   * upload without deleting first (safe_release_upload(), a temp name then a
+#     swap: scripts/_safe_release_upload.R), then VERIFY -- torp/R/load_data.R
 #     deliberately re-checks after upload rather than trusting a 2xx, because a
 #     success code does not prove the asset is retrievable.
 #
@@ -35,6 +36,7 @@ suppressMessages({library(piggyback); library(data.table)})
 # for 56 s while an uncached read showed it at once. This script does nothing
 # else with gh, so turn the cache off for the whole run.
 options(gh_cache = FALSE)
+source(here::here("citiusdata", "scripts", "_safe_release_upload.R"))
 D <- here::here("citiusdata", "data")
 REPO <- "peteowen1/citiusdata"
 
@@ -140,7 +142,16 @@ for (a in todo) {
   p <- file.path(D, a$file)
   mb <- file.size(p) / 1048576
   cat(sprintf("uploading %-36s %7.1f MB -> %s ... ", a$file, mb, a$tag))
-  piggyback::pb_upload(p, repo = REPO, tag = a$tag, overwrite = TRUE)
+  # Never delete before replacing: upload under a temp name, confirm, swap
+  # (scripts/_safe_release_upload.R). An error leaves the published copy as it
+  # was; record it and let the verify below and the closing stop() report it.
+  up_err <- tryCatch({ safe_release_upload(p, repo = REPO, tag = a$tag); NULL },
+                     error = function(e) conditionMessage(e))
+  if (!is.null(up_err)) {
+    cat("FAILED -", up_err, "\n")
+    failed <- c(failed, a$file)
+    next
+  }
 
   # VERIFY WITH AN INDEPENDENT SOURCE. torp re-checks after upload because a
   # success code does not prove the asset is retrievable -- but the first
