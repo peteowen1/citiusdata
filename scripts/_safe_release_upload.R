@@ -116,7 +116,8 @@ safe_release_upload <- function(path, repo, tag, name = basename(path),
   }
   if (!ok) {
     stop("rename of ", tmp, " to ", name, " failed after the old asset was deleted; the data is on the release as ",
-         tmp, call. = FALSE)
+         tmp, ". Recover by renaming it: gh api -X PATCH repos/", repo, "/releases/assets/",
+         format(new_id, scientific = FALSE), " -f name=", name, call. = FALSE)
   }
   invisible(new_id)
 }
