@@ -20,6 +20,7 @@ library(data.table); library(jsonlite); library(arrow)
 # Model inputs come from DEPLOYED, never from literals here. See _deployed.R.
 source(here::here("citiusdata", "scripts", "_deployed.R"))
 source(here::here("citiusdata", "scripts", "_merge_guards.R"))
+source(here::here("citiusdata", "scripts", "_resolve_synthetic_ids.R"))
 
 OUT     <- here::here("citiusdata", "data")
 BLOG    <- here::here("citiusdata", "blog")
@@ -298,6 +299,11 @@ if (!is.null(swim_file)) {
 }
 
 pred <- rbindlist(list(fc, lv, rt), fill = TRUE)
+# Swimmers the model could not link to World Aquatics carry a synthetic
+# "CRS:<KEY>" id, which never equals the id their results carry -- so the blog's
+# roster (an exact athlete_id merge) listed one swimmer twice (citiusdata#23).
+# Rewrite those onto the results id where that is unambiguous; flag the rest.
+pred <- resolve_synthetic_ids(pred, results, key_fn = athlete_key)
 cli::cli_alert_info(
   "Predictions: forecast {nrow(fc)} row{?s}/{uniqueN(fc$event_id)} event{?s} from {.file {basename(locked)}}; live {if (is.null(lv)) 0L else nrow(lv)} row{?s}.")
 
