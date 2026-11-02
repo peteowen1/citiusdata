@@ -29,8 +29,12 @@ citius_display_name <- function(x) {
     # "All caps" = has at least one cased letter and no lowercase one. Initials
     # ("J.") and tokens with no letters ("{", "-") are returned as they came.
     caps <- toks == toupper(toks) & toks != tolower(toks)
-    toks[caps] <- gsub("(^|[-'’({])([[:alpha:]])", "\\1\\U\\2",
-                       tolower(toks[caps]), perl = TRUE)
+    # Upper-case the first letter and any after - ' ’ ( {. Not gsub's "\\U":
+    # on Windows R it leaves non-ASCII letters alone ("ÖZKAN" -> "özkan").
+    low <- enc2utf8(tolower(toks[caps]))
+    m <- gregexpr("(?<=^|[-'’({])\\p{L}", low, perl = TRUE)
+    regmatches(low, m) <- lapply(regmatches(low, m), toupper)
+    toks[caps] <- low
     paste(toks, collapse = " ")
   }
   vapply(x, one, character(1), USE.NAMES = FALSE)

@@ -11,7 +11,7 @@ chk(citius_display_name("Ky Robinson"), "Ky Robinson")
 # multi-part surname with the capitals in the middle: kept in place, not reordered
 chk(citius_display_name("Wissy Franck HOYE YENDA Moukoula"), "Wissy Franck Hoye Yenda Moukoula")
 chk(citius_display_name("Md Nazul Putera FAEIZ Firdaous"), "Md Nazul Putera Faeiz Firdaous")
-chk(citius_display_name("Claude Emmanuel ITOUNGUE Bogognie"), "Claude Emmanuel Itougue Bogognie")
+chk(citius_display_name("Claude Emmanuel ITOUNGUE Bogognie"), "Claude Emmanuel Itoungue Bogognie")
 # surname first, hyphen, apostrophe, accents
 chk(citius_display_name("SMITH-JONES Anna"), "Smith-Jones Anna")
 chk(citius_display_name("Sean O'BRIEN"), "Sean O'Brien")

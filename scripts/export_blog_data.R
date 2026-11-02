@@ -880,6 +880,10 @@ cli::cli_alert_info(
 # is kept in a second column.
 pred[, athlete_raw := athlete][, athlete := citius_display_name(athlete)]
 results[, athlete_name_raw := athlete_name][, athlete_name := citius_display_name(athlete_name)]
+# The athlete page reads these two as well, so they get the same form; their
+# column lists (HIST_COLS, RATING_COLS) stay as they are, with no raw copy.
+hist[, athlete_name := citius_display_name(athlete_name)]
+ratings[, athlete_name := citius_display_name(athlete_name)]
 
 pred[, generated_at_export := NOW]
 results[, generated_at := NOW]
