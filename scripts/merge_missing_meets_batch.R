@@ -21,8 +21,8 @@
 #     by hand because only that one was read.
 #
 #   Catching up from pending-harvest is then:
-#     gh release download pending-harvest --repo peteowen1/citiusdata #       --pattern 'meet_*_raw_results.rds' --dir citiusdata/data
-#     ls citiusdata/data/meet_*_raw_results.rds | sed 's|.*/meet_||; s|_raw.*||' #       > citiusdata/data/pending_ids.txt
+#     gh release download pending-harvest --repo peteowen1/citiusdata --pattern 'meet_*_raw_results.rds' --dir citiusdata/data
+#     ls citiusdata/data/meet_*_raw_results.rds | sed 's|.*/meet_||; s|_raw.*||' > citiusdata/data/pending_ids.txt
 #     Rscript citiusdata/scripts/merge_missing_meets_batch.R pending_ids.txt
 #   CITIUS_MERGE_DRYRUN=1 to validate and report without writing anything.
 #   CITIUS_MERGE_SKIP_CHAIN=1 to append + sync DuckDB only, skip the
@@ -45,6 +45,9 @@ ids <- trimws(readLines(file.path(D, IDS_FILE)))
 ids <- sub("^meet_", "", ids[nzchar(ids)])
 bad <- ids[is.na(suppressWarnings(as.integer(ids)))]
 if (length(bad)) cli::cli_abort("{length(bad)} line{?s} in {IDS_FILE} {?is/are} not a competition_id: {.val {head(bad, 5)}}")
+# One id per competition: "5" and "meet_5" in the same list would otherwise
+# map that meet twice, and the overlap check below only compares against the store.
+ids <- unique(as.character(as.integer(ids)))
 say("target: %s competition_ids", format(length(ids), big.mark = ","))
 
 # --- what championship_results.rds already holds ----------------------------
