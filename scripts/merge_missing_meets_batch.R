@@ -11,7 +11,19 @@
 #
 # Usage:
 #   Rscript citiusdata/scripts/merge_missing_meets_batch.R <ids_file>
-#   <ids_file>: one competition_id per line (LF or CRLF, either is fine).
+#   <ids_file>: one competition_id per line (LF or CRLF, either is fine), in
+#     citiusdata/data/. A `meet_` prefix is accepted and stripped, so a list
+#     made from the pending-harvest asset names works as it is.
+#   Raw files are read from citiusdata/data/ as <id>_raw_results.rds (the
+#     local harvest name) or, failing that, meet_<id>_raw_results.rds (the
+#     name harvest_pending_meets.R stages to the pending-harvest release).
+#     2026-11-07: the 77 staged meets had to be copied under the first name
+#     by hand because only that one was read.
+#
+#   Catching up from pending-harvest is then:
+#     gh release download pending-harvest --repo peteowen1/citiusdata #       --pattern 'meet_*_raw_results.rds' --dir citiusdata/data
+#     ls citiusdata/data/meet_*_raw_results.rds | sed 's|.*/meet_||; s|_raw.*||' #       > citiusdata/data/pending_ids.txt
+#     Rscript citiusdata/scripts/merge_missing_meets_batch.R pending_ids.txt
 #   CITIUS_MERGE_DRYRUN=1 to validate and report without writing anything.
 #   CITIUS_MERGE_SKIP_CHAIN=1 to append + sync DuckDB only, skip the
 #     corpus/catalogue/store rebuild (e.g. to batch several merges).
@@ -30,7 +42,9 @@ SKIP_CHAIN <- nzchar(Sys.getenv("CITIUS_MERGE_SKIP_CHAIN", ""))
 source(file.path(VERSE, "citiusdata", "scripts", "_map_harvest_to_championship.R"))
 
 ids <- trimws(readLines(file.path(D, IDS_FILE)))
-ids <- ids[nzchar(ids)]
+ids <- sub("^meet_", "", ids[nzchar(ids)])
+bad <- ids[is.na(suppressWarnings(as.integer(ids)))]
+if (length(bad)) cli::cli_abort("{length(bad)} line{?s} in {IDS_FILE} {?is/are} not a competition_id: {.val {head(bad, 5)}}")
 say("target: %s competition_ids", format(length(ids), big.mark = ","))
 
 # --- what championship_results.rds already holds ----------------------------
@@ -56,6 +70,7 @@ mapped <- vector("list", length(ids))
 for (i in seq_along(ids)) {
   cid <- ids[i]
   f <- file.path(D, paste0(cid, "_raw_results.rds"))
+  if (!file.exists(f)) f <- file.path(D, paste0("meet_", cid, "_raw_results.rds"))
   if (!file.exists(f)) { missing_files <- c(missing_files, cid); next }
   h <- tryCatch(as.data.table(readRDS(f)), error = function(e) NULL)
   if (is.null(h) || !nrow(h)) { next }  # a genuinely empty meet is not an error
