@@ -1018,6 +1018,7 @@ MEMO_F <- file.path(BLOG, ".uploaded_md5.json")
 MEMO <- if (file.exists(MEMO_F)) fromJSON(MEMO_F) else list()
 FORCE <- nzchar(Sys.getenv("CITIUS_FORCE_UPLOAD"))
 n_skipped <- 0L
+SENT <- character(0)  # files actually put this run (not skipped as unchanged)
 upload <- function(f) {
   key <- sprintf("%s/%s/%s", BUCKET, PREFIX, f)
   md5 <- if (!is.null(CONTENT[[f]])) CONTENT[[f]] else unname(tools::md5sum(file.path(BLOG, f)))
@@ -1028,7 +1029,7 @@ upload <- function(f) {
             "--cache-control", shQuote("public, max-age=300"), "--remote")
   st <- suppressWarnings(system2("wrangler", args, stdout = TRUE, stderr = TRUE))
   ok <- is.null(attr(st, "status")) || attr(st, "status") == 0
-  if (ok) { cli::cli_alert_success("uploaded {key}"); MEMO[[key]] <<- md5 }
+  if (ok) { cli::cli_alert_success("uploaded {key}"); MEMO[[key]] <<- md5; SENT <<- c(SENT, f) }
   else cli::cli_alert_danger("FAILED {key}: {paste(tail(st, 3), collapse = ' ')}")
   ok
 }
@@ -1046,6 +1047,38 @@ if (nzchar(Sys.getenv("CITIUS_SKIP_UPLOAD"))) {
   # After the manifest, so a history failure cannot hold back the card.
   for (hf in hist_files) {
     if (!upload(hf)) cli::cli_alert_warning("{hf}: upload failed - the history on R2 is one version behind until the next publish that changes the card.")
+  }
+  # Cross-verse dated history (citius#32): one new file per publish on the
+  # citiusdata `predictions-history` release, in the shared long shape
+  # (verse/event/market/selection/probability/published_utc/model_version) that
+  # torp and bouncer write, so one scorer can read every verse. A card goes in
+  # only if it was sent this run AND the R2 history above found its content
+  # changed (it is in hist_files). SENT alone is not enough: on the runner the
+  # upload memo (blog/, gitignored, never restored) starts empty, so every card
+  # is "sent" on every run and three identical files a day would stack up.
+  # After the live upload and NON-FATAL, like the R2 history above.
+  # CITIUS_SKIP_HISTORY=1 skips it.
+  changed_cards <- sub("-history[.]parquet$", ".parquet",
+                       grep("-predictions-history[.]parquet$", hist_files, value = TRUE))
+  sent_cards <- intersect(grep("-predictions[.]parquet$", SENT, value = TRUE), changed_cards)
+  if (length(sent_cards) && !nzchar(Sys.getenv("CITIUS_SKIP_HISTORY"))) {
+    tryCatch({
+      # A card that fails its checks is left out with a warning; the others go in.
+      long <- rbindlist(lapply(sent_cards, function(nm) tryCatch(
+        card_history_rows(artefacts[[nm]], sub("-predictions[.]parquet$", "", nm)),
+        error = function(e) {
+          cli::cli_alert_warning("predictions-history: {nm} left out ({conditionMessage(e)})")
+          NULL
+        })))
+      if (!nrow(long)) stop("no card passed its checks")
+      mv <- paste0("citius ", read.dcf(file.path(VERSE, "citius", "DESCRIPTION"), fields = "Version")[1, 1])
+      nm_hist <- publish_prediction_history(long, repo = "peteowen1/citiusdata", model_version = mv)
+      cli::cli_alert_success("predictions-history: {.val {nm_hist}}, {nrow(long)} rows from {length(sent_cards)} card{?s}")
+    }, error = function(e) {
+      cli::cli_alert_warning("predictions-history NOT written ({conditionMessage(e)}); the cards themselves published.")
+    })
+  } else if (!length(sent_cards)) {
+    cli::cli_alert_info("predictions-history: no card both changed and sent this run, nothing to add.")
   }
   write_json(MEMO, MEMO_F, auto_unbox = TRUE)
   cli::cli_alert_info("uploads: {length(artefacts) + length(extra_files) + length(hist_files) + 1L - n_skipped} sent, {n_skipped} unchanged and skipped.")

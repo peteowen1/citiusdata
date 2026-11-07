@@ -55,6 +55,11 @@ jobs:
   forecast:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # contents: write so export_athletics_blog.R can add the dated
+    # predictions-history file to this repo's release (citius#32). The repo's
+    # default token is read-only.
+    permissions:
+      contents: write
 
     steps:
       # The scripts resolve paths as VERSE/citius and VERSE/citiusdata via
@@ -177,6 +182,9 @@ jobs:
           # reads both from the environment.
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # The release upload of the dated predictions history (citius#32):
+          # gh::gh_token() reads GITHUB_PAT, not GH_TOKEN.
+          GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
           # NO CITIUS_WA_GRAPHQL_KEY HERE, DELIBERATELY. The Budapest fetch
           # discovers the World Athletics edge and key fresh from the public
           # Next.js bundle on every run (discover_wa_endpoint.R, ~3s), because
