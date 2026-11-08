@@ -1,3 +1,5 @@
 athlete_name,nation,source
 Simon Koech,KEN,"glasgow2026_entries.json lists him as ""Simon Kiprop KOECH"" (KEN); the results feed drops the middle name"
 Megan Simmonds,JAM,"Not on the entry list. Jamaica Observer 2026-07-30 and Jamaica Gleaner 2026-07-31 report her as Jamaica's 100m hurdles finalist and silver medallist"
+Kate O'Connor,NIR,"glasgow2026_entries.json lists her as ""Katherine O'CONNOR"" (NIR) in the heptathlon; the results feed shortens the first name (added 2026-11-08: missing since 2026-10-26, it stopped the daily ratings export for 14 days)"
+Favour Ashe,NGR,"glasgow2026_entries.json lists him as ""Favour Oghene Tejiri ASHE"" (NGR); the results feed drops the middle names (added 2026-11-08, same fault)"
