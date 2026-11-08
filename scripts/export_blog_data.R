@@ -702,6 +702,59 @@ RATING_TOP_N <- 150L
 setorder(ratings, event_id, -ability)
 ratings <- ratings[, head(.SD, RATING_TOP_N), by = event_id]
 
+# --- medal forecast (citius#5, DECIDED 2026-11-08, citiusverse DECISIONS) -----
+# For each event, today's best athletes go into ONE simulated final the same
+# size as that event's Paris 2024 final (Tokyo 2025 for the 35 km walks): 8 in
+# sprints/hurdles/800, 12 in the 1500m and field events, ~80 in the marathon.
+# p_gold sums to 1 and p_medal to 3 per event; athletes outside the final get
+# NA and the site shows nothing for them. The simulation is the package's own
+# simulate_event() + medal_probs() with a championship-final context, never
+# re-implemented here (the reason this was kept out of the export until now).
+# Final sizes come from data/medal_reference_fields.parquet (only its counts).
+# A missing file leaves both columns NA with a warning rather than failing the
+# whole page. Chances are comparable within an event, not across events: an
+# 80-runner marathon is flatter than an 8-runner sprint by construction.
+MEDAL_N_SIMS <- 10000L
+MEDAL_REF_F <- file.path(OUT, "medal_reference_fields.parquet")
+ratings[, `:=`(p_gold = NA_real_, p_medal = NA_real_, medal_final_size = NA_integer_)]
+if (!file.exists(MEDAL_REF_F)) {
+  cli::cli_alert_warning("{.file {basename(MEDAL_REF_F)}} missing: medal forecast columns left empty.")
+} else {
+  medal_sizes <- read_parquet(MEDAL_REF_F, col_select = "event_id")
+  medal_sizes <- as.data.table(medal_sizes)[, .(size_final = .N), by = event_id]
+  medal_done <- 0L
+  for (ev_m in intersect(medal_sizes$event_id, unique(ratings$event_id))) {
+    # size_final, not n: deployed_ability() returns a column called n, which
+    # would shadow it inside data.table brackets.
+    size_final <- medal_sizes[event_id == ev_m, size_final]
+    field <- head(ratings[event_id == ev_m & is.finite(ability) & is.finite(sigma)][order(-ability)], size_final)
+    if (nrow(field) < 4L) next
+    sim <- simulate_event(field, n_sims = MEDAL_N_SIMS, calibration = calibration,
+                          context = list(meet_tier = "M1", round_class = "final"), seed = 1L)
+    mp <- as.data.table(medal_probs(sim))[, .(athlete_id = as.character(athlete_id), p_gold, p_medal)]
+    # The sums are the whole point of the column: check them, don't assume.
+    # A bad event is left blank with a warning, never allowed to stop the
+    # 07:30 page build: a hard stop here would freeze the whole ratings page.
+    if (abs(sum(mp$p_gold) - 1) > 1e-6 || abs(sum(mp$p_medal) - min(3, nrow(mp))) > 1e-6) {
+      cli::cli_alert_warning("Medal forecast for {ev_m} left empty: gold sums to {sum(mp$p_gold)}, medals to {sum(mp$p_medal)}.")
+      next
+    }
+    idx <- which(ratings$event_id == ev_m)
+    hit <- match(ratings$athlete_id[idx], mp$athlete_id)
+    rows <- idx[!is.na(hit)]
+    if (length(rows) != nrow(mp)) {
+      cli::cli_alert_warning("Medal forecast for {ev_m} left empty: {nrow(mp)} simulated, {length(rows)} matched back to the ratings.")
+      next
+    }
+    set(ratings, i = rows, j = "p_gold", value = mp$p_gold[hit[!is.na(hit)]])
+    set(ratings, i = rows, j = "p_medal", value = mp$p_medal[hit[!is.na(hit)]])
+    set(ratings, i = rows, j = "medal_final_size", value = as.integer(size_final))
+    medal_done <- medal_done + 1L
+  }
+  cli::cli_alert_info(
+    "Medal forecast: {medal_done} event{?s} simulated ({MEDAL_N_SIMS} runs each); {sum(!is.na(ratings$p_medal))} rated athletes carry a chance.")
+}
+
 # NAMES COME FROM A SOURCE THAT HAS THEM.
 #
 # This read `clean_all` directly, which was right while the page was built on
@@ -863,7 +916,9 @@ cli::cli_alert_info(
 RATING_COLS <- c("athlete_id", "athlete_name", "event_id", "sport", "discipline", "sex",
                  "ability", "ability_se", "z", "pct_best", "pct_wr", "pred_mark",
                  "mark_unit", "latest_mark", "latest_date", "sb_mark", "pb_mark",
-                 "n", "w_total", "n_event", "last_date")
+                 "n", "w_total", "n_event", "last_date",
+                 # medal forecast (citius#5): NA outside each event's simulated final
+                 "p_gold", "p_medal", "medal_final_size")
 for (nm in setdiff(RATING_COLS, names(ratings))) ratings[, (nm) := NA]
 ratings <- ratings[, ..RATING_COLS]
 ratings[, `:=`(as_of = AS_OF, generated_at = NOW)]
