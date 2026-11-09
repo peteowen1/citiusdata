@@ -652,6 +652,55 @@ if (THIN_RECORD) {
   cli::cli_alert_info(
     "Thin-record arm ON for {length(THIN_EVENTS)} events: half-life x{THIN_HL_MULT}, offsets {.path {basename(THIN_OFFSETS_FILE)}} ({nrow(THIN_OFFSETS)} buckets).")
 }
+
+# THIN-RECORD BLEND ARM ("version E", Pete 2026-11-09). For THIN_EVENTS only:
+#   rating = a * R + (1 - a) * L,   a = wR / (wR + TB_MR * kR)
+# R = recent level (refit with every half-life x TB_HR), wR its total result weight,
+# kR its fitted kappa; L = own long record (refit with half-life TB_H days). No floor
+# term: tuned on R1 racers (diagnostics/tune_thin_record_E_R1.R, RACED_ONLY=1) the
+# floor's pull came out at 0 (b = 0). Availability is a ratings-page status, not
+# part of this number. Same placement as the thin-record arm; mutually exclusive.
+THIN_BLEND <- identical(Sys.getenv("CITIUS_THIN_BLEND", "0"), "1")
+TB_HR <- as.numeric(Sys.getenv("CITIUS_TB_HR", "2"))
+TB_MR <- as.numeric(Sys.getenv("CITIUS_TB_MR", "0.5"))
+TB_H  <- as.numeric(Sys.getenv("CITIUS_TB_H", "365"))
+if (THIN_BLEND) {
+  if (THIN_RECORD) cli::cli_abort("{.envvar CITIUS_THIN_BLEND} and {.envvar CITIUS_THIN_RECORD} are both on.")
+  if (!all(is.finite(c(TB_HR, TB_MR, TB_H))) || any(c(TB_HR, TB_MR, TB_H) <= 0))
+    cli::cli_abort("CITIUS_TB_HR / _MR / _H must be positive numbers.")
+  if (nzchar(HL_BY_FAMILY) && is.null(EVENT_PARAMS)) cli::cli_abort(
+    "{.envvar CITIUS_THIN_BLEND} supports the single-call ability path only; set {.envvar CITIUS_EVENT_PARAMS}.")
+  cli::cli_alert_info(
+    "Thin-record BLEND arm ON for {length(THIN_EVENTS)} events: recent half-life x{TB_HR}, kappa_R x{TB_MR}, long half-life {TB_H} d, no floor.")
+}
+
+# One refit for the thin-record arms, restricted to `ids` and THIN_EVENTS history.
+# MIRRORS the single-call estimate_ability() in run_meet(); only the half-life
+# changes (x hl_mult, or a flat hl_days). Keep the two in step. Exported to
+# workers by name (export_vars); every free variable it reads is exported too.
+thin_refit <- function(past_x, cut_date, ids, hl_mult = 1, hl_days = NA_real_) {
+  hl <- if (is.null(EVENT_PARAMS)) {
+    if (is.finite(hl_days)) hl_days else half_life * hl_mult
+  } else {
+    ep <- data.table::copy(EVENT_PARAMS)[, .(event_id, family, half_life)]
+    if (is.finite(hl_days)) ep[event_id %in% THIN_EVENTS, half_life := hl_days]
+    else ep[, half_life := half_life * hl_mult]
+    ep
+  }
+  estimate_ability(past_x, as_of = cut_date, half_life = hl,
+                   races_half_life = if (is.null(EVENT_PARAMS)) RACES_HALF_LIFE else
+                     EVENT_PARAMS[, .(event_id, family, races_half_life)],
+                   context_scale = if (is.null(EVENT_PARAMS)) 1 else
+                     EVENT_PARAMS[, .(event_id, family, context_scale)],
+                   trim_tactical = if (is.null(EVENT_PARAMS)) 0.25 else
+                     EVENT_PARAMS[, .(event_id, family, trim_tactical)],
+                   calibration = calibration, adjust_context = ADJUST_CONTEXT,
+                   adjust_race = ADJUST_RACE, sigma_mode = SIGMA_MODE, sigma_parts = SIGMA_PARTS,
+                   only = ids, sigma_k = SIGMA_K,
+                   peak_gamma = if (is.null(EVENT_PARAMS) || !"peak_gamma" %in% names(EVENT_PARAMS))
+                     PEAK_GAMMA else EVENT_PARAMS[, .(event_id, family, peak_gamma)],
+                   robust_location = ROBUST_LOCATION, decouple_peak = DECOUPLE_PEAK)
+}
 # One reference per calendar year of `cut_date`, read the SAME way `past` is
 # read a few hundred lines below (partitioned store when available, same
 # HISTORY_DAYS window -- so the population `ability_raw` is measured against
@@ -1290,7 +1339,11 @@ arm_fingerprint <- list(
   # rewrites it in place). Excluded from the ability-cache key (ABIL_EXCLUDE):
   # it is applied after the cache write, so this arm shares its control's cache.
   thin_record = THIN_RECORD,
-  thin_record_md5 = if (THIN_RECORD) md5_of(basename(THIN_OFFSETS_FILE)) else NA_character_)
+  thin_record_md5 = if (THIN_RECORD) md5_of(basename(THIN_OFFSETS_FILE)) else NA_character_,
+  # Thin-record blend arm (version E): its settings, NA when off so every
+  # existing control keeps its key. Excluded from the ability-cache key too.
+  thin_blend = THIN_BLEND,
+  thin_blend_par = if (THIN_BLEND) sprintf("hr=%g,mR=%g,H=%g", TB_HR, TB_MR, TB_H) else NA_character_)
 
 # A cache that predates this check is stamped by the first run after it, which
 # is the best that can be done retrospectively -- an existing directory carries
@@ -1433,7 +1486,7 @@ if (nrow(pool) > TARGET) pool <- pool[round(seq(1, .N, length.out = TARGET))]
 # exists, which is what makes a marks-only arm and its full-simulation twin share
 # one cache -- the case that motivated this.
 ABIL_EXCLUDE <- c("n_sims", "marks_only", "project_tier", "project_round", "spread_scale",
-                  "thin_record", "thin_record_md5")
+                  "thin_record", "thin_record_md5", "thin_blend", "thin_blend_par")
 ABIL_KEY <- substr(digest::digest(
   arm_fingerprint[setdiff(names(arm_fingerprint), ABIL_EXCLUDE)], algo = "md5"), 1, 16)
 ABIL_DIR <- file.path(OUT, "ability_cache", ABIL_KEY)
@@ -1961,6 +2014,38 @@ run_meet <- function(i) {
       ability <- data.table::copy(ability)
       ability[.thin_in, ability := .part$ability]
       rm(.long, .part, .thin_past)
+    }
+  }
+  # Thin-record BLEND arm (version E, flag definition above). Writes back only
+  # the `ability` column of the in-scope rows, in place, row order kept: the
+  # key table below is built FROM ability[.tb_in] and the joins are X[i] (rows in
+  # i's order). A row missing either refit keeps its old ability, counted.
+  if (THIN_BLEND && nrow(ability) && any(ability$event_id %in% THIN_EVENTS)) {
+    .tb_in <- ability$event_id %in% THIN_EVENTS
+    .tb_ids <- unique(as.character(ability$athlete_id[.tb_in]))
+    .tb_past <- past[event_id %in% THIN_EVENTS]
+    if (length(.tb_ids) && nrow(.tb_past)) {
+      .rec <- tick("ability", thin_refit(.tb_past, cut_date, .tb_ids, hl_mult = TB_HR))
+      .lng <- tick("ability", thin_refit(.tb_past, cut_date, .tb_ids, hl_days = TB_H))
+      .key <- ability[.tb_in, .(athlete_id = as.character(athlete_id), event_id, old = ability)]
+      .rr <- .rec[, .(athlete_id = as.character(athlete_id), event_id, R = ability_raw, wR = w_total,
+                      kR = shrinkage * w_total / (1 - shrinkage))]
+      .ll <- .lng[, .(athlete_id = as.character(athlete_id), event_id, L = ability_raw)]
+      .key <- .rr[.key, on = c("athlete_id", "event_id")]
+      .key <- .ll[.key, on = c("athlete_id", "event_id")]
+      if (nrow(.key) != sum(.tb_in) ||
+          !identical(.key$athlete_id, as.character(ability$athlete_id[.tb_in])))
+        stop("thin-record blend arm: refit rows no longer line up with the ability table.")
+      .key[, a := wR / (wR + TB_MR * kR)]
+      .key[, new := a * R + (1 - a) * L]
+      .tb_miss <- .key[!is.finite(new), .N]
+      if (.tb_miss) .key[!is.finite(new), new := old]
+      if (.tb_miss > 0.05 * nrow(.key)) message(sprintf(
+        "thin-record blend: %d of %d in-scope rows kept their old ability (no refit value) at meet %s",
+        .tb_miss, nrow(.key), cid))
+      ability <- data.table::copy(ability)
+      ability[.tb_in, ability := .key$new]
+      rm(.rec, .lng, .key, .rr, .ll, .tb_past)
     }
   }
 
@@ -2518,6 +2603,8 @@ if (N_WORKERS > 1L) {
   # Thin-record arm: run_meet() reads THIN_RECORD on every worker whatever its
   # value, so all four go unconditionally (the trap above, sixth candidate).
   export_vars <- c(export_vars, "THIN_RECORD", "THIN_EVENTS", "THIN_HL_MULT", "THIN_OFFSETS")
+  # Blend arm: read on every worker whatever its value (the same trap).
+  export_vars <- c(export_vars, "THIN_BLEND", "TB_HR", "TB_MR", "TB_H", "thin_refit")
   # Same TIER_SHRINK trap, same day: run_meet() calls family_pool_offset(),
   # whose closure reads `.fp`/`.fp_fs_by_event` from this script's top-level
   # environment. clusterExport() re-homes an exported function's environment

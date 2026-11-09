@@ -45,6 +45,12 @@ for (cu in sort(unique(r$cut))) {
   pm <- h[date < cu & date >= cu - 365, .(m = mean(perf)), by = .(athlete_id, event_id)]
   pm <- ages[pm, on = "athlete_id", nomatch = NULL]
   fl <- med_age(pm, "m"); setnames(fl, c("n", "med"), c("n_floor", "floor_r1"))
+  # Event-level R1 floors (Pete 2026-11-09: "80th pctile of R1 marks as replacement"),
+  # from R1 MARKS in the 12 months before the cut, no age: perf = -log(mark), so the
+  # mark faster than 80% of R1 marks is the 0.8 quantile of perf.
+  fq <- h[date < cu & date >= cu - 365, .(floor_fast = quantile(perf, 0.8), floor_mid = quantile(perf, 0.5),
+                                          floor_slow = quantile(perf, 0.2)), by = event_id]
+  d <- fq[d, on = "event_id"]
   nx <- h[date >= cu & date < cu + 365, .(t_mean = mean(perf), t_n = .N), by = .(athlete_id, event_id)]
   d <- nx[d, on = c("athlete_id", "event_id")][is.na(t_n), t_n := 0L]
   rp <- med_age(d[t_n > 0 & !is.na(a0), .(event_id, a0, t_mean)], "t_mean"); setnames(rp, c("n", "med"), c("n_rep", "rep_r1"))
@@ -54,36 +60,48 @@ for (cu in sort(unique(r$cut))) {
 }
 r <- rbindlist(out, fill = TRUE)
 n0 <- nrow(r); r <- r[!is.na(target_r1)]
+# RACED_ONLY=1: ABILITY question only -- keep athletes who DID race R1 in the window
+# (Pete, 2026-11-09). Every no-show-scored version tuned availability instead and
+# made racers worse; availability goes on the ratings page as its own status.
+RACED_ONLY <- identical(Sys.getenv("RACED_ONLY"), "1")
+if (RACED_ONLY) { r <- r[t_n > 0]; cat("RACED_ONLY: athletes with >= 1 R1 race in the next 12 months\n") }
 cat(sprintf("R1 population rows %d; dropped %d (no-show with no age or thin age group)\n", n0, n0 - nrow(r)))
 nf <- r[is.na(floor_r1), .N]; r[is.na(floor_r1), floor_r1 := prior_mu]
 cat(sprintf("floor fell back to the event mean on %d rows (%.1f%%)\n", nf, 100 * nf / nrow(r)))
-HR <- c(0.5, 1, 2); HL <- c(180, 365, 540, 730)
+HR <- c(0.5, 1, 2, 3, 4); HR <- HR[paste0("R_", HR) %in% names(r)]; HL <- c(180, 365, 540, 730)
+FL <- c("floor_r1", "floor_fast", "floor_mid", "floor_slow")
+cat("recent half-life multipliers available:", paste(HR, collapse = ", "), "
+")
 r <- r[complete.cases(r[, c(paste0("long_", HL), paste0("R_", HR)), with = FALSE])]
 r[, fit_set := year(cut) == 2024]
 cat(sprintf("fit 2024 %d rows (no R1 race next 12m %.1f%%); verdict 2025 %d rows (%.1f%%)\n",
             r[fit_set == TRUE, .N], 100 * r[fit_set == TRUE, mean(t_n == 0)],
             r[fit_set == FALSE, .N], 100 * r[fit_set == FALSE, mean(t_n == 0)]))
 
-predE <- function(x, hr, mR, H, m) {
+predE <- function(x, hr, mR, H, m, fl = "floor_r1") {
   wr <- x[[paste0("wR_", hr)]]; kr <- mR * x[[paste0("kR_", hr)]]; a <- wr / (wr + kr)
   wl <- x[[paste0("wL_", H)]]; kl <- m * x[[paste0("kL_", H)]]; sl <- kl / (wl + kl)
-  a * x[[paste0("R_", hr)]] + (1 - a) * ((1 - sl) * x[[paste0("long_", H)]] + sl * x$floor_r1)
+  a * x[[paste0("R_", hr)]] + (1 - a) * ((1 - sl) * x[[paste0("long_", H)]] + sl * x[[fl]])
 }
 mae <- function(p, y) 100 * mean(abs(y - p))
 fit <- r[fit_set == TRUE]
-grid <- CJ(hr = HR, mR = c(0.25, 0.5, 1, 2, 4, 8), H = HL, m = c(0.25, 0.5, 1, 2, 4, 8, 16, 32, 64))
-grid[, fit_mae := mapply(function(hr, mR, H, m) { p <- predE(fit, hr, mR, H, m); mae(p + median(fit$target_r1 - p), fit$target_r1) },
-                         hr, mR, H, m)]
+grid <- CJ(fl = FL, hr = HR, mR = c(0.03125, 0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8), H = HL, m = c(0, 0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64))
+grid[, fit_mae := mapply(function(fl, hr, mR, H, m) { p <- predE(fit, hr, mR, H, m, fl); mae(p + median(fit$target_r1 - p), fit$target_r1) },
+                         fl, hr, mR, H, m)]
+cat("
+Best setting per floor (2024 fit MAE %):
+"); print(grid[, .SD[which.min(fit_mae)], by = fl][, fit_mae := round(fit_mae, 4)])
 best <- grid[which.min(fit_mae)]
 cat("\nTUNING ON 2024, R1 (marks MAE % vs R1 12-month target incl. no-shows, level-corrected; lower is better).\n")
 cat("Best 10 of", nrow(grid), "settings:\n"); print(grid[order(fit_mae)][1:10][, fit_mae := round(fit_mae, 4)])
-edge <- c(hr = best$hr %in% range(HR), mR = best$mR %in% c(0.25, 8), H = best$H %in% range(HL), m = best$m %in% c(0.25, 64))
+edge <- c(hr = best$hr == max(HR) || best$hr == min(HR), mR = best$mR %in% c(0.03125, 8), H = best$H %in% range(HL), m = best$m %in% c(0, 64))
 if (any(edge)) cat("!!! best setting is on the grid edge for:", names(edge)[edge], "\n")
 cat(sprintf("untuned (hr 1, mR 1, H 365, m 1) fit MAE: %.4f\n", grid[hr == 1 & mR == 1 & H == 365 & m == 1, fit_mae]))
 
 r[, base_A := ability]
 r[, base_U := predE(r, 1, 1, 365, 1)]
-r[, base_Ebest := predE(r, best$hr, best$mR, best$H, best$m)]
+r[, base_Ebest := predE(r, best$hr, best$mR, best$H, best$m, best$fl)]
+for (f in FL) { b <- grid[fl == f][which.min(fit_mae)]; r[, (paste0("base_F_", f)) := predE(r, b$hr, b$mR, b$H, b$m, f)] }
 fit <- r[fit_set == TRUE]
 for (b in grep("^base_", names(r), value = TRUE)) { c0 <- median(fit$target_r1 - fit[[b]]); r[, (sub("^base_", "pred_", b)) := get(b) + c0] }
 boot_gap <- function(x, p1, p2) {
@@ -93,7 +111,7 @@ boot_gap <- function(x, p1, p2) {
 }
 V <- r[fit_set == FALSE]
 cat("\nVERDICT, 2025 cuts, R1. MAE % vs target (lower is better). gap = MAE(A) - MAE(arm), 95% CI by athlete; > 0 = beats deployed.\n")
-print(rbindlist(lapply(c("pred_A", "pred_U", "pred_Ebest"), function(p) {
+print(rbindlist(lapply(c("pred_A", "pred_U", "pred_Ebest", paste0("pred_F_", FL)), function(p) {
   ci <- if (p == "pred_A") c(NA, NA) else boot_gap(V, "pred_A", p)
   data.table(arm = sub("pred_", "", p), all = mae(V[[p]], V$target_r1), raced = mae(V[t_n > 0][[p]], V[t_n > 0]$target_r1),
              no_show = mae(V[t_n == 0][[p]], V[t_n == 0]$target_r1), gap_lo = ci[1], gap_hi = ci[2])
@@ -103,5 +121,5 @@ V[, away := cut(as.numeric(cut - last_date), c(-Inf, 60, 180, 365, Inf), c("<60d
 cat("\nBy time since last race (any level) at the cut, 2025, R1, MAE %:\n")
 print(V[, .(n = .N, no_r1_pct = round(100 * mean(t_n == 0), 1), A = round(mae(pred_A, target_r1), 3),
             U = round(mae(pred_U, target_r1), 3), Ebest = round(mae(pred_Ebest, target_r1), 3)), by = away][order(away)])
-fwrite(best, file.path(OUT, "flags", "tune_thin_record_E_R1_best.csv"))
+fwrite(best, file.path(OUT, "flags", if (RACED_ONLY) "tune_thin_record_E_R1_raced_best.csv" else "tune_thin_record_E_R1_best.csv"))
 cat("total time", format(Sys.time() - t0), "\n")
