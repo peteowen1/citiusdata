@@ -35,6 +35,11 @@ $env:CITIUS_BT_TIER        = "M1"
 $env:CITIUS_BT_MEETS       = "$CHUNK_MEETS"
 $env:CITIUS_BT_WORKERS     = "1"
 $env:CITIUS_BT_MARKS_ONLY  = "1"
+# The backtest's own preflight floor (7000 MB) refused the 2026-11-09 11:43pm
+# relaunch at 6906 MB while other sessions' jobs ran. Marks-only chunks peaked
+# well under that all evening, and Wait-ForMemory below already gates each chunk
+# at $MIN_AVAIL_MB, so the two floors are set equal.
+$env:CITIUS_BT_MIN_FREE_MB = "$MIN_AVAIL_MB"
 foreach ($v in "CITIUS_BT_ABILITY_CACHE", "CITIUS_BT_FAMILY_DEBIAS", "CITIUS_BT_SHOCK_ADDBACK",
                "CITIUS_BT_TRAIN_TIERS", "CITIUS_BT_NEIGHBOUR_COMBINE", "CITIUS_BT_NEIGHBOUR_TRANSFER",
                "CITIUS_SIGMA_SCALE", "CITIUS_MARKS_BLEND", "CITIUS_THIN_RECORD") {
