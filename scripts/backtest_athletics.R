@@ -623,6 +623,35 @@ if (NEIGHBOUR_COMBINE) {
   }
   NEIGHBOUR_LINK_CACHE[[yr]]
 }
+
+# THIN-RECORD ARM ("version C", Pete 2026-11-09). For the listed events only:
+# keep each athlete's shrinkage weight but pull towards their OWN long record
+# (ability_raw refitted with every half-life x THIN_HL_MULT) instead of the
+# event mean, then add the time-since-last-result offset from THIN_OFFSETS_FILE.
+# Same two steps as citius::apply_own_record_prior() + apply_gap_offsets(), and
+# as DEPLOYED$thin_record in _deployed.R. Measured first in
+# diagnostics/backtest_thin_record_prior.R (arm C). Applied AFTER the ability
+# cache is written, so the cache holds the unadjusted table and this arm reuses
+# its control's cached abilities (both fields are in ABIL_EXCLUDE below).
+THIN_RECORD <- identical(Sys.getenv("CITIUS_THIN_RECORD", "0"), "1")
+THIN_EVENTS <- c("AT-800Metres-M", "AT-800Metres-W", "AT-1500Metres-M", "AT-1500Metres-W",
+                 "AT-5000Metres-M", "AT-5000Metres-W")
+THIN_HL_MULT <- 5
+THIN_OFFSETS_FILE <- here::here("citiusdata", "data", "gap_offsets_middle_distance.csv")
+THIN_OFFSETS <- NULL
+if (THIN_RECORD) {
+  if (!file.exists(THIN_OFFSETS_FILE)) cli::cli_abort(c(
+    "{.envvar CITIUS_THIN_RECORD} is on but the offsets file is missing: {.path {THIN_OFFSETS_FILE}}.",
+    i = "Build it with {.code scripts/fit_gap_offsets.R}."))
+  THIN_OFFSETS <- data.table::fread(THIN_OFFSETS_FILE)[, .(gap, offset)]
+  # The long refit mirrors the SINGLE-CALL estimate_ability() branch in
+  # run_meet(); the per-family branch (CITIUS_HALF_LIFE_FAMILY without
+  # CITIUS_EVENT_PARAMS) has no mirror, so refuse rather than half-apply.
+  if (nzchar(HL_BY_FAMILY) && is.null(EVENT_PARAMS)) cli::cli_abort(
+    "{.envvar CITIUS_THIN_RECORD} supports the single-call ability path only; unset {.envvar CITIUS_HALF_LIFE_FAMILY} or set {.envvar CITIUS_EVENT_PARAMS}.")
+  cli::cli_alert_info(
+    "Thin-record arm ON for {length(THIN_EVENTS)} events: half-life x{THIN_HL_MULT}, offsets {.path {basename(THIN_OFFSETS_FILE)}} ({nrow(THIN_OFFSETS)} buckets).")
+}
 # One reference per calendar year of `cut_date`, read the SAME way `past` is
 # read a few hundred lines below (partitioned store when available, same
 # HISTORY_DAYS window -- so the population `ability_raw` is measured against
@@ -1256,7 +1285,12 @@ arm_fingerprint <- list(
   # makes. A run with a 5-year link window must not read back cached meets from
   # one fitted on 12 years.
   neighbour_link_days = if (NEIGHBOUR_COMBINE) NEIGHBOUR_LINK_DAYS else NA_integer_,
-  neighbour_link_athletes = if (NEIGHBOUR_COMBINE) NEIGHBOUR_LINK_ATHLETES else NA_integer_)
+  neighbour_link_athletes = if (NEIGHBOUR_COMBINE) NEIGHBOUR_LINK_ATHLETES else NA_integer_,
+  # Thin-record arm: the offsets file is hashed, not named (fit_gap_offsets.R
+  # rewrites it in place). Excluded from the ability-cache key (ABIL_EXCLUDE):
+  # it is applied after the cache write, so this arm shares its control's cache.
+  thin_record = THIN_RECORD,
+  thin_record_md5 = if (THIN_RECORD) md5_of(basename(THIN_OFFSETS_FILE)) else NA_character_)
 
 # A cache that predates this check is stamped by the first run after it, which
 # is the best that can be done retrospectively -- an existing directory carries
@@ -1398,7 +1432,8 @@ if (nrow(pool) > TARGET) pool <- pool[round(seq(1, .N, length.out = TARGET))]
 # The excluded four are simulation and projection settings applied AFTER ability
 # exists, which is what makes a marks-only arm and its full-simulation twin share
 # one cache -- the case that motivated this.
-ABIL_EXCLUDE <- c("n_sims", "marks_only", "project_tier", "project_round", "spread_scale")
+ABIL_EXCLUDE <- c("n_sims", "marks_only", "project_tier", "project_round", "spread_scale",
+                  "thin_record", "thin_record_md5")
 ABIL_KEY <- substr(digest::digest(
   arm_fingerprint[setdiff(names(arm_fingerprint), ABIL_EXCLUDE)], algo = "md5"), 1, 16)
 ABIL_DIR <- file.path(OUT, "ability_cache", ABIL_KEY)
@@ -1880,6 +1915,53 @@ run_meet <- function(i) {
   if (NEIGHBOUR_COMBINE && nrow(ability)) {
     ability <- tick("ability", combine_neighbour_ability(
       ability, links = .neighbour_links_for(cut_date)))
+  }
+  # Thin-record arm (flag definition above). The long refit MIRRORS the
+  # single-call estimate_ability() above with only the half-lives multiplied;
+  # keep the two in step. Restricted to THIN_EVENTS rows and their entrants,
+  # so it costs a fraction of the main fit. Row count is asserted unchanged.
+  if (THIN_RECORD && nrow(ability) && any(ability$event_id %in% THIN_EVENTS)) {
+    .thin_in <- ability$event_id %in% THIN_EVENTS
+    # Every athlete with an in-scope ROW, not only this meet's in-scope
+    # entrants: `ability` also carries other entrants' rows in these events,
+    # and the deployed switch adjusts all of them. Entrants-only left 471 of
+    # 686 rows unadjusted at one meet in the 2026-11-09 smoke run.
+    .thin_ids <- unique(as.character(ability$athlete_id[.thin_in]))
+    .thin_past <- past[event_id %in% THIN_EVENTS]
+    if (length(.thin_ids) && nrow(.thin_past)) {
+      .long <- tick("ability", estimate_ability(.thin_past, as_of = cut_date,
+                       half_life = if (is.null(EVENT_PARAMS)) half_life * THIN_HL_MULT else
+                         EVENT_PARAMS[, .(event_id, family, half_life = half_life * THIN_HL_MULT)],
+                       races_half_life = if (is.null(EVENT_PARAMS)) RACES_HALF_LIFE else
+                         EVENT_PARAMS[, .(event_id, family, races_half_life)],
+                       context_scale = if (is.null(EVENT_PARAMS)) 1 else
+                         EVENT_PARAMS[, .(event_id, family, context_scale)],
+                       trim_tactical = if (is.null(EVENT_PARAMS)) 0.25 else
+                         EVENT_PARAMS[, .(event_id, family, trim_tactical)],
+                       calibration = calibration,
+                       adjust_context = ADJUST_CONTEXT,
+                       adjust_race = ADJUST_RACE,
+                       sigma_mode = SIGMA_MODE,
+                       sigma_parts = SIGMA_PARTS,
+                       only = .thin_ids,
+                       sigma_k = SIGMA_K,
+                       peak_gamma = if (is.null(EVENT_PARAMS) || !"peak_gamma" %in% names(EVENT_PARAMS))
+                         PEAK_GAMMA else EVENT_PARAMS[, .(event_id, family, peak_gamma)],
+                       robust_location = ROBUST_LOCATION,
+                       decouple_peak = DECOUPLE_PEAK))
+      # Both helpers keep row order (copy + update-join), so the result lines
+      # up with ability[.thin_in] row for row; only `ability` is written back,
+      # leaving the table's shape and order exactly what every later step
+      # (aging, projection, debias, simulate) was written against.
+      .part <- apply_own_record_prior(ability[.thin_in], .long)
+      .part <- apply_gap_offsets(.part, cut_date, THIN_OFFSETS)
+      if (nrow(.part) != sum(.thin_in) ||
+          !identical(as.character(.part$athlete_id), as.character(ability$athlete_id[.thin_in])))
+        stop("thin-record arm: adjusted rows no longer line up with the ability table.")
+      ability <- data.table::copy(ability)
+      ability[.thin_in, ability := .part$ability]
+      rm(.long, .part, .thin_past)
+    }
   }
 
   # CHAMPIONSHIP OFFSET -- NOW GATED ON THE RACE ACTUALLY BEING A CHAMPIONSHIP.
@@ -2433,6 +2515,9 @@ if (N_WORKERS > 1L) {
   # workers died with "object 'ADJ_MARKS' not found" on the first real arm
   # after a one-worker smoke test had passed. NULL exports fine.
   export_vars <- c(export_vars, "ADJ_MARKS")
+  # Thin-record arm: run_meet() reads THIN_RECORD on every worker whatever its
+  # value, so all four go unconditionally (the trap above, sixth candidate).
+  export_vars <- c(export_vars, "THIN_RECORD", "THIN_EVENTS", "THIN_HL_MULT", "THIN_OFFSETS")
   # Same TIER_SHRINK trap, same day: run_meet() calls family_pool_offset(),
   # whose closure reads `.fp`/`.fp_fs_by_event` from this script's top-level
   # environment. clusterExport() re-homes an exported function's environment
