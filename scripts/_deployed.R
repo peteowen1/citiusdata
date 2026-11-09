@@ -466,7 +466,7 @@ DEPLOYED <- list(
   # (docs/plans/ratings-availability-2026-11-10.md): on its own it ranks athletes
   # unraced for 12 months at the top. Code: citius::apply_record_blend().
   thin_blend = list(
-    enabled = FALSE,  # Pete's go 2026-11-10, HELD: the site must sort by page_score and the medal-field rule must be settled first (the 07:30 'citius blog refresh' task runs this file)
+    enabled = FALSE,  # Pete's go 2026-11-10; verified locally (all checks pass); HELD until Pete says 'upload' (ITG PR #1181 merges first; the 07:30 'citius blog refresh' task runs this file)
     events = c("AT-800Metres-M", "AT-800Metres-W", "AT-1500Metres-M",
                "AT-1500Metres-W", "AT-5000Metres-M", "AT-5000Metres-W"),
     hr_mult = 2,
