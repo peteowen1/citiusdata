@@ -871,10 +871,18 @@ deployed_history_key <- function(past, dir = here::here("citiusdata", "data")) {
   files <- c(DEPLOYED$calibration, DEPLOYED$event_params, DEPLOYED$family_debias$file)
   files <- file.path(dir, files[!vapply(files, is.null, logical(1))])
   md5 <- unname(tools::md5sum(files[file.exists(files)]))
-  digest::digest(list(n = nrow(p), cols = cols,
-                      body = p[, cols, with = FALSE][order(athlete_id, event_id, date, perf)],
-                      inputs = md5, neighbour = DEPLOYED$neighbour_combine,
-                      adjust_race = DEPLOYED$adjust_race))
+  key <- list(n = nrow(p), cols = cols,
+              body = p[, cols, with = FALSE][order(athlete_id, event_id, date, perf)],
+              inputs = md5, neighbour = DEPLOYED$neighbour_combine,
+              adjust_race = DEPLOYED$adjust_race)
+  # Thin-record switch: in the key ONLY when on, so every snapshot written with
+  # it off stays valid, while turning it on (or refitting the offsets file,
+  # hashed because fit_gap_offsets.R rewrites it in place) forces a re-estimate
+  # instead of serving the old numbers. Review finding, 2026-11-09.
+  tr <- DEPLOYED$thin_record
+  if (isTRUE(tr$enabled))
+    key$thin_record <- list(tr, unname(tools::md5sum(file.path(dir, tr$gap_offsets))))
+  digest::digest(key)
 }
 
 #' deployed_ability(), or the snapshot of the last identical call.
