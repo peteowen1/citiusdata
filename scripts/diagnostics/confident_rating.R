@@ -45,6 +45,8 @@ scale <- sqrt(mean(fit$res^2 / s[fit_set == TRUE, sd_raw]^2))
 s[, sd := sd_raw * scale]
 cat(sprintf("rows: fit 2024 %d, check 2025 %d\n", s[fit_set == TRUE, .N], s[fit_set == FALSE, .N]))
 cat("model (log squared residual):\n"); print(round(coef(m), 4)); cat(sprintf("scale %.3f\n", scale))
+fwrite(data.table(term = c(names(coef(m)), "scale"), value = c(unname(coef(m)), scale)),
+       file.path(OUT, "flags", "confident_rating_sd_model.csv"))
 V <- s[fit_set == FALSE]
 V[, dec := cut(sd, unique(quantile(sd, 0:10 / 10)), include.lowest = TRUE, labels = FALSE)]
 cal <- V[, .(n = .N, predicted_sd_pct = round(100 * sqrt(mean(sd^2)), 3), observed_rms_pct = round(100 * sqrt(mean(res^2)), 3),
