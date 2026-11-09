@@ -411,8 +411,11 @@ if (nrow(finals)) {
   o <- finals[, .(race_id = event_id, athlete_id,
                   hit = place == 1L, hit_medal = place <= 3L)]
   # Only score races whose actual winner we predicted at all; otherwise this
-  # measures entry-list coverage rather than the model.
-  keep <- o[, .(ok = any(hit)), by = race_id][ok == TRUE]$race_id
+  # measures entry-list coverage rather than the model. Tested against the
+  # PREDICTIONS (p), not `o`: `o` comes from the results, so `any(hit)` is true
+  # for every final and excluded nothing (issue #60).
+  keep <- unique(o[hit == TRUE, .(race_id, athlete_id)][
+    p[, .(race_id, athlete_id)], on = .(race_id, athlete_id), nomatch = NULL]$race_id)
   card$races_scored <- length(keep)
   card$races_skipped_winner_absent <- length(setdiff(unique(finals$event_id), keep))
 
