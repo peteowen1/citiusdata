@@ -466,12 +466,31 @@ DEPLOYED <- list(
   # (docs/plans/ratings-availability-2026-11-10.md): on its own it ranks athletes
   # unraced for 12 months at the top. Code: citius::apply_record_blend().
   thin_blend = list(
-    enabled = FALSE,
+    enabled = FALSE,  # Pete's go 2026-11-10, HELD: the site must sort by page_score and the medal-field rule must be settled first (the 07:30 'citius blog refresh' task runs this file)
     events = c("AT-800Metres-M", "AT-800Metres-W", "AT-1500Metres-M",
                "AT-1500Metres-W", "AT-5000Metres-M", "AT-5000Metres-W"),
     hr_mult = 2,
     kappa_mult = 0.5,
     long_days = 365
+  ),
+
+  # RATINGS-PAGE RANK (Pete 2026-11-10): the page ranks the thin_blend events by
+  #   page_score = ability - k * sqrt(sd_fit^2 + sd_avail^2)
+  # sd_fit: fitted uncertainty of the version E estimate (from blend_wR and days
+  #   since the athlete's last race in the event; model in sd_model, fitted on 2024
+  #   R1 racers by diagnostics/confident_rating.R, 2025 check: predicted 2.64% vs
+  #   observed 2.71% RMS error);
+  # sd_avail: sigma_between * (1 - 0.5^(days since last race in ANY event / avail_half_life))
+  #   -- availability as shrinkage, continuous, no cut-off (Pete: no cliffs).
+  # k and avail_half_life are CHOICES (absent athletes cannot be scored; see
+  # docs/reference/backtests.md rules 2-3); everything else is fitted. Forecasts
+  # and medal odds keep `ability`; this only orders the page.
+  page_rank = list(
+    events = c("AT-800Metres-M", "AT-800Metres-W", "AT-1500Metres-M",
+               "AT-1500Metres-W", "AT-5000Metres-M", "AT-5000Metres-W"),
+    k = 1.5,
+    avail_half_life = 365,
+    sd_model = "confident_rating_sd_model.csv"
   ),
 
   thin_record = list(
@@ -755,7 +774,8 @@ deployed_thin_blend <- function(ab, past, as_of, calibration,
   part <- apply_record_blend(ab[in_scope], rec, lng, kappa_mult = cfg$kappa_mult)
   out <- data.table::copy(ab)
   stopifnot(nrow(part) == sum(in_scope))
-  out[in_scope, `:=`(ability = part$ability, shrinkage = part$shrinkage)]
+  out[in_scope, `:=`(ability = part$ability, shrinkage = part$shrinkage,
+                     blend_wR = part$blend_wR, blend_applied = part$blend_applied)]
   out[]
 }
 

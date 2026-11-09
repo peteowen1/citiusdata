@@ -627,6 +627,33 @@ ratings <- deployed_ability(clean_all, as_of = AS_OF, calibration = calibration)
 ratings[, athlete_id := as.character(athlete_id)]
 ratings <- ratings[!is.na(last_date) & as.numeric(AS_OF - last_date) <= RATING_ACTIVE_DAYS]
 
+# --- page rank for the thin-record events (DEPLOYED$page_rank, Pete 2026-11-10) ---
+# page_score = ability - k * sqrt(sd_fit^2 + sd_avail^2). `ability` (the version E
+# best estimate) is unchanged and still drives the predicted mark, scales and medal
+# odds; page_score only ORDERS the page, so an athlete unraced for a long time sits
+# lower because we are less sure, not because we pretend they got slower. Continuous:
+# no cut-offs. Every other event: page_score = ability, page_sd = NA.
+PR <- DEPLOYED$page_rank
+ratings[, `:=`(page_score = ability, page_sd = NA_real_)]
+if (!is.null(PR) && isTRUE(DEPLOYED$thin_blend$enabled)) {
+  sdm <- fread(file.path(OUT, PR$sd_model)); sdb <- setNames(sdm$value, sdm$term)
+  need_terms <- c("(Intercept)", "log1p(gap/30)", "log(wR_2)", "scale")
+  if (!all(need_terms %in% names(sdb))) cli::cli_abort("{.file {PR$sd_model}} lacks terms {.val {setdiff(need_terms, names(sdb))}}.")
+  last_any <- clean_all[!is.na(date), .(last_any = max(date)), by = .(athlete_id = as.character(athlete_id))]
+  ratings[last_any, last_any := i.last_any, on = "athlete_id"]
+  pr_rows <- ratings$event_id %in% PR$events & is.finite(ratings$blend_wR) & ratings$blend_wR > 0
+  ratings[pr_rows, `:=`(
+    .sd_fit = sqrt(exp(sdb[["(Intercept)"]] + sdb[["log1p(gap/30)"]] * log1p(pmax(as.numeric(AS_OF - last_date), 0) / 30) +
+                       sdb[["log(wR_2)"]] * log(blend_wR))) * sdb[["scale"]],
+    .sd_av = sigma_between * (1 - 0.5^(pmax(as.numeric(AS_OF - last_any), 0) / PR$avail_half_life)))]
+  ratings[pr_rows, page_sd := sqrt(.sd_fit^2 + .sd_av^2)]
+  ratings[pr_rows & is.finite(page_sd), page_score := ability - PR$k * page_sd]
+  n_pr <- ratings[pr_rows & is.finite(page_sd), .N]
+  if (n_pr == 0L) cli::cli_abort("page_rank: 0 rows scored in its {length(PR$events)} events; check blend_wR / sigma_between.")
+  cli::cli_alert_info("page_rank: {n_pr} rows in {length(PR$events)} events ordered by ability - {PR$k} x sd (median sd {round(100 * median(ratings[pr_rows, page_sd], na.rm = TRUE), 2)}%).")
+  ratings[, intersect(c(".sd_fit", ".sd_av", "last_any"), names(ratings)) := NULL]
+}
+
 # Comparable scales, computed WITHIN event over the active population.
 ratings[, `:=`(z = (ability - mean(ability)) / stats::sd(ability),
                pct_best = 100 * exp(ability - max(ability))), by = event_id]
@@ -699,7 +726,7 @@ if (!is.null(wr)) {
 # say what the rank is out of, and pct/z stay honest because they were never
 # computed on the truncated set.
 RATING_TOP_N <- 150L
-setorder(ratings, event_id, -ability)
+setorder(ratings, event_id, -page_score)
 ratings <- ratings[, head(.SD, RATING_TOP_N), by = event_id]
 
 # --- medal forecast (citius#5, DECIDED 2026-11-08, citiusverse DECISIONS) -----
@@ -727,7 +754,11 @@ if (!file.exists(MEDAL_REF_F)) {
     # size_final, not n: deployed_ability() returns a column called n, which
     # would shadow it inside data.table brackets.
     size_final <- medal_sizes[event_id == ev_m, size_final]
-    field <- head(ratings[event_id == ev_m & is.finite(ability) & is.finite(sigma)][order(-ability)], size_final)
+    # The final is picked by PAGE ORDER (page_score; = ability outside the six
+    # thin-record events), so the medal odds agree with the ranking on the same
+    # page (Pete 2026-11-10): an athlete the page ranks 91st cannot carry a 19%
+    # gold chance. Each finalist is still simulated on `ability`, its best estimate.
+    field <- head(ratings[event_id == ev_m & is.finite(ability) & is.finite(sigma)][order(-page_score)], size_final)
     if (nrow(field) < 4L) next
     sim <- simulate_event(field, n_sims = MEDAL_N_SIMS, calibration = calibration,
                           context = list(meet_tier = "M1", round_class = "final"), seed = 1L)
@@ -918,11 +949,13 @@ RATING_COLS <- c("athlete_id", "athlete_name", "event_id", "sport", "discipline"
                  "mark_unit", "latest_mark", "latest_date", "sb_mark", "pb_mark",
                  "n", "w_total", "n_event", "last_date",
                  # medal forecast (citius#5): NA outside each event's simulated final
-                 "p_gold", "p_medal", "medal_final_size")
+                 "p_gold", "p_medal", "medal_final_size",
+                 # page order for the thin-record events (DEPLOYED$page_rank); = ability elsewhere
+                 "page_score", "page_sd")
 for (nm in setdiff(RATING_COLS, names(ratings))) ratings[, (nm) := NA]
 ratings <- ratings[, ..RATING_COLS]
 ratings[, `:=`(as_of = AS_OF, generated_at = NOW)]
-setorder(ratings, event_id, -ability)
+setorder(ratings, event_id, -page_score)
 cli::cli_alert_info(
   "Ratings: {nrow(ratings)} athlete-event row{?s} across {uniqueN(ratings$event_id)} event{?s}, as of {format(AS_OF)}.")
 
