@@ -457,6 +457,23 @@ DEPLOYED <- list(
   # (diagnostics/backtest_thin_record_prior.R, verdict on 2025 cuts): marks
   # error 2.250% -> 2.081%, concordance 67.296% -> 68.302%. The offsets file is
   # fitted on 2024 cuts by fit_gap_offsets.R. Code: citius/R/thin_record.R.
+  # THIN-RECORD BLEND, "version E". PASSED the championship backtest 2026-11-10
+  # (719 M1 meets on R1 races; 2025+ marks error 1.480% -> 1.413%, CI -0.143 to
+  # -0.003; concordance flat; all-years concordance +0.58, CI +0.13 to +1.00;
+  # DECISIONS 2026-11-10). rating = a*recent + (1-a)*own record, no event-mean
+  # pull; recent = refit with half-lives x hr_mult, own record = refit at long_days.
+  # OFF until Pete's go AND the ratings-page availability rule
+  # (docs/plans/ratings-availability-2026-11-10.md): on its own it ranks athletes
+  # unraced for 12 months at the top. Code: citius::apply_record_blend().
+  thin_blend = list(
+    enabled = FALSE,
+    events = c("AT-800Metres-M", "AT-800Metres-W", "AT-1500Metres-M",
+               "AT-1500Metres-W", "AT-5000Metres-M", "AT-5000Metres-W"),
+    hr_mult = 2,
+    kappa_mult = 0.5,
+    long_days = 365
+  ),
+
   thin_record = list(
     enabled = FALSE,
     events = c("AT-800Metres-M", "AT-800Metres-W", "AT-1500Metres-M",
@@ -708,7 +725,38 @@ deployed_ability <- function(past, as_of, calibration,
     }
   }
   ab <- deployed_thin_record(ab, past, as_of, calibration, event_params)
+  ab <- deployed_thin_blend(ab, past, as_of, calibration, event_params)
   deployed_debias(ab, debias)
+}
+
+# Version E of the thin-record change (DEPLOYED$thin_blend): the one that passed
+# the championship backtest. A no-op unless enabled (in DEPLOYED or via `cfg`).
+# Same placement as version C: after neighbour_combine, before debias. Only the
+# configured events are touched; rows keep their order; blended rows get
+# shrinkage 0 (see citius::apply_record_blend()).
+deployed_thin_blend <- function(ab, past, as_of, calibration,
+                                event_params = deployed_event_params(),
+                                cfg = DEPLOYED$thin_blend) {
+  if (!isTRUE(cfg$enabled)) return(ab)
+  if (isTRUE(DEPLOYED$thin_record$enabled))
+    cli::cli_abort("DEPLOYED$thin_blend and DEPLOYED$thin_record are both enabled; they are alternatives.")
+  ab <- data.table::as.data.table(ab)
+  in_scope <- ab$event_id %in% cfg$events
+  if (!any(in_scope)) {
+    cli::cli_alert_info("thin_blend: no rows in its {length(cfg$events)} events; nothing changed.")
+    return(ab)
+  }
+  if (is.null(event_params)) cli::cli_abort("thin_blend needs event_params: hr_mult multiplies the per-event half-lives.")
+  ep <- data.table::as.data.table(event_params)
+  past_s <- data.table::as.data.table(past)[event_id %in% cfg$events]
+  rec <- .deployed_ability_raw(past_s, as_of, calibration, data.table::copy(ep)[, half_life := half_life * cfg$hr_mult])
+  lng <- .deployed_ability_raw(past_s, as_of, calibration,
+                               data.table::copy(ep)[event_id %in% cfg$events, half_life := cfg$long_days])
+  part <- apply_record_blend(ab[in_scope], rec, lng, kappa_mult = cfg$kappa_mult)
+  out <- data.table::copy(ab)
+  stopifnot(nrow(part) == sum(in_scope))
+  out[in_scope, `:=`(ability = part$ability, shrinkage = part$shrinkage)]
+  out[]
 }
 
 # Version C of the thin-record change (DEPLOYED$thin_record). A no-op unless
@@ -881,6 +929,8 @@ deployed_history_key <- function(past, dir = here::here("citiusdata", "data")) {
   # it off stays valid, while turning it on (or refitting the offsets file,
   # hashed because fit_gap_offsets.R rewrites it in place) forces a re-estimate
   # instead of serving the old numbers. Review finding, 2026-11-09.
+  tb <- DEPLOYED$thin_blend
+  if (isTRUE(tb$enabled)) key$thin_blend <- tb
   tr <- DEPLOYED$thin_record
   if (isTRUE(tr$enabled))
     key$thin_record <- list(tr, unname(tools::md5sum(file.path(dir, tr$gap_offsets))))
