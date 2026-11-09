@@ -32,7 +32,7 @@ DEPLOYED <- list(
   # with other tags in between (my first attempt) failed the check even though
   # every token was present, because the check is on the literal filename
   # remainder, not on token membership.
-  stamp = "2026-10-31 wac_coast_0904_full2_altitude_banded_noroad_refit1031_ss080 (corpus to 2026-10-25, catalogue tiers ed80109b; sigma_context x0.8, ctxsd strip4fam evparams5, debias OFF, blend OFF)",
+  stamp = "2026-10-31 wac_coast_0904_full2_altitude_banded_noroad_refit1031_ss080 (corpus to 2026-10-25, catalogue tiers ed80109b; sigma_context x0.8, ctxsd strip4fam evparams5, debias OFF, blend OFF; thin_blend E + page_rank ON 2026-11-10)",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -466,7 +466,7 @@ DEPLOYED <- list(
   # (docs/plans/ratings-availability-2026-11-10.md): on its own it ranks athletes
   # unraced for 12 months at the top. Code: citius::apply_record_blend().
   thin_blend = list(
-    enabled = FALSE,  # Pete's go 2026-11-10; verified locally (all checks pass); HELD until Pete says 'upload' (ITG PR #1181 merges first; the 07:30 'citius blog refresh' task runs this file)
+    enabled = TRUE,   # LIVE 2026-11-10 (Pete's go; ITG #1181 on prod; checks: medal sums exact, finals = page top N)
     events = c("AT-800Metres-M", "AT-800Metres-W", "AT-1500Metres-M",
                "AT-1500Metres-W", "AT-5000Metres-M", "AT-5000Metres-W"),
     hr_mult = 2,
