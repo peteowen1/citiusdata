@@ -40,8 +40,16 @@ pa <- load_arm(A); pb <- load_arm(B)
 cat(sprintf("%s: %s rows | %s: %s rows\n", A, format(nrow(pa), big.mark = ","), B, format(nrow(pb), big.mark = ",")))
 
 st <- as.data.table(open_dataset(file.path(OUT, "athletics_corpus_store")) |>
-  dplyr::select(race_key, athlete_id, mark, event_id, date) |> dplyr::collect())
+  dplyr::select(race_key, athlete_id, mark, event_id, date, race_code) |> dplyr::collect())
 st[, athlete_id := as.character(athlete_id)]
+# CITIUS_TC_RACE=R1 keeps only R1 races (race_code OW/GW/GL/DF/A, the measured top
+# group): docs/reference/modelling-traps.md "R1 vs M1" says judge on R1, not M1,
+# because M1 meets carry weak support races. Unset = every race the backtest scored.
+RACE <- Sys.getenv("CITIUS_TC_RACE", "")
+if (identical(RACE, "R1")) {
+  st <- st[toupper(trimws(race_code)) %in% c("OW", "GW", "GL", "DF", "A")]
+  cat("RACE FILTER: R1 only (race_code OW/GW/GL/DF/A)\n")
+} else if (nzchar(RACE)) stop("CITIUS_TC_RACE must be R1 or unset")
 act <- unique(st[!is.na(mark) & !is.na(race_key) & mark > 0,
                  .(race_id = race_key, athlete_id, actual = mark, event_id, date)], by = c("race_id", "athlete_id"))
 rm(st); invisible(gc())
