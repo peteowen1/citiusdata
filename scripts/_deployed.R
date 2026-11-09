@@ -445,8 +445,10 @@ DEPLOYED <- list(
     link_athletes = 25000L
   ),
 
-  # THIN-RECORD ADJUSTMENT, "version C" (Pete chose it 2026-11-09). OFF until it
-  # passes the championship backtest (CITIUS_THIN_RECORD=1 in backtest_athletics.R).
+  # THIN-RECORD ADJUSTMENT, "version C". FAILED the championship backtest
+  # 2026-11-09 (2025+ R1 races: concordance -1.33, CI -2.58 to -0.14; DECISIONS
+  # 2026-11-09) and stays OFF; kept only as the measured negative result. Its
+  # successor is version E (CITIUS_THIN_BLEND in backtest_athletics.R), not this.
   # An athlete with a thin recent record is shrunk towards the mean of EVERYONE
   # in the event, so an inactive star reads as a club runner (Kipyegon 4:08.1
   # against 13 races at 3:48-4:04). C keeps the shrinkage weight but pulls
