@@ -2038,6 +2038,7 @@ run_meet <- function(i) {
         stop("thin-record blend arm: refit rows no longer line up with the ability table.")
       .key[, a := wR / (wR + TB_MR * kR)]
       .key[, new := a * R + (1 - a) * L]
+      .key[, applied := is.finite(new)]
       .tb_miss <- .key[!is.finite(new), .N]
       if (.tb_miss) .key[!is.finite(new), new := old]
       if (.tb_miss > 0.05 * nrow(.key)) message(sprintf(
@@ -2045,6 +2046,14 @@ run_meet <- function(i) {
         .tb_miss, nrow(.key), cid))
       ability <- data.table::copy(ability)
       ability[.tb_in, ability := .key$new]
+      # A blended rating carries NO pull towards the event mean, so its
+      # `shrinkage` (the weight on prior_mu) is 0. Without this, condition_prior()
+      # in the race loop adds shrinkage * PRIOR_WEIGHT * (field mean - prior_mu)
+      # on top -- a shift the tuning never saw, largest for exactly the thin
+      # athletes this arm targets -- and project_ability() ages only the
+      # (1 - shrinkage) part. Review finding, 2026-11-09. Rows that fell back to
+      # their old ability keep their old shrinkage.
+      ability[which(.tb_in)[.key$applied], shrinkage := 0]
       rm(.rec, .lng, .key, .rr, .ll, .tb_past)
     }
   }
