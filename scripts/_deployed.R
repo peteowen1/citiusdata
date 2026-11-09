@@ -443,6 +443,25 @@ DEPLOYED <- list(
                "AT-5000Metres-M", "AT-10000Metres-M"),
     link_days = 1825L,
     link_athletes = 25000L
+  ),
+
+  # THIN-RECORD ADJUSTMENT, "version C" (Pete chose it 2026-11-09). OFF until it
+  # passes the championship backtest (CITIUS_THIN_RECORD=1 in backtest_athletics.R).
+  # An athlete with a thin recent record is shrunk towards the mean of EVERYONE
+  # in the event, so an inactive star reads as a club runner (Kipyegon 4:08.1
+  # against 13 races at 3:48-4:04). C keeps the shrinkage weight but pulls
+  # towards the athlete's own record (half-lives x hl_mult), then adds a measured
+  # offset by days since the last result. Measured on the 6 events below only
+  # (diagnostics/backtest_thin_record_prior.R, verdict on 2025 cuts): marks
+  # error 2.250% -> 2.081%, concordance 67.296% -> 68.302%. The offsets file is
+  # fitted on 2024 cuts by fit_gap_offsets.R. Code: citius/R/thin_record.R.
+  thin_record = list(
+    enabled = FALSE,
+    events = c("AT-800Metres-M", "AT-800Metres-W", "AT-1500Metres-M",
+               "AT-1500Metres-W", "AT-5000Metres-M", "AT-5000Metres-W"),
+    hl_mult = 5,
+    min_shrinkage = 0,
+    gap_offsets = "gap_offsets_middle_distance.csv"
   )
 )
 Sys.setenv(CITIUS_MARKS_BLEND = as.character(DEPLOYED$marks_blend))
@@ -686,7 +705,37 @@ deployed_ability <- function(past, as_of, calibration,
       cli::cli_alert_info("neighbour_combine: 0 usable links this call; no rows adjusted.")
     }
   }
+  ab <- deployed_thin_record(ab, past, as_of, calibration, event_params)
   deployed_debias(ab, debias)
+}
+
+# Version C of the thin-record change (DEPLOYED$thin_record). A no-op unless
+# enabled, either in DEPLOYED or by the caller passing `cfg` (the backtest arm).
+# Runs AFTER neighbour_combine and BEFORE debias, which is where the measured
+# prototype applied it (both were no-ops on the measured events: 0 rows moved).
+# Only the configured events are touched; every other row passes through.
+deployed_thin_record <- function(ab, past, as_of, calibration,
+                                 event_params = deployed_event_params(),
+                                 cfg = DEPLOYED$thin_record,
+                                 dir = here::here("citiusdata", "data")) {
+  if (!isTRUE(cfg$enabled)) return(ab)
+  ab <- data.table::as.data.table(ab)
+  in_scope <- ab$event_id %in% cfg$events
+  if (!any(in_scope)) {
+    cli::cli_alert_info("thin_record: no rows in its {length(cfg$events)} events; nothing changed.")
+    return(ab)
+  }
+  if (is.null(event_params)) cli::cli_abort("thin_record needs event_params: hl_mult multiplies the per-event half-lives.")
+  ep_long <- data.table::copy(data.table::as.data.table(event_params))[, half_life := half_life * cfg$hl_mult]
+  past_s <- data.table::as.data.table(past)[event_id %in% cfg$events]
+  long <- .deployed_ability_raw(past_s, as_of, calibration, ep_long)
+  off <- data.table::fread(file.path(dir, cfg$gap_offsets))
+  part <- apply_own_record_prior(ab[in_scope], long, min_shrinkage = cfg$min_shrinkage)
+  part <- apply_gap_offsets(part, as_of, off[, .(gap, offset)])
+  keep <- names(ab)
+  out <- data.table::rbindlist(list(ab[!in_scope], part[, ..keep]), use.names = TRUE)
+  stopifnot(nrow(out) == nrow(ab))
+  out[]
 }
 
 # One set of links per calendar year of `as_of` PER (calibration, config),
