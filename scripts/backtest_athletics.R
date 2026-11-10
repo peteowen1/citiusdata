@@ -664,14 +664,21 @@ THIN_BLEND <- identical(Sys.getenv("CITIUS_THIN_BLEND", "0"), "1")
 TB_HR <- as.numeric(Sys.getenv("CITIUS_TB_HR", "2"))
 TB_MR <- as.numeric(Sys.getenv("CITIUS_TB_MR", "0.5"))
 TB_H  <- as.numeric(Sys.getenv("CITIUS_TB_H", "365"))
+# Round weighting inside version E's refits (Pete 2026-11-10; tune_round_weights.R:
+# heats/quarters/semis x TB_RW, and a round the athlete WON x TB_WINW on top; finals
+# x1). Defaults 1/1 = off: thin_refit() then passes no weight column at all.
+TB_RW   <- as.numeric(Sys.getenv("CITIUS_TB_RW", "1"))
+TB_WINW <- as.numeric(Sys.getenv("CITIUS_TB_WINW", "1"))
 if (THIN_BLEND) {
   if (THIN_RECORD) cli::cli_abort("{.envvar CITIUS_THIN_BLEND} and {.envvar CITIUS_THIN_RECORD} are both on.")
   if (!all(is.finite(c(TB_HR, TB_MR, TB_H))) || any(c(TB_HR, TB_MR, TB_H) <= 0))
     cli::cli_abort("CITIUS_TB_HR / _MR / _H must be positive numbers.")
+  if (!all(is.finite(c(TB_RW, TB_WINW))) || any(c(TB_RW, TB_WINW) < 0) || any(c(TB_RW, TB_WINW) > 1))
+    cli::cli_abort("CITIUS_TB_RW / _WINW must be in [0, 1].")
   if (nzchar(HL_BY_FAMILY) && is.null(EVENT_PARAMS)) cli::cli_abort(
     "{.envvar CITIUS_THIN_BLEND} supports the single-call ability path only; set {.envvar CITIUS_EVENT_PARAMS}.")
   cli::cli_alert_info(
-    "Thin-record BLEND arm ON for {length(THIN_EVENTS)} events: recent half-life x{TB_HR}, kappa_R x{TB_MR}, long half-life {TB_H} d, no floor.")
+    "Thin-record BLEND arm ON for {length(THIN_EVENTS)} events: recent half-life x{TB_HR}, kappa_R x{TB_MR}, long half-life {TB_H} d, no floor; rounds x{TB_RW}, won rounds x{TB_WINW}.")
 }
 
 # One refit for the thin-record arms, restricted to `ids` and THIN_EVENTS history.
@@ -687,6 +694,16 @@ thin_refit <- function(past_x, cut_date, ids, hl_mult = 1, hl_days = NA_real_) {
     else ep[, half_life := half_life * hl_mult]
     ep
   }
+  .rw_on <- !(TB_RW == 1 && TB_WINW == 1)
+  if (.rw_on) {
+    past_x <- data.table::copy(past_x)
+    .rc <- .round_class(if ("round" %in% names(past_x)) past_x$round else NA_character_)
+    .is_round <- .rc %in% c("heat", "quarter", "semi")
+    .won <- .is_round & !is.na(past_x$place) & past_x$place == 1
+    past_x[, .tb_w := 1]
+    past_x[.is_round, .tb_w := TB_RW]
+    past_x[.won, .tb_w := .tb_w * TB_WINW]
+  }
   estimate_ability(past_x, as_of = cut_date, half_life = hl,
                    races_half_life = if (is.null(EVENT_PARAMS)) RACES_HALF_LIFE else
                      EVENT_PARAMS[, .(event_id, family, races_half_life)],
@@ -699,7 +716,8 @@ thin_refit <- function(past_x, cut_date, ids, hl_mult = 1, hl_days = NA_real_) {
                    only = ids, sigma_k = SIGMA_K,
                    peak_gamma = if (is.null(EVENT_PARAMS) || !"peak_gamma" %in% names(EVENT_PARAMS))
                      PEAK_GAMMA else EVENT_PARAMS[, .(event_id, family, peak_gamma)],
-                   robust_location = ROBUST_LOCATION, decouple_peak = DECOUPLE_PEAK)
+                   robust_location = ROBUST_LOCATION, decouple_peak = DECOUPLE_PEAK,
+                   weight_col = if (.rw_on) ".tb_w" else NULL)
 }
 # One reference per calendar year of `cut_date`, read the SAME way `past` is
 # read a few hundred lines below (partitioned store when available, same
@@ -1343,7 +1361,8 @@ arm_fingerprint <- list(
   # Thin-record blend arm (version E): its settings, NA when off so every
   # existing control keeps its key. Excluded from the ability-cache key too.
   thin_blend = THIN_BLEND,
-  thin_blend_par = if (THIN_BLEND) sprintf("hr=%g,mR=%g,H=%g", TB_HR, TB_MR, TB_H) else NA_character_)
+  thin_blend_par = if (THIN_BLEND) sprintf("hr=%g,mR=%g,H=%g%s", TB_HR, TB_MR, TB_H,
+                                            if (TB_RW == 1 && TB_WINW == 1) "" else sprintf(",rw=%g,winw=%g", TB_RW, TB_WINW)) else NA_character_)
 
 # A cache that predates this check is stamped by the first run after it, which
 # is the best that can be done retrospectively -- an existing directory carries
@@ -2613,7 +2632,7 @@ if (N_WORKERS > 1L) {
   # value, so all four go unconditionally (the trap above, sixth candidate).
   export_vars <- c(export_vars, "THIN_RECORD", "THIN_EVENTS", "THIN_HL_MULT", "THIN_OFFSETS")
   # Blend arm: read on every worker whatever its value (the same trap).
-  export_vars <- c(export_vars, "THIN_BLEND", "TB_HR", "TB_MR", "TB_H", "thin_refit")
+  export_vars <- c(export_vars, "THIN_BLEND", "TB_HR", "TB_MR", "TB_H", "TB_RW", "TB_WINW", "thin_refit")
   # Same TIER_SHRINK trap, same day: run_meet() calls family_pool_offset(),
   # whose closure reads `.fp`/`.fp_fs_by_event` from this script's top-level
   # environment. clusterExport() re-homes an exported function's environment
