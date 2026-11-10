@@ -61,6 +61,9 @@ $steps = @(
   @{ name = "oneoff_strip_padded_ids"; script = "citiusdata\scripts\oneoff_strip_padded_ids.R" },
   @{ name = "build_athletics_corpus";  script = "citiusdata\scripts\build_athletics_corpus.R" },
   @{ name = "build_crosswalk";         script = "citiusdata\scripts\build_crosswalk.R" },
+  # athletics_corpus_store (partitioned parquet, read by _deployed.R, the export and the
+  # backtests) is built from citius.duckdb by build_stores.R, NOT by the corpus build.
+  @{ name = "build_stores";            script = "citiusdata\scripts\build_stores.R" },
   @{ name = "zero_padded_ids";         script = "citiusdata\scripts\diagnostics\zero_padded_ids.R" }
 )
 foreach ($s in $steps) {
