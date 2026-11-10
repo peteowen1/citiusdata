@@ -471,7 +471,13 @@ DEPLOYED <- list(
                "AT-1500Metres-W", "AT-5000Metres-M", "AT-5000Metres-W"),
     hr_mult = 2,
     kappa_mult = 0.5,
-    long_days = 365
+    long_days = 365,
+    # Round weighting inside the two refits (tune_round_weights.R winner, Pete
+    # 2026-11-10): heats/quarters/semis x round_weight, a round the athlete WON x
+    # won_round_weight on top; finals x1. 1 / 1 = OFF (no weight column passed).
+    # Pending the championship arm (_run_thin_blend_rw_arm.ps1); measured winner 0.25 / 0.
+    round_weight = 1,
+    won_round_weight = 1
   ),
 
   # RATINGS-PAGE RANK (Pete 2026-11-10): the page ranks the thin_blend events by
@@ -768,9 +774,22 @@ deployed_thin_blend <- function(ab, past, as_of, calibration,
   if (is.null(event_params)) cli::cli_abort("thin_blend needs event_params: hr_mult multiplies the per-event half-lives.")
   ep <- data.table::as.data.table(event_params)
   past_s <- data.table::as.data.table(past)[event_id %in% cfg$events]
-  rec <- .deployed_ability_raw(past_s, as_of, calibration, data.table::copy(ep)[, half_life := half_life * cfg$hr_mult])
+  rw <- if (is.null(cfg$round_weight)) 1 else cfg$round_weight
+  ww <- if (is.null(cfg$won_round_weight)) 1 else cfg$won_round_weight
+  wcol <- NULL
+  if (!(rw == 1 && ww == 1)) {
+    stopifnot(rw >= 0, rw <= 1, ww >= 0, ww <= 1)
+    rc <- .round_class(if ("round" %in% names(past_s)) past_s$round else NA_character_)
+    is_round <- rc %in% c("heat", "quarter", "semi")
+    won <- is_round & "place" %in% names(past_s) & !is.na(past_s$place) & past_s$place == 1
+    past_s[, .tb_w := 1][is_round, .tb_w := rw][won, .tb_w := .tb_w * ww]
+    wcol <- ".tb_w"
+  }
+  rec <- .deployed_ability_raw(past_s, as_of, calibration, data.table::copy(ep)[, half_life := half_life * cfg$hr_mult],
+                               weight_col = wcol)
   lng <- .deployed_ability_raw(past_s, as_of, calibration,
-                               data.table::copy(ep)[event_id %in% cfg$events, half_life := cfg$long_days])
+                               data.table::copy(ep)[event_id %in% cfg$events, half_life := cfg$long_days],
+                               weight_col = wcol)
   part <- apply_record_blend(ab[in_scope], rec, lng, kappa_mult = cfg$kappa_mult)
   out <- data.table::copy(ab)
   stopifnot(nrow(part) == sum(in_scope))
@@ -993,7 +1012,8 @@ deployed_ability_or_snapshot <- function(past, as_of, calibration, dir, meet, cu
   ab
 }
 
-.deployed_ability_raw <- function(past, as_of, calibration, event_params = deployed_event_params()) {
+.deployed_ability_raw <- function(past, as_of, calibration, event_params = deployed_event_params(),
+                                 weight_col = NULL) {
   hl_map <- DEPLOYED$hl_family
   # THE TABLE REPLACES THE FAMILY MAP, enforced here rather than trusted to a
   # comment. It already carries a half-life per event; leaving hl_family on top
@@ -1025,8 +1045,10 @@ deployed_ability_or_snapshot <- function(past, as_of, calibration, dir, meet, cu
                                              !"peak_gamma" %in% names(event_params)) 0 else
                               event_params[, c("event_id", "family", "peak_gamma"), with = FALSE],
                             calibration = calibration,
-                            adjust_race = isTRUE(DEPLOYED$adjust_race)))
+                            adjust_race = isTRUE(DEPLOYED$adjust_race),
+                            weight_col = weight_col))
   }
+  if (!is.null(weight_col)) cli::cli_abort("weight_col is supported on the event_params path only (the per-family path has no measured round weighting).")
   reg_f <- data.table::as.data.table(citius_events()[, c("event_id", "family")])
   pf <- merge(data.table::as.data.table(past), reg_f, by = "event_id", all.x = TRUE)
   # `split()` DROPS rows whose grouping value is NA, silently. An event_id absent
