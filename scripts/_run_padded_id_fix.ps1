@@ -23,7 +23,7 @@ while ($true) {
   # '!!! fingerprints differ' is EXPECTED here (control cache built at citius 26d229a,
   # not on the runner's whitelist): every meet is computed by then, only the compare
   # is skipped, so the inputs are free. 'STOPPED' / '!!! stopping' = arm incomplete.
-  $done = $tail -match 'ALL DONE \(incl\. vs E\)' -or $tail -match 'arm blend STOPPED' -or $tail -match '!!! '
+  $done = $tail -match 'ALL DONE' -or $tail -match 'arm blend STOPPED' -or $tail -match '!!! '
   $bt = Get-CimInstance Win32_Process -Filter "name='Rscript.exe'" | Where-Object { $_.CommandLine -match 'backtest_athletics|compare_thin_record_arms|compare_arm_fingerprints' }
   $armps = Get-CimInstance Win32_Process -Filter "name='powershell.exe'" | Where-Object { $_.CommandLine -match '_run_thin_blend_rw_arm' }
   if ($done -and -not $bt -and -not $armps) { break }
@@ -41,7 +41,7 @@ Say "arm finished"
 # athletes would silently drop out of the verdict. If the arm's own compare was skipped
 # (fingerprints differ on citius_git only: control 26d229a, arm a2e0c4c; the diff between
 # them is opt-in code the control never runs, checked 2026-11-10), run it here.
-if ($full -notmatch 'ALL DONE \(incl\. vs E\)') {
+if ($full -notmatch 'ALL DONE \(incl\. vs E\)' -and $full -notmatch 'ALL DONE \(compare by fix runner\)') {
   Say "arm compare was skipped; running it now (appended to the arm log)"
   "--- compare run by _run_padded_id_fix.ps1 (citius_git differs; code diff checked) $(Get-Date -Format s) ---" | Out-File -Append -Encoding utf8 $ARM
   foreach ($pair in @(@("bt_cache_thin_ctrl", "bt_cache_blendrw_on", "R1"), @("bt_cache_thin_ctrl", "bt_cache_blendrw_on", ""), @("bt_cache_blend_on", "bt_cache_blendrw_on", "R1"))) {
