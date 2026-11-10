@@ -97,3 +97,42 @@ update_prediction_history <- function(new, url, seed_url = NULL, fetch = fetch_o
   data.table::setorder(out, as_at)
   out
 }
+
+
+# One card in the cross-verse long shape (citius#32): a row per athlete per
+# market (gold, medal, final) with a probability, plus the citius ids as extra
+# columns. publish_prediction_history() (citius R/predictions_history.R) adds
+# published_utc and model_version and validates the rest. A market column the
+# card lacks is skipped; an athlete with no probability for a market gets no
+# row for it rather than an NA.
+card_history_rows <- function(card, meet_id) {
+  card <- data.table::as.data.table(card)
+  need <- c("event_id", "athlete", "athlete_id", "nation")
+  miss <- setdiff(need, names(card))
+  if (length(miss)) stop("card for ", meet_id, " lacks column(s): ", paste(miss, collapse = ", "))
+  # One row per athlete per event, or every probability is double-counted: the
+  # leftover cg2026 card stacks two forecasts of six events and its gold sums
+  # to 2 (found 2026-11-07). Refuse rather than publish that.
+  dup <- duplicated(card[, .(event_id, athlete_id)])
+  if (any(dup)) {
+    stop("card for ", meet_id, " repeats ", sum(dup), " athlete-event row(s), e.g. ",
+         card$event_id[dup][1], " ", card$athlete_id[dup][1])
+  }
+  mk <- c(gold = "p_gold", medal = "p_medal", final = "p_final")
+  mk <- mk[mk %in% names(card)]
+  if (!length(mk)) stop("card for ", meet_id, " has no p_gold/p_medal/p_final column")
+  out <- data.table::rbindlist(lapply(names(mk), function(m) {
+    p <- as.numeric(card[[mk[[m]]]])
+    keep <- !is.na(p)
+    data.table::data.table(
+      verse = "citius", event = paste0(meet_id, ":", card$event_id[keep]), market = m,
+      # The model's own name for the athlete; the id when the card has no name.
+      selection = data.table::fifelse(is.na(card$athlete[keep]) | !nzchar(card$athlete[keep]),
+                                      paste0("athlete ", card$athlete_id[keep]), card$athlete[keep]),
+      probability = p[keep],
+      meet_id = meet_id, event_id = card$event_id[keep],
+      athlete_id = as.character(card$athlete_id[keep]), nation = card$nation[keep])
+  }))
+  if (!nrow(out)) stop("card for ", meet_id, " produced no history rows")
+  out
+}

@@ -16,6 +16,7 @@ VERSE <- here::here()
 suppressMessages(devtools::load_all(file.path(VERSE, "citius"), quiet = TRUE))
 suppressMessages(library(data.table)); library(arrow); library(jsonlite)
 source(file.path(VERSE, "citiusdata", "scripts", "_deployed.R"))
+source(file.path(VERSE, "citiusdata", "scripts", "_forecast_kind.R"))
 
 D      <- file.path(VERSE, "citiusdata", "data")
 # ARM TAG. Every artefact below is per-arm, and hardcoding `final` meant a run
@@ -47,7 +48,14 @@ stopifnot(
   "dates must be ordered within a meet" = all(cal$date_end >= cal$date_start),
   "a prediction cutoff must precede its meet" = all(cal$prediction_cutoff < cal$date_start),
   "state must be one of upcoming/live/scored" =
-    all(cal$state %in% c("upcoming", "live", "scored")))
+    all(cal$state %in% c("upcoming", "live", "scored")),
+  # citiusdata#24. `state` is the lifecycle of the meet and says nothing about
+  # whether a forecast exists: three meets were `scored` on the strength of
+  # harvested results alone. Whether a card shipped is derived below from the
+  # manifest, so a hand-edited column here would be the exact claim with no
+  # card behind it.
+  "forecast_published is derived by this script, not hand-maintained in the CSV" =
+    !"forecast_published" %in% names(cal))
 cli::cli_alert_success("Calendar: {nrow(cal)} meet{?s}, {cal[state=='upcoming', .N]} upcoming.")
 
 # --- Birmingham card ----------------------------------------------------------
@@ -118,6 +126,31 @@ KEEP <- c("event_id", "discipline", "sex", "athlete_id", "athlete", "nation",
           "field_type", "field_source", "field_entrants", "field_unmodelled")
 
 orient <- as.data.table(citius_events())[, .(event_id, orientation, family)]
+
+# --- forecast_kind (red-team F1, 2026-10-25) ----------------------------------
+# Every card row carries `forecast_kind` ("locked" / "retrospective") and
+# `forecast_generated_at` (the predict run's own stamp, UTC). Both are computed
+# from the card's stamps against the calendar's date_start, BEFORE the
+# `generated_at := NOW` overwrite below erases the predict-run time. A card
+# re-predicted after its meet started can therefore never be shown as locked,
+# whoever ran it and however. See scripts/_forecast_kind.R.
+stamp_forecast_kind <- function(dt, src_generated_at, mid) {
+  ds <- cal[meet_id == mid, date_start]
+  if (length(ds) != 1L || is.na(ds))
+    cli::cli_abort("{mid}: no date_start in the calendar -- cannot decide forecast_kind.")
+  kind <- forecast_kind(src_generated_at, ds)
+  dt[, `:=`(forecast_kind = kind,
+            forecast_generated_at = forecast_generated_at(src_generated_at))]
+  if (identical(kind, "retrospective")) {
+    cli::cli_alert_warning(
+      "{mid}: card generated {format(forecast_generated_at(src_generated_at), '%Y-%m-%d %H:%M UTC', tz = 'UTC')}, meet started {ds} -- forecast_kind = RETROSPECTIVE.")
+  } else {
+    cli::cli_alert_success("{mid}: forecast_kind = locked (generated before {ds}).")
+  }
+  stopifnot("forecast_kind must be set on every card row" =
+              nrow(dt) > 0 && all(dt$forecast_kind %in% FORECAST_KINDS))
+  invisible(kind)
+}
 
 # --- personal / season bests ----------------------------------------------
 # athlete_pbs.parquet / athlete_sbs.parquet (assemble_athlete_profiles.R,
@@ -229,6 +262,7 @@ lab <- st[, .(event_id, round_index, round, races, advance, fastest_losers,
 # Birmingham gains field_type = "official_entry_list" and skips the rest.
 card <- pred[, intersect(KEEP, names(pred)), with = FALSE]
 card[, meet_id := "birmingham2026"]
+bham_kind <- stamp_forecast_kind(card, pred$generated_at, "birmingham2026")
 
 # --- predicted mark -----------------------------------------------------------
 # Formatted HERE rather than in the page: the page would otherwise need the
@@ -266,6 +300,7 @@ ev <- merge(ev, card[, .(field = .N, favourite = athlete[1],
             by = "event_id", all.x = TRUE)
 ev <- merge(ev, st[, .(n_rounds = max(round_index)), by = event_id],
             by = "event_id", all.x = TRUE)
+ev[, forecast_kind := bham_kind]
 
 for (x in list(cal, card, lab, ev)) if (is.data.table(x)) x[, generated_at := NOW]
 
@@ -542,6 +577,7 @@ for (mid in DL_MEETS) {
 
   dcard <- dp[, intersect(KEEP, names(dp)), with = FALSE]
   dcard[, meet_id := mid]
+  dl_kind <- stamp_forecast_kind(dcard, dp$generated_at, mid)
 
   dcard <- merge(dcard, orient, by = "event_id", all.x = TRUE)
   dcard[, c("pred_mark", "mark_unit") := predicted_mark(ability, orientation)]
@@ -563,6 +599,7 @@ for (mid in DL_MEETS) {
                               p_favourite = p_gold[1],
                               n_rounds = n_rounds[1]), by = event_id],
                by = "event_id", all.x = TRUE)
+  dev[, forecast_kind := dl_kind]
 
   dlab <- dcard[, .(round_index = 1L, round = "Final", races = 1L,
                     advance = NA_integer_, fastest_losers = NA_integer_,
@@ -620,6 +657,8 @@ for (mid in DL_MEETS) {
     athletes = uniqueN(dcard$athlete_id),
     cutoff = as.character(unique(dcard$cutoff)[1]),
     counts_source = "single_final",
+    forecast_kind = dl_kind,
+    forecast_generated_at = format(dcard$forecast_generated_at[1], "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
     field_type = fld_type,
     field_source = as.character(unique(dcard$field_source)[1]),
     caveats = c(
@@ -897,19 +936,25 @@ for (m in setdiff(DL_MEETS, names(dl_blocks))) {
   if (!is.null(prev) && !is.null(prev[[m]])) dl_blocks[[m]] <- prev[[m]]
 }
 
+BHAM_OUT <- artefacts[["birmingham2026-predictions.parquet"]]
 manifest <- list(
   generated_at = format(NOW, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
   config = DEPLOYED$stamp,
   meets = nrow(cal),
   event_notes = EVENT_NOTES,
   mark_calibration = CALIB,
+  # Read from the artefact, not from `card`: the nation-gap loop above reuses
+  # that name for each results file's card, so by here `card` is whichever meet
+  # that loop saw last, not Birmingham's.
   birmingham = if (!BHAM_BUILD) prev$birmingham else list(
-    events_modelled = uniqueN(card$event_id),
+    events_modelled = uniqueN(BHAM_OUT$event_id),
     events_in_programme = 44L,
     unmodelled = "Marathon Race Walk (men's and women's) - no registry event_id",
-    athletes = uniqueN(card$athlete_id),
-    cutoff = as.character(unique(card$cutoff)[1]),
+    athletes = uniqueN(BHAM_OUT$athlete_id),
+    cutoff = as.character(unique(BHAM_OUT$cutoff)[1]),
     counts_source = "derived",
+    forecast_kind = BHAM_OUT$forecast_kind[1],
+    forecast_generated_at = format(BHAM_OUT$forecast_generated_at[1], "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
     caveats = c(
       "Heat counts are derived, not official: Technical Delegates publish them with the start lists.",
       "Advancement assumes a seeded draw. The published draw cannot be ingested.",
@@ -934,6 +979,32 @@ manifest <- list(
 # branch on CI, which the Budapest runs never exercised.
 if (length(dl_blocks)) manifest <- c(manifest, dl_blocks[order(names(dl_blocks))])
 
+# --- forecast_published (citiusdata#24) ----------------------------------------
+# `state = scored` means results are in; it does not mean we forecast the meet.
+# This column says whether a card actually ships: TRUE iff the manifest just
+# assembled carries a block for the meet, built this run or carried forward --
+# the same test the site's index uses (`_hasCard`). Derived here, after the
+# manifest, so it can never disagree with it. NA for a meet this export does not
+# publish a card for at all (Glasgow's pages live under /multisport/), where
+# FALSE would claim a fact about a forecast we cannot see from here.
+CARD_MEETS <- c("birmingham2026", DL_MEETS)
+cal[, forecast_published := fifelse(
+  meet_id %in% CARD_MEETS,
+  vapply(meet_id, function(m) !is.null(manifest[[m]]) ||
+           (identical(m, "birmingham2026") && !is.null(manifest$birmingham)), logical(1)),
+  NA)]
+# A scored meet with no card is legitimate (results harvested into the ratings),
+# so this warns rather than aborts; aborting would hold every other meet back.
+results_only <- cal[state == "scored" & forecast_published %in% FALSE, meet_id]
+if (length(results_only)) {
+  cli::cli_alert_warning("scored but no forecast published (results only): {.val {results_only}}")
+}
+# calendar.parquet was written with the other artefacts above, before the
+# manifest existed; rewrite it with the column and re-key its upload hash.
+artefacts[["calendar.parquet"]] <- cal
+CONTENT[["calendar.parquet"]] <- content_hash(cal)
+write_parquet(cal, file.path(BLOG, "calendar.parquet"))
+
 write_json(manifest, file.path(BLOG, "athletics-manifest.json"),
            auto_unbox = TRUE, pretty = TRUE, na = "null")
 
@@ -947,6 +1018,7 @@ MEMO_F <- file.path(BLOG, ".uploaded_md5.json")
 MEMO <- if (file.exists(MEMO_F)) fromJSON(MEMO_F) else list()
 FORCE <- nzchar(Sys.getenv("CITIUS_FORCE_UPLOAD"))
 n_skipped <- 0L
+SENT <- character(0)  # files actually put this run (not skipped as unchanged)
 upload <- function(f) {
   key <- sprintf("%s/%s/%s", BUCKET, PREFIX, f)
   md5 <- if (!is.null(CONTENT[[f]])) CONTENT[[f]] else unname(tools::md5sum(file.path(BLOG, f)))
@@ -957,7 +1029,7 @@ upload <- function(f) {
             "--cache-control", shQuote("public, max-age=300"), "--remote")
   st <- suppressWarnings(system2("wrangler", args, stdout = TRUE, stderr = TRUE))
   ok <- is.null(attr(st, "status")) || attr(st, "status") == 0
-  if (ok) { cli::cli_alert_success("uploaded {key}"); MEMO[[key]] <<- md5 }
+  if (ok) { cli::cli_alert_success("uploaded {key}"); MEMO[[key]] <<- md5; SENT <<- c(SENT, f) }
   else cli::cli_alert_danger("FAILED {key}: {paste(tail(st, 3), collapse = ' ')}")
   ok
 }
@@ -975,6 +1047,38 @@ if (nzchar(Sys.getenv("CITIUS_SKIP_UPLOAD"))) {
   # After the manifest, so a history failure cannot hold back the card.
   for (hf in hist_files) {
     if (!upload(hf)) cli::cli_alert_warning("{hf}: upload failed - the history on R2 is one version behind until the next publish that changes the card.")
+  }
+  # Cross-verse dated history (citius#32): one new file per publish on the
+  # citiusdata `predictions-history` release, in the shared long shape
+  # (verse/event/market/selection/probability/published_utc/model_version) that
+  # torp and bouncer write, so one scorer can read every verse. A card goes in
+  # only if it was sent this run AND the R2 history above found its content
+  # changed (it is in hist_files). SENT alone is not enough: on the runner the
+  # upload memo (blog/, gitignored, never restored) starts empty, so every card
+  # is "sent" on every run and three identical files a day would stack up.
+  # After the live upload and NON-FATAL, like the R2 history above.
+  # CITIUS_SKIP_HISTORY=1 skips it.
+  changed_cards <- sub("-history[.]parquet$", ".parquet",
+                       grep("-predictions-history[.]parquet$", hist_files, value = TRUE))
+  sent_cards <- intersect(grep("-predictions[.]parquet$", SENT, value = TRUE), changed_cards)
+  if (length(sent_cards) && !nzchar(Sys.getenv("CITIUS_SKIP_HISTORY"))) {
+    tryCatch({
+      # A card that fails its checks is left out with a warning; the others go in.
+      long <- rbindlist(lapply(sent_cards, function(nm) tryCatch(
+        card_history_rows(artefacts[[nm]], sub("-predictions[.]parquet$", "", nm)),
+        error = function(e) {
+          cli::cli_alert_warning("predictions-history: {nm} left out ({conditionMessage(e)})")
+          NULL
+        })))
+      if (!nrow(long)) stop("no card passed its checks")
+      mv <- paste0("citius ", read.dcf(file.path(VERSE, "citius", "DESCRIPTION"), fields = "Version")[1, 1])
+      nm_hist <- publish_prediction_history(long, repo = "peteowen1/citiusdata", model_version = mv)
+      cli::cli_alert_success("predictions-history: {.val {nm_hist}}, {nrow(long)} rows from {length(sent_cards)} card{?s}")
+    }, error = function(e) {
+      cli::cli_alert_warning("predictions-history NOT written ({conditionMessage(e)}); the cards themselves published.")
+    })
+  } else if (!length(sent_cards)) {
+    cli::cli_alert_info("predictions-history: no card both changed and sent this run, nothing to add.")
   }
   write_json(MEMO, MEMO_F, auto_unbox = TRUE)
   cli::cli_alert_info("uploads: {length(artefacts) + length(extra_files) + length(hist_files) + 1L - n_skipped} sent, {n_skipped} unchanged and skipped.")

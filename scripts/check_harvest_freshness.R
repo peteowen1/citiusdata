@@ -38,7 +38,8 @@ problems <- character(0)
 
 say_lag <- function(label, latest, limit = MAX_LAG) {
   if (is.na(latest)) {
-    cli_alert_warning("{label}: no date column readable")
+    cli_alert_danger("{label}: no date column readable")
+    problems <<- c(problems, sprintf("%s has no readable date", label))
     return(invisible(NA_integer_))
   }
   lag <- as.integer(TODAY - as.Date(latest))
@@ -58,7 +59,13 @@ if (file.exists(f_corpus)) {
   d <- as.data.table(arrow::read_parquet(f_corpus, col_select = "date"))
   say_lag("athletics_corpus", suppressWarnings(max(d$date, na.rm = TRUE)))
   rm(d); invisible(gc(verbose = FALSE))
-} else cli_alert_warning("athletics_corpus.parquet absent (not downloaded on this runner?)")
+} else {
+  # An absent input must FAIL the check: the workflow's download step only
+  # warns when it misses, so treating "absent" as a pass made this guard go
+  # green with nothing checked.
+  cli_alert_danger("athletics_corpus.parquet absent (not downloaded on this runner?)")
+  problems <- c(problems, "athletics_corpus.parquet is absent, so corpus freshness was not checked")
+}
 
 f_ctl <- file.path(D, "competition_catalogue.parquet")
 if (file.exists(f_ctl)) {
@@ -66,7 +73,8 @@ if (file.exists(f_ctl)) {
   say_lag("competition_catalogue", suppressWarnings(max(ctl$last_date, na.rm = TRUE)), limit = MAX_LAG * 2)
 } else {
   ctl <- NULL
-  cli_alert_warning("competition_catalogue.parquet absent")
+  cli_alert_danger("competition_catalogue.parquet absent")
+  problems <- c(problems, "competition_catalogue.parquet is absent, so catalogue freshness was not checked")
 }
 
 cli_h1("Completed meets missing from the corpus")
@@ -82,7 +90,8 @@ done <- cal[!is.na(date_end) & date_end < TODAY]
 if (!nrow(done)) {
   cli_alert_info("No completed meets on the calendar.")
 } else if (is.null(ctl)) {
-  cli_alert_warning("Cannot check membership without the catalogue.")
+  cli_alert_danger("Cannot check membership without the catalogue.")
+  problems <- c(problems, sprintf("%d completed meet(s) not checked for catalogue membership (no catalogue)", nrow(done)))
 } else {
   have <- as.character(ctl$competition_id)
   done[, cid := as.character(wa_competition_id)]

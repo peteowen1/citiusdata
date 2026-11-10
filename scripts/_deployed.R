@@ -32,7 +32,7 @@ DEPLOYED <- list(
   # with other tags in between (my first attempt) failed the check even though
   # every token was present, because the check is on the literal filename
   # remainder, not on token membership.
-  stamp = "2026-09-20 wac_coast_0904_full2_altitude_banded_noroad_refit_ss080 (corpus to 2026-09-13; sigma_context x0.8, ctxsd strip4fam evparams5, debias OFF, blend OFF)",
+  stamp = "2026-10-31 wac_coast_0904_full2_altitude_banded_noroad_refit1031_ss080 (corpus to 2026-10-25, catalogue tiers ed80109b; sigma_context x0.8, ctxsd strip4fam evparams5, debias OFF, blend OFF; thin_blend E + page_rank ON 2026-11-10)",
 
   # HISTORY -- what the model learns from.
   # The corpus is worth 10-50x every parameter change of the week combined:
@@ -161,7 +161,20 @@ DEPLOYED <- list(
   # +1.27%). Not re-measured on the refit itself. Evidence:
   # docs/reviews/sigma-scale-arm-2026-09-19.md. Reversible: name the `_refit`
   # file and drop `_ss080` from the stamp.
-  calibration = "calibration_corpus_wac_coast_0904_full2_altitude_banded_noroad_refit_ss080.rds",
+  #
+  # PROMOTED 2026-10-31 (Pete, "go"): `_refit1031_ss080` is the same
+  # composition refitted on 33,955 meets to 2026-10-25 and on the republished
+  # catalogue (citiusdata#54: 6 Diamond-League-named E/F meets T1 -> T3), then
+  # the same x0.8 (recipe checked: it rebuilds `_refit_ss080` from `_refit`
+  # exactly). Unscaled refit vs the 09-20 `_refit`, both scored on today's
+  # 60-meet M1 pool (324 races): gold Brier -0.09% (p=0.044), medal -0.05%
+  # (p=0.025), marks MAE -0.001pp (p<0.0001, 5,464 rows), concordance +0.03pp
+  # (p=0.43); distance marks the one family worse (+0.0048pp, n=114). The
+  # pool is an evenly spaced sample of the meet list, so the control was
+  # re-run on today's list (bt_cache_refit_ctrl1031) -- the 09-20 cache scored
+  # different meets. Reversible: name the `_refit_ss080` file and restore the
+  # 2026-09-20 stamp.
+  calibration = "calibration_corpus_wac_coast_0904_full2_altitude_banded_noroad_refit1031_ss080.rds",
 
   # AGING -- the blended curve, adopted 2026-07-29.
   aging = "aging.rds",
@@ -430,6 +443,69 @@ DEPLOYED <- list(
                "AT-5000Metres-M", "AT-10000Metres-M"),
     link_days = 1825L,
     link_athletes = 25000L
+  ),
+
+  # THIN-RECORD ADJUSTMENT, "version C". FAILED the championship backtest
+  # 2026-11-09 (2025+ R1 races: concordance -1.33, CI -2.58 to -0.14; DECISIONS
+  # 2026-11-09) and stays OFF; kept only as the measured negative result. Its
+  # successor is version E (CITIUS_THIN_BLEND in backtest_athletics.R), not this.
+  # An athlete with a thin recent record is shrunk towards the mean of EVERYONE
+  # in the event, so an inactive star reads as a club runner (Kipyegon 4:08.1
+  # against 13 races at 3:48-4:04). C keeps the shrinkage weight but pulls
+  # towards the athlete's own record (half-lives x hl_mult), then adds a measured
+  # offset by days since the last result. Measured on the 6 events below only
+  # (diagnostics/backtest_thin_record_prior.R, verdict on 2025 cuts): marks
+  # error 2.250% -> 2.081%, concordance 67.296% -> 68.302%. The offsets file is
+  # fitted on 2024 cuts by fit_gap_offsets.R. Code: citius/R/thin_record.R.
+  # THIN-RECORD BLEND, "version E". PASSED the championship backtest 2026-11-10
+  # (719 M1 meets on R1 races; 2025+ marks error 1.480% -> 1.413%, CI -0.143 to
+  # -0.003; concordance flat; all-years concordance +0.58, CI +0.13 to +1.00;
+  # DECISIONS 2026-11-10). rating = a*recent + (1-a)*own record, no event-mean
+  # pull; recent = refit with half-lives x hr_mult, own record = refit at long_days.
+  # OFF until Pete's go AND the ratings-page availability rule
+  # (docs/plans/ratings-availability-2026-11-10.md): on its own it ranks athletes
+  # unraced for 12 months at the top. Code: citius::apply_record_blend().
+  thin_blend = list(
+    enabled = TRUE,   # LIVE 2026-11-10 (Pete's go; ITG #1181 on prod; checks: medal sums exact, finals = page top N)
+    events = c("AT-800Metres-M", "AT-800Metres-W", "AT-1500Metres-M",
+               "AT-1500Metres-W", "AT-5000Metres-M", "AT-5000Metres-W"),
+    hr_mult = 2,
+    kappa_mult = 0.5,
+    long_days = 365,
+    # Round weighting inside the two refits (tune_round_weights.R winner, Pete
+    # 2026-11-10): heats/quarters/semis x round_weight, a round the athlete WON x
+    # won_round_weight on top; finals x1. 1 / 1 = OFF (no weight column passed).
+    # Pending the championship arm (_run_thin_blend_rw_arm.ps1); measured winner 0.25 / 0.
+    round_weight = 1,
+    won_round_weight = 1
+  ),
+
+  # RATINGS-PAGE RANK (Pete 2026-11-10): the page ranks the thin_blend events by
+  #   page_score = ability - k * sqrt(sd_fit^2 + sd_avail^2)
+  # sd_fit: fitted uncertainty of the version E estimate (from blend_wR and days
+  #   since the athlete's last race in the event; model in sd_model, fitted on 2024
+  #   R1 racers by diagnostics/confident_rating.R, 2025 check: predicted 2.64% vs
+  #   observed 2.71% RMS error);
+  # sd_avail: sigma_between * (1 - 0.5^(days since last race in ANY event / avail_half_life))
+  #   -- availability as shrinkage, continuous, no cut-off (Pete: no cliffs).
+  # k and avail_half_life are CHOICES (absent athletes cannot be scored; see
+  # docs/reference/backtests.md rules 2-3); everything else is fitted. Forecasts
+  # and medal odds keep `ability`; this only orders the page.
+  page_rank = list(
+    events = c("AT-800Metres-M", "AT-800Metres-W", "AT-1500Metres-M",
+               "AT-1500Metres-W", "AT-5000Metres-M", "AT-5000Metres-W"),
+    k = 1.5,
+    avail_half_life = 365,
+    sd_model = "confident_rating_sd_model.csv"
+  ),
+
+  thin_record = list(
+    enabled = FALSE,
+    events = c("AT-800Metres-M", "AT-800Metres-W", "AT-1500Metres-M",
+               "AT-1500Metres-W", "AT-5000Metres-M", "AT-5000Metres-W"),
+    hl_mult = 5,
+    min_shrinkage = 0,
+    gap_offsets = "gap_offsets_middle_distance.csv"
   )
 )
 Sys.setenv(CITIUS_MARKS_BLEND = as.character(DEPLOYED$marks_blend))
@@ -673,7 +749,82 @@ deployed_ability <- function(past, as_of, calibration,
       cli::cli_alert_info("neighbour_combine: 0 usable links this call; no rows adjusted.")
     }
   }
+  ab <- deployed_thin_record(ab, past, as_of, calibration, event_params)
+  ab <- deployed_thin_blend(ab, past, as_of, calibration, event_params)
   deployed_debias(ab, debias)
+}
+
+# Version E of the thin-record change (DEPLOYED$thin_blend): the one that passed
+# the championship backtest. A no-op unless enabled (in DEPLOYED or via `cfg`).
+# Same placement as version C: after neighbour_combine, before debias. Only the
+# configured events are touched; rows keep their order; blended rows get
+# shrinkage 0 (see citius::apply_record_blend()).
+deployed_thin_blend <- function(ab, past, as_of, calibration,
+                                event_params = deployed_event_params(),
+                                cfg = DEPLOYED$thin_blend) {
+  if (!isTRUE(cfg$enabled)) return(ab)
+  if (isTRUE(DEPLOYED$thin_record$enabled))
+    cli::cli_abort("DEPLOYED$thin_blend and DEPLOYED$thin_record are both enabled; they are alternatives.")
+  ab <- data.table::as.data.table(ab)
+  in_scope <- ab$event_id %in% cfg$events
+  if (!any(in_scope)) {
+    cli::cli_alert_info("thin_blend: no rows in its {length(cfg$events)} events; nothing changed.")
+    return(ab)
+  }
+  if (is.null(event_params)) cli::cli_abort("thin_blend needs event_params: hr_mult multiplies the per-event half-lives.")
+  ep <- data.table::as.data.table(event_params)
+  past_s <- data.table::as.data.table(past)[event_id %in% cfg$events]
+  rw <- if (is.null(cfg$round_weight)) 1 else cfg$round_weight
+  ww <- if (is.null(cfg$won_round_weight)) 1 else cfg$won_round_weight
+  wcol <- NULL
+  if (!(rw == 1 && ww == 1)) {
+    stopifnot(rw >= 0, rw <= 1, ww >= 0, ww <= 1)
+    rc <- .round_class(if ("round" %in% names(past_s)) past_s$round else NA_character_)
+    is_round <- rc %in% c("heat", "quarter", "semi")
+    won <- is_round & "place" %in% names(past_s) & !is.na(past_s$place) & past_s$place == 1
+    past_s[, .tb_w := 1][is_round, .tb_w := rw][won, .tb_w := .tb_w * ww]
+    wcol <- ".tb_w"
+  }
+  rec <- .deployed_ability_raw(past_s, as_of, calibration, data.table::copy(ep)[, half_life := half_life * cfg$hr_mult],
+                               weight_col = wcol)
+  lng <- .deployed_ability_raw(past_s, as_of, calibration,
+                               data.table::copy(ep)[event_id %in% cfg$events, half_life := cfg$long_days],
+                               weight_col = wcol)
+  part <- apply_record_blend(ab[in_scope], rec, lng, kappa_mult = cfg$kappa_mult)
+  out <- data.table::copy(ab)
+  stopifnot(nrow(part) == sum(in_scope))
+  out[in_scope, `:=`(ability = part$ability, shrinkage = part$shrinkage,
+                     blend_wR = part$blend_wR, blend_applied = part$blend_applied)]
+  out[]
+}
+
+# Version C of the thin-record change (DEPLOYED$thin_record). A no-op unless
+# enabled, either in DEPLOYED or by the caller passing `cfg` (the backtest arm).
+# Runs AFTER neighbour_combine and BEFORE debias, which is where the measured
+# prototype applied it (both were no-ops on the measured events: 0 rows moved).
+# Only the configured events are touched; every other row passes through.
+deployed_thin_record <- function(ab, past, as_of, calibration,
+                                 event_params = deployed_event_params(),
+                                 cfg = DEPLOYED$thin_record,
+                                 dir = here::here("citiusdata", "data")) {
+  if (!isTRUE(cfg$enabled)) return(ab)
+  ab <- data.table::as.data.table(ab)
+  in_scope <- ab$event_id %in% cfg$events
+  if (!any(in_scope)) {
+    cli::cli_alert_info("thin_record: no rows in its {length(cfg$events)} events; nothing changed.")
+    return(ab)
+  }
+  if (is.null(event_params)) cli::cli_abort("thin_record needs event_params: hl_mult multiplies the per-event half-lives.")
+  ep_long <- data.table::copy(data.table::as.data.table(event_params))[, half_life := half_life * cfg$hl_mult]
+  past_s <- data.table::as.data.table(past)[event_id %in% cfg$events]
+  long <- .deployed_ability_raw(past_s, as_of, calibration, ep_long)
+  off <- data.table::fread(file.path(dir, cfg$gap_offsets))
+  part <- apply_own_record_prior(ab[in_scope], long, min_shrinkage = cfg$min_shrinkage)
+  part <- apply_gap_offsets(part, as_of, off[, .(gap, offset)])
+  keep <- names(ab)
+  out <- data.table::rbindlist(list(ab[!in_scope], part[, ..keep]), use.names = TRUE)
+  stopifnot(nrow(out) == nrow(ab))
+  out[]
 }
 
 # One set of links per calendar year of `as_of` PER (calibration, config),
@@ -809,10 +960,20 @@ deployed_history_key <- function(past, dir = here::here("citiusdata", "data")) {
   files <- c(DEPLOYED$calibration, DEPLOYED$event_params, DEPLOYED$family_debias$file)
   files <- file.path(dir, files[!vapply(files, is.null, logical(1))])
   md5 <- unname(tools::md5sum(files[file.exists(files)]))
-  digest::digest(list(n = nrow(p), cols = cols,
-                      body = p[, cols, with = FALSE][order(athlete_id, event_id, date, perf)],
-                      inputs = md5, neighbour = DEPLOYED$neighbour_combine,
-                      adjust_race = DEPLOYED$adjust_race))
+  key <- list(n = nrow(p), cols = cols,
+              body = p[, cols, with = FALSE][order(athlete_id, event_id, date, perf)],
+              inputs = md5, neighbour = DEPLOYED$neighbour_combine,
+              adjust_race = DEPLOYED$adjust_race)
+  # Thin-record switch: in the key ONLY when on, so every snapshot written with
+  # it off stays valid, while turning it on (or refitting the offsets file,
+  # hashed because fit_gap_offsets.R rewrites it in place) forces a re-estimate
+  # instead of serving the old numbers. Review finding, 2026-11-09.
+  tb <- DEPLOYED$thin_blend
+  if (isTRUE(tb$enabled)) key$thin_blend <- tb
+  tr <- DEPLOYED$thin_record
+  if (isTRUE(tr$enabled))
+    key$thin_record <- list(tr, unname(tools::md5sum(file.path(dir, tr$gap_offsets))))
+  digest::digest(key)
 }
 
 #' deployed_ability(), or the snapshot of the last identical call.
@@ -851,7 +1012,8 @@ deployed_ability_or_snapshot <- function(past, as_of, calibration, dir, meet, cu
   ab
 }
 
-.deployed_ability_raw <- function(past, as_of, calibration, event_params = deployed_event_params()) {
+.deployed_ability_raw <- function(past, as_of, calibration, event_params = deployed_event_params(),
+                                 weight_col = NULL) {
   hl_map <- DEPLOYED$hl_family
   # THE TABLE REPLACES THE FAMILY MAP, enforced here rather than trusted to a
   # comment. It already carries a half-life per event; leaving hl_family on top
@@ -883,8 +1045,10 @@ deployed_ability_or_snapshot <- function(past, as_of, calibration, dir, meet, cu
                                              !"peak_gamma" %in% names(event_params)) 0 else
                               event_params[, c("event_id", "family", "peak_gamma"), with = FALSE],
                             calibration = calibration,
-                            adjust_race = isTRUE(DEPLOYED$adjust_race)))
+                            adjust_race = isTRUE(DEPLOYED$adjust_race),
+                            weight_col = weight_col))
   }
+  if (!is.null(weight_col)) cli::cli_abort("weight_col is supported on the event_params path only (the per-family path has no measured round weighting).")
   reg_f <- data.table::as.data.table(citius_events()[, c("event_id", "family")])
   pf <- merge(data.table::as.data.table(past), reg_f, by = "event_id", all.x = TRUE)
   # `split()` DROPS rows whose grouping value is NA, silently. An event_id absent

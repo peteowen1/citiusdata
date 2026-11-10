@@ -10,7 +10,8 @@
 #     read side:
 #         https://github.com/<repo>/releases/download/<tag>/<file>
 #     (torp/R/load_utils.R:252)
-#   * upload with piggyback::pb_upload(), then VERIFY -- torp/R/load_data.R
+#   * upload without deleting first (safe_release_upload(), a temp name then a
+#     swap: scripts/_safe_release_upload.R), then VERIFY -- torp/R/load_data.R
 #     deliberately re-checks after upload rather than trusting a 2xx, because a
 #     success code does not prove the asset is retrievable.
 #
@@ -25,6 +26,17 @@
 #   Rscript citiusdata/scripts/publish_release.R            # validate + small files
 #   CITIUS_PUBLISH_ALL=1 Rscript ...                        # include the big corpus
 suppressMessages({library(piggyback); library(data.table)})
+# gh's OWN HTTP cache, a fourth caching layer beside the three described below.
+# gh >= 1.4 wraps every GET in httr2::req_cache(), and GitHub sends
+# Cache-Control: max-age=60, so the by-tag fetch that confirms each release
+# (PASS 1) was served again, unchanged, to the post-upload verify loop for up to
+# a minute -- the "listing lagged the upload" SIZE MISMATCH of 2026-10-14 and
+# the 2+4+8+16+16 s of re-reads that could not see the new asset. torp#271
+# measured it: a just-uploaded asset stayed absent from the gh-cached listing
+# for 56 s while an uncached read showed it at once. This script does nothing
+# else with gh, so turn the cache off for the whole run.
+options(gh_cache = FALSE)
+source(here::here("citiusdata", "scripts", "_safe_release_upload.R"))
 D <- here::here("citiusdata", "data")
 REPO <- "peteowen1/citiusdata"
 
@@ -130,7 +142,16 @@ for (a in todo) {
   p <- file.path(D, a$file)
   mb <- file.size(p) / 1048576
   cat(sprintf("uploading %-36s %7.1f MB -> %s ... ", a$file, mb, a$tag))
-  piggyback::pb_upload(p, repo = REPO, tag = a$tag, overwrite = TRUE)
+  # Never delete before replacing: upload under a temp name, confirm, swap
+  # (scripts/_safe_release_upload.R). An error leaves the published copy as it
+  # was; record it and let the verify below and the closing stop() report it.
+  up_err <- tryCatch({ safe_release_upload(p, repo = REPO, tag = a$tag); NULL },
+                     error = function(e) conditionMessage(e))
+  if (!is.null(up_err)) {
+    cat("FAILED -", up_err, "\n")
+    failed <- c(failed, a$file)
+    next
+  }
 
   # VERIFY WITH AN INDEPENDENT SOURCE. torp re-checks after upload because a
   # success code does not prove the asset is retrievable -- but the first

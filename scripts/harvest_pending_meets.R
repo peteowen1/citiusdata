@@ -42,33 +42,113 @@ TAG <- Sys.getenv("CITIUS_HARVEST_TAG", "pending-harvest")
 REPO <- "peteowen1/citiusdata"
 PUBLISH <- nzchar(Sys.getenv("CITIUS_HARVEST_PUBLISH", ""))
 
-cal <- fread(file.path(D, "athletics_calendar.csv"))
-cal[, date_end := as.Date(date_end)]
-
 forced <- strsplit(Sys.getenv("CITIUS_HARVEST_MEETS", ""), ",")[[1]]
 forced <- trimws(forced[nzchar(forced)])
 
 if (length(forced)) {
+  cal <- fread(file.path(D, "athletics_calendar.csv"))
   pending <- cal[meet_id %in% forced]
 } else {
-  done <- cal[!is.na(date_end) & date_end < Sys.Date()]
-  # "Not yet in our data" means absent from the catalogue, which is built FROM
-  # championship_results.rds -- so catalogue membership is the honest proxy for
-  # "this meet has been appended". Checking the corpus directly would be the
-  # same answer one rebuild later.
-  f_ctl <- file.path(D, "competition_catalogue.parquet")
-  if (!file.exists(f_ctl)) {
-    cli_abort("No competition_catalogue.parquet; cannot tell which meets are already in.")
+  # DISCOVERY IS THE WA CALENDAR, NOT OUR OWN CATALOGUE. This used to look for
+  # completed meets in athletics_calendar.csv that were absent from the
+  # catalogue. Both are blind to anything nobody has added: the csv is hand-
+  # maintained and the catalogue is built FROM the harvested history, so once
+  # the corpus stopped (2026-10-11) the catalogue stopped at the same date and
+  # every run printed "Nothing pending" while 105 meets since then (of 118 the
+  # WA calendar lists with results and we do not hold) sat unfetched. Freshness
+  # went red on 10-22; this job stayed green. The WA calendar is the one source
+  # that knows a meet happened without us having to have seen it first.
+  LOOKBACK <- as.integer(Sys.getenv("CITIUS_HARVEST_LOOKBACK_DAYS", "21"))
+  if (is.na(LOOKBACK) || LOOKBACK < 1L) {
+    cli_abort("CITIUS_HARVEST_LOOKBACK_DAYS must be a positive whole number of days.")
   }
+
+  # "Held" is the union of the corpus and the catalogue. The catalogue is built
+  # from championship_results.rds, so a meet appended today is in the corpus
+  # before it is in the catalogue; checking either alone would re-stage it.
+  # A MISSING INPUT IS AN ERROR, not an empty set: an empty `have` would make
+  # every meet in the window look pending, and an unreadable one would hide
+  # what is already held.
   suppressMessages(library(arrow))
-  have <- as.character(as.data.table(
-    arrow::read_parquet(f_ctl, col_select = "competition_id"))$competition_id)
-  done[, cid := as.character(wa_competition_id)]
-  pending <- done[!cid %in% have]
+  read_ids <- function(f, label) {
+    if (!file.exists(f)) cli_abort("{.file {basename(f)}} is absent; cannot tell which meets are already held.")
+    ids <- tryCatch(
+      as.character(as.data.table(arrow::read_parquet(f, col_select = "competition_id"))$competition_id),
+      error = function(e) cli_abort("Could not read competition_id from {.file {basename(f)}}: {conditionMessage(e)}"))
+    ids <- unique(ids[!is.na(ids)])
+    if (!length(ids)) cli_abort("{label} holds no competition ids; refusing to treat that as 'nothing held'.")
+    cli_alert_info("{label}: {length(ids)} competition id{?s} held")
+    ids
+  }
+  have <- union(
+    read_ids(file.path(D, "athletics_corpus.parquet"), "athletics_corpus"),
+    read_ids(file.path(D, "competition_catalogue.parquet"), "competition_catalogue"))
+
+  from <- Sys.Date() - LOOKBACK
+  cli_alert_info("Fetching the WA calendar {as.character(from)} .. {as.character(Sys.Date())}")
+  # A FAILED OR PARTIAL CALENDAR FETCH MUST NOT READ AS "NOTHING PENDING". An
+  # error, a WAF interstitial (HTTP 200 with no payload, attr fetch_ok FALSE),
+  # a pagination that did not finish (attr complete FALSE) and a zero-row answer
+  # for a 21-day window are all indistinguishable from a quiet fortnight if
+  # they are allowed to fall through to the check below. Each stops the run
+  # non-zero instead, so the workflow goes red.
+  wa <- tryCatch(athletics_calendar_all(start_date = from, end_date = Sys.Date()),
+                 error = function(e) cli_abort("WA calendar fetch failed: {conditionMessage(e)}"))
+  if (is.null(wa) || !nrow(wa)) {
+    cli_abort("WA calendar returned no meets for {as.character(from)} .. {as.character(Sys.Date())}; treating that as a failed fetch, not a quiet fortnight.")
+  }
+  if (!isTRUE(attr(wa, "complete"))) {
+    cli_abort("WA calendar pagination did not complete; the list is truncated, so 'nothing pending' cannot be trusted.")
+  }
+  if (identical(attr(wa, "fetch_ok"), FALSE)) {
+    cli_abort("WA calendar fetch unconfirmed (WAF/interstitial?); refusing to trust it.")
+  }
+  wa <- as.data.table(wa)
+  need <- c("competition_id", "has_results")
+  if (length(miss <- setdiff(need, names(wa)))) {
+    cli_abort("WA calendar is missing column{?s} {.field {miss}}; the harvest cannot tell which meets have results.")
+  }
+  cli_alert_info("WA calendar: {nrow(wa)} meet{?s}, {sum(wa$has_results %in% TRUE)} with results")
+
+  wa[, cid := as.character(competition_id)]
+  done <- unique(wa[has_results %in% TRUE & !is.na(cid)], by = "cid")
+  done <- done[!cid %in% have]
+  # Meets already staged in the release but not yet appended are not "held",
+  # yet re-fetching them every day would re-stage the whole backlog (~118 meets,
+  # ~18 min) on each run until someone appends. Skip them, as backfill_harvest.R
+  # does. A listing that fails is not fatal: re-fetching is slow but safe.
+  staged_ids <- tryCatch({
+    a <- vb_list_assets(REPO, TAG)$name
+    sub("^meet_([0-9]+)_raw_results\\.rds$", "\\1", grep("^meet_[0-9]+_raw_results\\.rds$", a, value = TRUE))
+  },
+  vb_error_absent = function(e) character(0),
+  error = function(e) {
+    cli_alert_warning("Could not list {TAG} ({conditionMessage(e)}); already-staged meets will be re-fetched.")
+    character(0)
+  })
+  # EXCEPT recent meets. The calendar gives only start_date, so a multi-day meet
+  # can carry has_results after day 1 and be staged part-done; skipping it from
+  # then on would leave the append step a truncated file. Meets that started
+  # within REFRESH days are re-fetched every run, and the publish replaces the
+  # staged copy with the fuller one.
+  REFRESH <- as.integer(Sys.getenv("CITIUS_HARVEST_REFRESH_DAYS", "7"))
+  if (is.na(REFRESH) || REFRESH < 0L) {
+    cli_abort("CITIUS_HARVEST_REFRESH_DAYS must be a whole number of days, 0 or more.")
+  }
+  if (length(staged_ids)) {
+    settled <- done$cid %in% staged_ids & as.Date(done$start_date) < Sys.Date() - REFRESH
+    cli_alert_info("{TAG}: {sum(done$cid %in% staged_ids)} meet{?s} already staged; skipping {sum(settled)} that started over {REFRESH} days ago")
+    done <- done[!settled]
+  }
+  # meet_<id> is the name append_meet_to_championship_results.R looks for first
+  # (RAW_F), so a staged calendar meet is picked up by its competition id with
+  # no renaming step.
+  pending <- done[, .(meet_id = paste0("meet_", cid), wa_competition_id = cid,
+                      name = if ("name" %in% names(done)) name else NA_character_)]
 }
 
 if (!nrow(pending)) {
-  cli_alert_success("Nothing pending -- every completed meet is already in the catalogue.")
+  cli_alert_success("Nothing pending -- every completed meet in the WA calendar window is already held.")
   quit(status = 0)
 }
 cli_alert_info("{nrow(pending)} meet{?s} pending: {.val {pending$meet_id}}")

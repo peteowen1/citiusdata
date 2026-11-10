@@ -137,6 +137,45 @@ if (n_other_na > 0)
   say("NOTE: %s row(s) contain '|NA|' in race_key but did not match the expected repair shape -- left untouched, worth a look",
       format(n_other_na, big.mark = ","))
 
+# ---- blank race_key where a missing round merged several races (citiusdata#18)
+# The CAREER harvest builds race_key as `comp_name|discipline|round|date`, and
+# ~3.4% of its rows have no `round` in the source (a per-row scrape gap -- the
+# true round is not recoverable, so unlike #15 there is nothing to rebuild the
+# key from). With round gone, every heat and final of one event on one date
+# shares a single race_key. Where that group is bigger than one pool race can
+# be, the key is a merge of several real races, and the place-conflict guard in
+# form_ratings_swimming.R only catches it when the merged heats happen to repeat
+# a place number (185 of 556 such groups); the other 371 carry globally
+# sequential places and would be scored as one big race between athletes who
+# never met.
+# So blank the race_key on those rows. They stay in the corpus as individual
+# marks, exactly like the Swim England ranked lists: the mark-based ability path
+# (build_stores.R, predict_glasgow_pretournament.R) carries race_key without
+# filtering on it, so they still count there, with no race adjustment. The
+# head-to-head form ratings (form_ratings_swimming.R) drop rows with no race_key,
+# so they can no longer be paired against athletes they never raced. Groups of <=10 rows are
+# left alone: they cannot be told apart from a genuine single heat and blanking
+# them would throw away real race evidence.
+# Only career-shaped rows are considered (no competition_id, round NA, a key
+# already present); meet-harvest keys are heat-level and are not touched.
+MAX_ROUND_NA_FIELD <- 10L  # lanes in a pool race; larger => several races merged
+rna <- all$source == "worldaquatics" & is.na(all$round) &
+  is.na(all$competition_id) & !is.na(all$race_key)
+if (any(rna)) {
+  rna_n <- all[rna, .N, by = race_key]
+  big_keys <- rna_n[N > MAX_ROUND_NA_FIELD, race_key]
+  blank <- rna & all$race_key %chin% big_keys
+  say("round-NA career rows: %s in %s race_key group(s); %s group(s) larger than %d rows -> blanking race_key on %s row(s)",
+      format(sum(rna), big.mark = ","), format(nrow(rna_n), big.mark = ","),
+      format(length(big_keys), big.mark = ","), MAX_ROUND_NA_FIELD,
+      format(sum(blank), big.mark = ","))
+  all[blank, race_key := NA_character_]
+} else {
+  # Silence here would also be what a changed source shape looks like (career
+  # rows arriving with a competition_id), so say it.
+  say("round-NA career rows: none found (no worldaquatics rows with round, competition_id and race_key as expected) -- nothing blanked")
+}
+
 # ---- one identity ----------------------------------------------------------
 all[id2person, on = .(source, athlete_id), person_id := i.person_id]
 say("person_id resolved: %.1f%% (unresolved rows keep their source id and stay\n  separate people, which is the safe failure)",

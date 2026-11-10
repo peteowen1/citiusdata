@@ -19,6 +19,8 @@ suppressMessages(devtools::load_all(here::here("citius")))
 library(data.table); library(jsonlite); library(arrow)
 # Model inputs come from DEPLOYED, never from literals here. See _deployed.R.
 source(here::here("citiusdata", "scripts", "_deployed.R"))
+source(here::here("citiusdata", "scripts", "_merge_guards.R"))
+source(here::here("citiusdata", "scripts", "_display_names.R"))
 
 OUT     <- here::here("citiusdata", "data")
 BLOG    <- here::here("citiusdata", "blog")
@@ -45,7 +47,19 @@ if (!harvest_ok) {
   cli::cli_alert_warning("Live harvest failed or empty; falling back to saved results.")
   ath <- setDT(readRDS(file.path(OUT, "glasgow2026_results.rds")))
 } else {
-  saveRDS(ath, file.path(OUT, "glasgow2026_results.rds"))
+  # A live harvest can come back THIN without erroring: the day pages are
+  # fetched one by one and a failed day is only warned about. Never let that
+  # replace a fuller saved copy (citiusdata#37: 29 Jul and 1 Aug dropped, the
+  # export saved the 1,000-row result over 1,489 good rows, results stopped at
+  # 31 Jul). Races the live call lacks are kept from the saved copy, and said.
+  .saved_f <- file.path(OUT, "glasgow2026_results.rds")
+  .saved <- if (file.exists(.saved_f)) setDT(readRDS(.saved_f)) else NULL
+  ath <- citius_fuller_harvest(ath, .saved)
+  if (attr(ath, "from_saved") > 0L) {
+    cli::cli_alert_warning(
+      "Live harvest was thinner than the saved copy: kept {attr(ath, 'from_saved')} race{?s} from the saved results (dates rescued {paste(format(attr(ath, 'saved_dates')), collapse = ', ')}).")
+  }
+  citius_atomic_write(ath, .saved_f)
 }
 cli::cli_alert_info("Athletics: {nrow(ath)} result{?s}, {uniqueN(ath$race_key)} race{?s}.")
 
@@ -154,6 +168,12 @@ ent <- rbindlist(lapply(entries$rows, function(r) data.table(
   event = ev_names[r[[1]] + 1], nation = nz(r[[2]]), athlete = nz(r[[3]]))), fill = TRUE)
 normkey <- function(x) gsub("[^A-Z]", "", toupper(x))
 nat_lookup <- unique(ent[, .(key = normkey(athlete), nation)])[, .(nation = nation[1]), by = key]
+# Hand-checked fills for athletes the entry list misses, each with its source
+# (citiusdata#36). They only fill a gap: an entry-list nation is never replaced.
+nat_over <- fread(file.path(OUT, "nation_overrides.csv"), encoding = "UTF-8")
+nat_over[, key := normkey(athlete_name)]
+if (anyDuplicated(nat_over$key)) cli::cli_abort("{.file nation_overrides.csv} names an athlete twice.")
+nat_lookup <- rbind(nat_lookup, nat_over[!key %in% nat_lookup$key, .(key, nation)])
 
 add_nation <- function(d, name_col) {
   d[, .k := normkey(get(name_col))]
@@ -165,8 +185,19 @@ add_nation <- function(d, name_col) {
 }
 
 results <- add_nation(results, "athlete_name")
-miss <- results[is_final == TRUE & !is.na(place) & place <= 3L & is.na(nation), .N]
-if (miss) cli::cli_alert_warning("{miss} medallist{?s} still have no nation.")
+# A medallist with no nation is not a cosmetic gap: the medal tables group by
+# nation, so the medal lands in an NA row and the real country is short of it
+# (citiusdata#36: two silvers). Stop before anything is built or uploaded.
+miss <- results[is_final == TRUE & !is.na(place) & place >= 1L & place <= 3L & is.na(nation)]
+if (nrow(miss)) {
+  cli::cli_abort(c(
+    "x" = "{nrow(miss)} medallist{?s} have no nation, so the medal table would count them under NA.",
+    "i" = "Add each to {.file data/nation_overrides.csv} with a source for the nation, then re-run:",
+    stats::setNames(
+      sprintf("%s - place %d, %s (%s)", gsub("[{}]", "", miss$athlete_name), miss$place,
+              ifelse(is.na(miss$discipline), "unknown event", miss$discipline), miss$sex),
+      rep("*", nrow(miss)))))
+}
 
 # --- predictions -------------------------------------------------------------
 # TWO prediction sets, and conflating them would destroy the report card.
@@ -596,6 +627,33 @@ ratings <- deployed_ability(clean_all, as_of = AS_OF, calibration = calibration)
 ratings[, athlete_id := as.character(athlete_id)]
 ratings <- ratings[!is.na(last_date) & as.numeric(AS_OF - last_date) <= RATING_ACTIVE_DAYS]
 
+# --- page rank for the thin-record events (DEPLOYED$page_rank, Pete 2026-11-10) ---
+# page_score = ability - k * sqrt(sd_fit^2 + sd_avail^2). `ability` (the version E
+# best estimate) is unchanged and still drives the predicted mark, scales and medal
+# odds; page_score only ORDERS the page, so an athlete unraced for a long time sits
+# lower because we are less sure, not because we pretend they got slower. Continuous:
+# no cut-offs. Every other event: page_score = ability, page_sd = NA.
+PR <- DEPLOYED$page_rank
+ratings[, `:=`(page_score = ability, page_sd = NA_real_)]
+if (!is.null(PR) && isTRUE(DEPLOYED$thin_blend$enabled)) {
+  sdm <- fread(file.path(OUT, PR$sd_model)); sdb <- setNames(sdm$value, sdm$term)
+  need_terms <- c("(Intercept)", "log1p(gap/30)", "log(wR_2)", "scale")
+  if (!all(need_terms %in% names(sdb))) cli::cli_abort("{.file {PR$sd_model}} lacks terms {.val {setdiff(need_terms, names(sdb))}}.")
+  last_any <- clean_all[!is.na(date), .(last_any = max(date)), by = .(athlete_id = as.character(athlete_id))]
+  ratings[last_any, last_any := i.last_any, on = "athlete_id"]
+  pr_rows <- ratings$event_id %in% PR$events & is.finite(ratings$blend_wR) & ratings$blend_wR > 0
+  ratings[pr_rows, `:=`(
+    .sd_fit = sqrt(exp(sdb[["(Intercept)"]] + sdb[["log1p(gap/30)"]] * log1p(pmax(as.numeric(AS_OF - last_date), 0) / 30) +
+                       sdb[["log(wR_2)"]] * log(blend_wR))) * sdb[["scale"]],
+    .sd_av = sigma_between * (1 - 0.5^(pmax(as.numeric(AS_OF - last_any), 0) / PR$avail_half_life)))]
+  ratings[pr_rows, page_sd := sqrt(.sd_fit^2 + .sd_av^2)]
+  ratings[pr_rows & is.finite(page_sd), page_score := ability - PR$k * page_sd]
+  n_pr <- ratings[pr_rows & is.finite(page_sd), .N]
+  if (n_pr == 0L) cli::cli_abort("page_rank: 0 rows scored in its {length(PR$events)} events; check blend_wR / sigma_between.")
+  cli::cli_alert_info("page_rank: {n_pr} rows in {length(PR$events)} events ordered by ability - {PR$k} x sd (median sd {round(100 * median(ratings[pr_rows, page_sd], na.rm = TRUE), 2)}%).")
+  ratings[, intersect(c(".sd_fit", ".sd_av", "last_any"), names(ratings)) := NULL]
+}
+
 # Comparable scales, computed WITHIN event over the active population.
 ratings[, `:=`(z = (ability - mean(ability)) / stats::sd(ability),
                pct_best = 100 * exp(ability - max(ability))), by = event_id]
@@ -668,8 +726,65 @@ if (!is.null(wr)) {
 # say what the rank is out of, and pct/z stay honest because they were never
 # computed on the truncated set.
 RATING_TOP_N <- 150L
-setorder(ratings, event_id, -ability)
+setorder(ratings, event_id, -page_score)
 ratings <- ratings[, head(.SD, RATING_TOP_N), by = event_id]
+
+# --- medal forecast (citius#5, DECIDED 2026-11-08, citiusverse DECISIONS) -----
+# For each event, today's best athletes go into ONE simulated final the same
+# size as that event's Paris 2024 final (Tokyo 2025 for the 35 km walks): 8 in
+# sprints/hurdles/800, 12 in the 1500m and field events, ~80 in the marathon.
+# p_gold sums to 1 and p_medal to 3 per event; athletes outside the final get
+# NA and the site shows nothing for them. The simulation is the package's own
+# simulate_event() + medal_probs() with a championship-final context, never
+# re-implemented here (the reason this was kept out of the export until now).
+# Final sizes come from data/medal_reference_fields.parquet (only its counts).
+# A missing file leaves both columns NA with a warning rather than failing the
+# whole page. Chances are comparable within an event, not across events: an
+# 80-runner marathon is flatter than an 8-runner sprint by construction.
+MEDAL_N_SIMS <- 10000L
+MEDAL_REF_F <- file.path(OUT, "medal_reference_fields.parquet")
+ratings[, `:=`(p_gold = NA_real_, p_medal = NA_real_, medal_final_size = NA_integer_)]
+if (!file.exists(MEDAL_REF_F)) {
+  cli::cli_alert_warning("{.file {basename(MEDAL_REF_F)}} missing: medal forecast columns left empty.")
+} else {
+  medal_sizes <- read_parquet(MEDAL_REF_F, col_select = "event_id")
+  medal_sizes <- as.data.table(medal_sizes)[, .(size_final = .N), by = event_id]
+  medal_done <- 0L
+  for (ev_m in intersect(medal_sizes$event_id, unique(ratings$event_id))) {
+    # size_final, not n: deployed_ability() returns a column called n, which
+    # would shadow it inside data.table brackets.
+    size_final <- medal_sizes[event_id == ev_m, size_final]
+    # The final is picked by PAGE ORDER (page_score; = ability outside the six
+    # thin-record events), so the medal odds agree with the ranking on the same
+    # page (Pete 2026-11-10): an athlete the page ranks 91st cannot carry a 19%
+    # gold chance. Each finalist is still simulated on `ability`, its best estimate.
+    field <- head(ratings[event_id == ev_m & is.finite(ability) & is.finite(sigma)][order(-page_score)], size_final)
+    if (nrow(field) < 4L) next
+    sim <- simulate_event(field, n_sims = MEDAL_N_SIMS, calibration = calibration,
+                          context = list(meet_tier = "M1", round_class = "final"), seed = 1L)
+    mp <- as.data.table(medal_probs(sim))[, .(athlete_id = as.character(athlete_id), p_gold, p_medal)]
+    # The sums are the whole point of the column: check them, don't assume.
+    # A bad event is left blank with a warning, never allowed to stop the
+    # 07:30 page build: a hard stop here would freeze the whole ratings page.
+    if (abs(sum(mp$p_gold) - 1) > 1e-6 || abs(sum(mp$p_medal) - min(3, nrow(mp))) > 1e-6) {
+      cli::cli_alert_warning("Medal forecast for {ev_m} left empty: gold sums to {sum(mp$p_gold)}, medals to {sum(mp$p_medal)}.")
+      next
+    }
+    idx <- which(ratings$event_id == ev_m)
+    hit <- match(ratings$athlete_id[idx], mp$athlete_id)
+    rows <- idx[!is.na(hit)]
+    if (length(rows) != nrow(mp)) {
+      cli::cli_alert_warning("Medal forecast for {ev_m} left empty: {nrow(mp)} simulated, {length(rows)} matched back to the ratings.")
+      next
+    }
+    set(ratings, i = rows, j = "p_gold", value = mp$p_gold[hit[!is.na(hit)]])
+    set(ratings, i = rows, j = "p_medal", value = mp$p_medal[hit[!is.na(hit)]])
+    set(ratings, i = rows, j = "medal_final_size", value = as.integer(size_final))
+    medal_done <- medal_done + 1L
+  }
+  cli::cli_alert_info(
+    "Medal forecast: {medal_done} event{?s} simulated ({MEDAL_N_SIMS} runs each); {sum(!is.na(ratings$p_medal))} rated athletes carry a chance.")
+}
 
 # NAMES COME FROM A SOURCE THAT HAS THEM.
 #
@@ -832,15 +947,32 @@ cli::cli_alert_info(
 RATING_COLS <- c("athlete_id", "athlete_name", "event_id", "sport", "discipline", "sex",
                  "ability", "ability_se", "z", "pct_best", "pct_wr", "pred_mark",
                  "mark_unit", "latest_mark", "latest_date", "sb_mark", "pb_mark",
-                 "n", "w_total", "n_event", "last_date")
+                 "n", "w_total", "n_event", "last_date",
+                 # medal forecast (citius#5): NA outside each event's simulated final
+                 "p_gold", "p_medal", "medal_final_size",
+                 # page order for the thin-record events (DEPLOYED$page_rank); = ability elsewhere
+                 "page_score", "page_sd")
 for (nm in setdiff(RATING_COLS, names(ratings))) ratings[, (nm) := NA]
 ratings <- ratings[, ..RATING_COLS]
 ratings[, `:=`(as_of = AS_OF, generated_at = NOW)]
-setorder(ratings, event_id, -ability)
+setorder(ratings, event_id, -page_score)
 cli::cli_alert_info(
   "Ratings: {nrow(ratings)} athlete-event row{?s} across {uniqueN(ratings$event_id)} event{?s}, as of {format(AS_OF)}.")
 
 # --- write + upload ----------------------------------------------------------
+# One display form for athlete names (citiusdata#55). The Games feeds write the
+# surname in capitals for most athletes and title case for the rest, so the same
+# person read "Edwin KURGAT" in the predictions and "Edwin Kurgat" in the
+# results. Done HERE, after every join above, because normkey()/athlete_key()
+# lookups were built on the raw strings and must keep seeing them. The raw form
+# is kept in a second column.
+pred[, athlete_raw := athlete][, athlete := citius_display_name(athlete)]
+results[, athlete_name_raw := athlete_name][, athlete_name := citius_display_name(athlete_name)]
+# The athlete page reads these two as well, so they get the same form; their
+# column lists (HIST_COLS, RATING_COLS) stay as they are, with no raw copy.
+hist[, athlete_name := citius_display_name(athlete_name)]
+ratings[, athlete_name := citius_display_name(athlete_name)]
+
 pred[, generated_at_export := NOW]
 results[, generated_at := NOW]
 

@@ -356,6 +356,15 @@ cat_of <- function(x) {
 .reclass <- cat0[meet_type == "unclassified" & !is.na(comp_name) & nzchar(comp_name)]
 if (nrow(.reclass)) {
   .newclass <- cat_of(.reclass$comp_name)
+  # Same guard as build_competition_catalogue.R: a Diamond League name on a meet
+  # whose every WA category code is E or F is not a DL meeting. Without it, the
+  # meets the base build just demoted would be re-promoted here by name.
+  if ("tier_codes" %chin% names(.reclass)) {
+    .tc <- .reclass$tier_codes
+    .low <- !is.na(.tc) & nzchar(.tc) &
+      vapply(strsplit(.tc, "/", fixed = TRUE), function(v) all(v %in% c("E", "F")), logical(1))
+    .newclass[.newclass == "diamond_league" & .low] <- "unclassified"
+  }
   .moved <- .newclass != "unclassified"
   cat(sprintf("
 reclassified %s of %s previously-unclassified named meets
