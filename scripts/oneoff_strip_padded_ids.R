@@ -53,7 +53,23 @@ if (file.exists(lf)) {
     setorder(nm, athlete_id, .was_padded)
     nm <- unique(nm, by = "athlete_id")[, .was_padded := NULL]
     cat(sprintf("athlete_name_lookup.rds: %s -> %s rows (backup %s)\n", n0, nrow(nm), bak))
-    saveRDS(nm, lf)
+    saveRDS(nm, paste0(lf, ".tmp")); stopifnot(file.rename(paste0(lf, ".tmp"), lf))
   } else cat("athlete_name_lookup.rds: no padded ids\n")
 }
-cat("Next: rebuild the corpus (build_athletics_corpus.R), then diagnostics/zero_padded_ids.R should report 0 twins.\n")
+# DuckDB keeps its own copy of championship_results, read FIRST by build_crosswalk.R,
+# build_competition_catalogue.R and the audits. Its sync only adds missing
+# competitions, so it never rewrites these rows: replace the table from the fixed
+# .rds (same call as bootstrap_citius_duckdb.R), then check rows and padding.
+# The pre-strip .rds backup above is enough to rebuild the table if this goes wrong.
+suppressMessages(devtools::load_all("C:/dev/citiusverse/citius", quiet = TRUE))
+ch <- setDT(readRDS(file.path(D, "championship_results.rds")))
+conn <- get_citius_db_connection()
+before_pad <- DBI::dbGetQuery(conn, "SELECT count(*) AS n FROM championship_results WHERE regexp_matches(CAST(athlete_id AS VARCHAR), '^0+[0-9]')")$n
+store_championship_results(conn, ch, mode = "replace")
+after <- DBI::dbGetQuery(conn, "SELECT count(*) AS n, count(*) FILTER (WHERE regexp_matches(CAST(athlete_id AS VARCHAR), '^0+[0-9]')) AS pad FROM championship_results")
+DBI::dbDisconnect(conn, shutdown = TRUE)
+cat(sprintf("citius.duckdb championship_results: padded rows %s -> %s; rows %s (rds %s)\n",
+            before_pad, after$pad, after$n, nrow(ch)))
+stopifnot(after$n == nrow(ch), after$pad == 0)
+
+cat("Next: rebuild the corpus (build_athletics_corpus.R) and the crosswalk (build_crosswalk.R); then diagnostics/zero_padded_ids.R should report 0 twins.\n")
