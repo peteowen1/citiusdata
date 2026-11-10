@@ -132,6 +132,19 @@ if (length(.dead))
 # `place` is in the key deliberately: a heat and a final on the same day at the
 # same mark are two performances, and they differ in place far more reliably than
 # in round (the career route's round labels are sparser).
+# ONE ID PER ATHLETE. Some WA url slugs zero-pad the numeric id ("014164603"),
+# which split 6,427 athletes into two (2026-11-10, diagnostics/zero_padded_ids.R).
+# Strip the padding BEFORE the dedupe, so the same performance under both forms
+# collapses to one row instead of being counted twice.
+.padded <- !is.na(all$athlete_id) & grepl("^0+[0-9]", all$athlete_id)
+say("zero-padded athlete ids: stripping %s row%s (%s id%s)",
+    format(sum(.padded), big.mark = ","), if (sum(.padded) == 1) "" else "s",
+    format(uniqueN(all$athlete_id[.padded]), big.mark = ","),
+    if (uniqueN(all$athlete_id[.padded]) == 1) "" else "s")
+all[.padded, athlete_id := sub("^0+(?=[0-9])", "", athlete_id, perl = TRUE)]
+if (any(grepl("^0[0-9]", all$athlete_id[!is.na(all$athlete_id)])))
+  stop("zero-padded athlete_id left after stripping -- check the id shapes.")
+
 before <- nrow(all)
 all[, mark_r := round(mark, 4)]
 # Keep the RICHEST row when a performance arrives twice. The competition route

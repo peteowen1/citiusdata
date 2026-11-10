@@ -336,6 +336,9 @@ if (!nrow(res)) {
 # catch -- but only after it has wasted a run.
 res[, athlete_id := sub(".*-(\\d+)$", "\\1", url_slug)]
 res[!grepl("^\\d+$", athlete_id), athlete_id := NA_character_]
+# Some slugs zero-pad the id ("...-014164603"); every other source writes
+# "14164603", so the padded form split 6,427 athletes in two (2026-11-10).
+res[, athlete_id := sub("^0+(?=[0-9])", "", athlete_id, perl = TRUE)]
 res[, place := suppressWarnings(as.integer(sub("\\.$", "", place_raw)))]
 
 # `event_id` MUST be the registry id ("AT-400Metres-M"), not WA's numeric event
