@@ -25,14 +25,37 @@ while ($true) {
   # is skipped, so the inputs are free. 'STOPPED' / '!!! stopping' = arm incomplete.
   $done = $tail -match 'ALL DONE \(incl\. vs E\)' -or $tail -match 'arm blend STOPPED' -or $tail -match '!!! '
   $bt = Get-CimInstance Win32_Process -Filter "name='Rscript.exe'" | Where-Object { $_.CommandLine -match 'backtest_athletics|compare_thin_record_arms|compare_arm_fingerprints' }
-  if ($done -and -not $bt) { break }
+  $armps = Get-CimInstance Win32_Process -Filter "name='powershell.exe'" | Where-Object { $_.CommandLine -match '_run_thin_blend_rw_arm' }
+  if ($done -and -not $bt -and -not $armps) { break }
   if ((Get-Date) -gt $deadline) { Say "GAVE UP waiting for the arm after 6 h"; exit 2 }
   Start-Sleep -Seconds 60
 }
-if ($tail -match 'arm blend STOPPED' -or $tail -match '!!! stopping') {
+$full = Get-Content $ARM -Raw
+if ($full -notmatch 'arm blend STOPPED: COMPLETE' -or $tail -match '!!! stopping') {
   Say "ARM DID NOT FINISH CLEANLY -- not touching its inputs; a session should look first"; exit 3
 }
-Say "arm finished; starting the fix"
+Say "arm finished"
+
+# THE COMPARE MUST RUN BEFORE THE REBUILD: compare_thin_record_arms.R joins the arm caches
+# (padded ids) to athletics_corpus_store on athlete_id, so after the rebuild the padded
+# athletes would silently drop out of the verdict. If the arm's own compare was skipped
+# (fingerprints differ on citius_git only: control 26d229a, arm a2e0c4c; the diff between
+# them is opt-in code the control never runs, checked 2026-11-10), run it here.
+if ($full -notmatch 'ALL DONE \(incl\. vs E\)') {
+  Say "arm compare was skipped; running it now (appended to the arm log)"
+  "--- compare run by _run_padded_id_fix.ps1 (citius_git differs; code diff checked) $(Get-Date -Format s) ---" | Out-File -Append -Encoding utf8 $ARM
+  foreach ($pair in @(@("bt_cache_thin_ctrl", "bt_cache_blendrw_on", "R1"), @("bt_cache_thin_ctrl", "bt_cache_blendrw_on", ""), @("bt_cache_blend_on", "bt_cache_blendrw_on", "R1"))) {
+    $env:CITIUS_TC_A = $pair[0]; $env:CITIUS_TC_B = $pair[1]
+    if ($pair[2]) { $env:CITIUS_TC_RACE = $pair[2] } else { Remove-Item "Env:\CITIUS_TC_RACE" -ErrorAction SilentlyContinue }
+    "--- compare $($pair[0]) vs $($pair[1]), race filter '$($pair[2])' $(Get-Date -Format s) ---" | Out-File -Append -Encoding utf8 $ARM
+    & Rscript "citiusdata\scripts\diagnostics\compare_thin_record_arms.R" 2>&1 | Out-File -Append -Encoding utf8 $ARM
+    if ($LASTEXITCODE -ne 0) { Say "compare $($pair[0]) vs $($pair[1]) exit $LASTEXITCODE -- STOPPED before the rebuild"; exit 4 }
+  }
+  Remove-Item "Env:\CITIUS_TC_A", "Env:\CITIUS_TC_B", "Env:\CITIUS_TC_RACE" -ErrorAction SilentlyContinue
+  "=== ALL DONE (compare by fix runner) $(Get-Date -Format s) ===" | Out-File -Append -Encoding utf8 $ARM
+  Say "compare done"
+}
+Say "starting the fix"
 
 $steps = @(
   @{ name = "oneoff_strip_padded_ids"; script = "citiusdata\scripts\oneoff_strip_padded_ids.R" },
