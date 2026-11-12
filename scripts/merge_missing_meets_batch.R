@@ -70,13 +70,23 @@ if (!length(ids)) { say("nothing to merge: every id is already in championship_r
 missing_files <- character(0)
 read_fail <- character(0)
 mapped <- vector("list", length(ids))
+n_renamed <- 0L
 for (i in seq_along(ids)) {
   cid <- ids[i]
   f <- file.path(D, paste0(cid, "_raw_results.rds"))
   if (!file.exists(f)) f <- file.path(D, paste0("meet_", cid, "_raw_results.rds"))
+  # ...and the September backfill's staging name (backfill_harvest.R), 2026-11-13.
+  if (!file.exists(f)) f <- file.path(D, "backfill", paste0("comp_", cid, ".rds"))
   if (!file.exists(f)) { missing_files <- c(missing_files, cid); next }
   h <- tryCatch(as.data.table(readRDS(f)), error = function(e) NULL)
   if (is.null(h) || !nrow(h)) { next }  # a genuinely empty meet is not an error
+  # Files staged before 2026-09-16 carry `tier` / `comp_ranking_category`, now
+  # `race_code` / `meet_code`: pure renames of the same WA fields (commits 57a0f9e,
+  # 147e64b; identical per-code counts on 300 merged meets, 18,097 rows, 2026-11-13).
+  if ("tier" %in% names(h) && !"race_code" %in% names(h)) {
+    setnames(h, "tier", "race_code"); n_renamed <- n_renamed + 1L
+    if ("comp_ranking_category" %in% names(h) && !"meet_code" %in% names(h)) setnames(h, "comp_ranking_category", "meet_code")
+  }
   m <- tryCatch(.map_harvest_to_championship(h, cid, D),
                 error = function(e) { cli::cli_warn("mapping failed for {cid}: {conditionMessage(e)}"); NULL })
   if (is.null(m)) { read_fail <- c(read_fail, cid); next }
@@ -85,6 +95,7 @@ for (i in seq_along(ids)) {
 if (length(missing_files)) say("WARNING: %d id%s had no raw file on disk (skipped): %s",
     length(missing_files), if (length(missing_files)==1) "" else "s",
     paste(head(missing_files, 10), collapse = ", "))
+if (n_renamed) say("renamed old-shape columns (tier -> race_code) in %d file%s", n_renamed, if (n_renamed == 1) "" else "s")
 if (length(read_fail)) cli::cli_abort("{length(read_fail)} meet{?s} failed the harvest->championship mapping -- fix before merging: {.val {read_fail}}")
 
 new <- rbindlist(Filter(Negate(is.null), mapped), fill = TRUE, use.names = TRUE)
