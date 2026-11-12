@@ -475,9 +475,12 @@ DEPLOYED <- list(
     # Round weighting inside the two refits (tune_round_weights.R winner, Pete
     # 2026-11-10): heats/quarters/semis x round_weight, a round the athlete WON x
     # won_round_weight on top; finals x1. 1 / 1 = OFF (no weight column passed).
-    # Pending the championship arm (_run_thin_blend_rw_arm.ps1); measured winner 0.25 / 0.
-    round_weight = 1,
-    won_round_weight = 1
+    # LIVE 0.5 / 0 from 2026-11-13 (Pete's go): the clean-split re-pick
+    # (tune_round_weights_cleansplit.R, 2024 targets capped at 2025-01-01) chose it,
+    # and its championship arm vs a same-data control (_run_thin_blend_on_postfix.ps1)
+    # gave R1 2025+ concordance +0.58 pp [+0.07, +1.06] over 152 races, marks n.s.
+    round_weight = 0.5,
+    won_round_weight = 0
   ),
 
   # RATINGS-PAGE RANK (Pete 2026-11-10): the page ranks the thin_blend events by
