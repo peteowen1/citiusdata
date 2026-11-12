@@ -28,15 +28,12 @@ MAXN <- as.integer(Sys.getenv("CITIUS_APPEND_MAX", "100000"))
 say <- function(...) { cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")),
                            sprintf(...), "\n", sep = ""); flush.console() }
 
-# Reuse the mapper from the single-meet script rather than copying it, so the
-# two cannot drift. Sourcing the whole file would run it, so the function is
-# extracted by line range -- a fixed region of our own repo, not external input.
-src <- readLines(file.path(VERSE, "citiusdata", "scripts",
-                           "append_meet_to_championship_results.R"))
-i0 <- grep("^\\.map_harvest_to_championship <- function", src)
-i1 <- grep("^# --- what championship_results\\.rds already holds", src)
-if (!length(i0) || !length(i1)) cli_abort("Could not locate the mapper; has the append script been restructured?")
-eval(parse(text = paste(src[i0:(i1 - 1)], collapse = "\n")))
+# Reuse the shared mapper rather than copying it, so the callers cannot drift.
+# It lives in its own file since 2026-09-17; this script used to cut it out of
+# append_meet_to_championship_results.R by line range and aborted once it moved
+# (found 2026-11-13).
+source(file.path(VERSE, "citiusdata", "scripts", "_map_harvest_to_championship.R"))
+if (!exists(".map_harvest_to_championship", inherits = FALSE)) cli_abort("_map_harvest_to_championship.R did not define .map_harvest_to_championship().")
 
 CH_F <- file.path(D, "championship_results.rds")
 say("loading championship_results.rds ...")
