@@ -59,10 +59,21 @@ say("mapping %s meets ...", format(length(files), big.mark = ","))
 bad <- character(0); why <- character(0)
 note_bad <- function(id, reason) { bad <<- c(bad, id); why <<- c(why, reason) }
 mapped <- vector("list", length(files))
+# OLD-SHAPE FILES. Meets staged before 2026-09-16 call the per-race WA code `tier`
+# (now `race_code`) and the meet-level one `comp_ranking_category` (now `meet_code`).
+# Both are pure renames of the same API fields (harvest_wa_results.R, commits
+# 57a0f9e and 147e64b), checked on data 2026-11-13: 300 already-merged backfill meets,
+# 18,097 rows, every meet's per-code count identical between file `tier` and stored
+# `race_code`. Renamed here, and counted in the log, rather than rewriting the files.
+n_renamed <- 0L
 for (k in seq_along(files)) {
   h <- tryCatch(as.data.table(readRDS(files[k])), error = function(e) conditionMessage(e))
   if (is.character(h)) { note_bad(cids[k], paste("read:", h)); next }
   if (!nrow(h)) { note_bad(cids[k], "zero rows"); next }
+  if ("tier" %in% names(h) && !"race_code" %in% names(h)) {
+    setnames(h, "tier", "race_code"); n_renamed <- n_renamed + 1L
+    if ("comp_ranking_category" %in% names(h) && !"meet_code" %in% names(h)) setnames(h, "comp_ranking_category", "meet_code")
+  }
   m <- tryCatch(.map_harvest_to_championship(h, cids[k], D), error = function(e) conditionMessage(e))
   if (is.character(m)) { note_bad(cids[k], paste("map:", m)); next }
   miss <- setdiff(need, names(m))
@@ -70,6 +81,7 @@ for (k in seq_along(files)) {
   mapped[[k]] <- m[, ..need]
   if (k %% 250 == 0) say("  mapped %s/%s", format(k, big.mark = ","), format(length(files), big.mark = ","))
 }
+say("old-shape files renamed tier -> race_code: %s of %s", format(n_renamed, big.mark = ","), format(length(files), big.mark = ","))
 mapped <- mapped[!vapply(mapped, is.null, logical(1))]
 if (length(bad)) {
   say("%s meet(s) could not be mapped and are SKIPPED. Reasons, by count:", length(bad))
