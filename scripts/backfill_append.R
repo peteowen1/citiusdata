@@ -28,15 +28,12 @@ MAXN <- as.integer(Sys.getenv("CITIUS_APPEND_MAX", "100000"))
 say <- function(...) { cat(sprintf("[%s] ", format(Sys.time(), "%H:%M:%S")),
                            sprintf(...), "\n", sep = ""); flush.console() }
 
-# Reuse the mapper from the single-meet script rather than copying it, so the
-# two cannot drift. Sourcing the whole file would run it, so the function is
-# extracted by line range -- a fixed region of our own repo, not external input.
-src <- readLines(file.path(VERSE, "citiusdata", "scripts",
-                           "append_meet_to_championship_results.R"))
-i0 <- grep("^\\.map_harvest_to_championship <- function", src)
-i1 <- grep("^# --- what championship_results\\.rds already holds", src)
-if (!length(i0) || !length(i1)) cli_abort("Could not locate the mapper; has the append script been restructured?")
-eval(parse(text = paste(src[i0:(i1 - 1)], collapse = "\n")))
+# Reuse the shared mapper rather than copying it, so the callers cannot drift.
+# It lives in its own file since 2026-09-17; this script used to cut it out of
+# append_meet_to_championship_results.R by line range and aborted once it moved
+# (found 2026-11-13).
+source(file.path(VERSE, "citiusdata", "scripts", "_map_harvest_to_championship.R"))
+if (!exists(".map_harvest_to_championship", inherits = FALSE)) cli_abort("_map_harvest_to_championship.R did not define .map_harvest_to_championship().")
 
 CH_F <- file.path(D, "championship_results.rds")
 say("loading championship_results.rds ...")
@@ -62,10 +59,21 @@ say("mapping %s meets ...", format(length(files), big.mark = ","))
 bad <- character(0); why <- character(0)
 note_bad <- function(id, reason) { bad <<- c(bad, id); why <<- c(why, reason) }
 mapped <- vector("list", length(files))
+# OLD-SHAPE FILES. Meets staged before 2026-09-16 call the per-race WA code `tier`
+# (now `race_code`) and the meet-level one `comp_ranking_category` (now `meet_code`).
+# Both are pure renames of the same API fields (harvest_wa_results.R, commits
+# 57a0f9e and 147e64b), checked on data 2026-11-13: 300 already-merged backfill meets,
+# 18,097 rows, every meet's per-code count identical between file `tier` and stored
+# `race_code`. Renamed here, and counted in the log, rather than rewriting the files.
+n_renamed <- 0L
 for (k in seq_along(files)) {
   h <- tryCatch(as.data.table(readRDS(files[k])), error = function(e) conditionMessage(e))
   if (is.character(h)) { note_bad(cids[k], paste("read:", h)); next }
   if (!nrow(h)) { note_bad(cids[k], "zero rows"); next }
+  if ("tier" %in% names(h) && !"race_code" %in% names(h)) {
+    setnames(h, "tier", "race_code"); n_renamed <- n_renamed + 1L
+    if ("comp_ranking_category" %in% names(h) && !"meet_code" %in% names(h)) setnames(h, "comp_ranking_category", "meet_code")
+  }
   m <- tryCatch(.map_harvest_to_championship(h, cids[k], D), error = function(e) conditionMessage(e))
   if (is.character(m)) { note_bad(cids[k], paste("map:", m)); next }
   miss <- setdiff(need, names(m))
@@ -73,6 +81,7 @@ for (k in seq_along(files)) {
   mapped[[k]] <- m[, ..need]
   if (k %% 250 == 0) say("  mapped %s/%s", format(k, big.mark = ","), format(length(files), big.mark = ","))
 }
+say("old-shape files renamed tier -> race_code: %s of %s", format(n_renamed, big.mark = ","), format(length(files), big.mark = ","))
 mapped <- mapped[!vapply(mapped, is.null, logical(1))]
 if (length(bad)) {
   say("%s meet(s) could not be mapped and are SKIPPED. Reasons, by count:", length(bad))

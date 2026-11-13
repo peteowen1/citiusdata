@@ -47,17 +47,12 @@ say("meets to repair: %s", paste(ids, collapse = ", "))
 
 # Reuse the mapper rather than copying it, so the two cannot drift.
 #
-# SAFETY of the eval() below: the text comes from a FIXED path inside this repo
-# (append_meet_to_championship_results.R), never from user input, the network or
-# any data file, and the line range is located by matching two literal anchors
-# that must both be present or the script aborts. source()ing the file instead
-# would execute the append itself, which is the one thing this script must not
-# do. Same pattern as backfill_append.R:34-39.
-src <- readLines(file.path(S, "append_meet_to_championship_results.R"))
-i0 <- grep("^\\.map_harvest_to_championship <- function", src)
-i1 <- grep("^# --- what championship_results\\.rds already holds", src)
-if (!length(i0) || !length(i1)) cli_abort("Could not locate the mapper.")
-eval(parse(text = paste(src[i0:(i1 - 1)], collapse = "\n")))
+# The shared mapper has its own file since 2026-09-17 and only defines the
+# function, so sourcing it runs no append. (This used to cut it out of
+# append_meet_to_championship_results.R by line range and aborted once it moved;
+# found 2026-11-13.)
+source(file.path(S, "_map_harvest_to_championship.R"))
+if (!exists(".map_harvest_to_championship", inherits = FALSE)) cli_abort("_map_harvest_to_championship.R did not define .map_harvest_to_championship().")
 
 ch <- readRDS(CH_F); setDT(ch)
 need <- names(ch)

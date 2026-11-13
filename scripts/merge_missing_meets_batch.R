@@ -50,6 +50,19 @@ if (length(bad)) cli::cli_abort("{length(bad)} line{?s} in {IDS_FILE} {?is/are} 
 ids <- unique(as.character(as.integer(ids)))
 say("target: %s competition_ids", format(length(ids), big.mark = ","))
 
+# --- rebuild chain: corpus -> catalogue -> stores, order is load-bearing -----
+run_chain <- function() {
+  say("=== build_athletics_corpus.R")
+  rc <- system2("Rscript", shQuote(file.path(VERSE, "citiusdata", "scripts", "build_athletics_corpus.R")))
+  if (!identical(rc, 0L)) cli::cli_abort("build_athletics_corpus.R exited {rc}; chain stopped. championship_results.rds is updated but athletics_corpus.rds is NOT.")
+  say("=== run_catalogue_chain.ps1 (9 steps)")
+  rc <- system2("powershell", c("-File", shQuote(file.path(VERSE, "citiusdata", "scripts", "run_catalogue_chain.ps1"))))
+  if (!identical(rc, 0L)) cli::cli_abort("run_catalogue_chain.ps1 exited {rc}; chain stopped before build_stores.R. New meets have NO meet_tier yet.")
+  say("=== build_stores.R")
+  rc <- system2("Rscript", shQuote(file.path(VERSE, "citiusdata", "scripts", "build_stores.R")))
+  if (!identical(rc, 0L)) cli::cli_abort("build_stores.R exited {rc}.")
+}
+
 # --- what championship_results.rds already holds ----------------------------
 CH_F <- file.path(D, "championship_results.rds")
 ch <- readRDS(CH_F)
@@ -64,19 +77,70 @@ if (length(already)) {
 # Without this an all-already-merged batch maps 0 rows and dies on the column
 # check below with "Batch is missing columns ...", which reads as a mapping bug
 # (2026-10-14: Brussels/Budapest, merged on 2026-09-17 but never published).
-if (!length(ids)) { say("nothing to merge: every id is already in championship_results.rds"); quit(status = 0) }
+# A merge whose chain then failed leaves the corpus older than championship_results.rds,
+# and every later run would see "nothing to merge" and stop green (review 2026-11-13).
+corpus_stale <- function() {
+  co <- file.path(D, "athletics_corpus.rds")
+  !file.exists(co) || file.mtime(co) < file.mtime(CH_F)
+}
+# Every "nothing to merge" exit goes through here, so a stale corpus is rebuilt
+# whichever way the batch ran dry (round-2 review 2026-11-13).
+quit_nothing <- function(msg) {
+  say(msg)
+  if (!DRY && !SKIP_CHAIN && corpus_stale()) {
+    say("...but athletics_corpus.rds is older than championship_results.rds: an earlier chain did not finish. Rebuilding.")
+    run_chain(); say("catch-up chain complete.")
+  }
+  quit(status = 0)
+}
+if (!length(ids)) quit_nothing("nothing to merge: every id is already in championship_results.rds")
+MIN_AGE <- as.integer(Sys.getenv("CITIUS_MERGE_MIN_AGE_DAYS", "0"))
+if (is.na(MIN_AGE) || MIN_AGE < 0L) cli::cli_abort("CITIUS_MERGE_MIN_AGE_DAYS must be a whole number of days, 0 or more.")
+.start_date <- function(x) {
+  old <- Sys.getlocale("LC_TIME"); on.exit(Sys.setlocale("LC_TIME", old), add = TRUE)
+  suppressWarnings(try(Sys.setlocale("LC_TIME", "C"), silent = TRUE))
+  x <- as.character(x)[1]
+  d <- suppressWarnings(as.Date(x, format = "%d %b %Y"))
+  if (is.na(d)) d <- suppressWarnings(as.Date(x, format = "%Y-%m-%d"))
+  d
+}
 
 # --- load every raw harvest file, map it, combine ----------------------------
 missing_files <- character(0)
 read_fail <- character(0)
 mapped <- vector("list", length(ids))
+n_renamed <- 0L
+empty <- character(0); held <- character(0); no_start <- character(0)
+src_n <- c(local = 0L, staged = 0L, backfill = 0L)
 for (i in seq_along(ids)) {
   cid <- ids[i]
-  f <- file.path(D, paste0(cid, "_raw_results.rds"))
-  if (!file.exists(f)) f <- file.path(D, paste0("meet_", cid, "_raw_results.rds"))
+  f <- file.path(D, paste0(cid, "_raw_results.rds")); src <- "local"
+  if (!file.exists(f)) { f <- file.path(D, paste0("meet_", cid, "_raw_results.rds")); src <- "staged" }
+  # ...and the September backfill's staging name (backfill_harvest.R), 2026-11-13.
+  if (!file.exists(f)) { f <- file.path(D, "backfill", paste0("comp_", cid, ".rds")); src <- "backfill" }
   if (!file.exists(f)) { missing_files <- c(missing_files, cid); next }
-  h <- tryCatch(as.data.table(readRDS(f)), error = function(e) NULL)
-  if (is.null(h) || !nrow(h)) { next }  # a genuinely empty meet is not an error
+  # A file that will not read is a failure, not an empty meet (review 2026-11-13: a
+  # truncated download used to vanish here without a line in the log).
+  h <- tryCatch(as.data.table(readRDS(f)), error = function(e) conditionMessage(e))
+  if (is.character(h)) { cli::cli_warn("could not read {.file {basename(f)}}: {h}"); read_fail <- c(read_fail, cid); next }
+  if (!nrow(h)) { empty <- c(empty, cid); next }  # a genuinely empty meet is not an error
+  # A meet that started within MIN_AGE days may still be re-staged fuller
+  # (harvest_pending_meets.R's REFRESH window), and once merged it is never revisited.
+  # An unreadable start date is NOT held: holding it would hold it every week, for ever.
+  # Same boundary as harvest_pending_meets.R (re-staged while start >= today - REFRESH).
+  if (MIN_AGE > 0L && "comp_start" %in% names(h)) {
+    st <- .start_date(h$comp_start)
+    if (is.na(st)) no_start <- c(no_start, cid)
+    else if (st >= Sys.Date() - MIN_AGE) { held <- c(held, cid); next }
+  }
+  src_n[[src]] <- src_n[[src]] + 1L
+  # Files staged before 2026-09-16 carry `tier` / `comp_ranking_category`, now
+  # `race_code` / `meet_code`: pure renames of the same WA fields (commits 57a0f9e,
+  # 147e64b; identical per-code counts on 300 merged meets, 18,097 rows, 2026-11-13).
+  if ("tier" %in% names(h) && !"race_code" %in% names(h)) {
+    setnames(h, "tier", "race_code"); n_renamed <- n_renamed + 1L
+    if ("comp_ranking_category" %in% names(h) && !"meet_code" %in% names(h)) setnames(h, "comp_ranking_category", "meet_code")
+  }
   m <- tryCatch(.map_harvest_to_championship(h, cid, D),
                 error = function(e) { cli::cli_warn("mapping failed for {cid}: {conditionMessage(e)}"); NULL })
   if (is.null(m)) { read_fail <- c(read_fail, cid); next }
@@ -85,9 +149,16 @@ for (i in seq_along(ids)) {
 if (length(missing_files)) say("WARNING: %d id%s had no raw file on disk (skipped): %s",
     length(missing_files), if (length(missing_files)==1) "" else "s",
     paste(head(missing_files, 10), collapse = ", "))
+say("files: %d local, %d staged, %d backfill | %d empty | %d held (started within %d days, merged next run): %s",
+    src_n[["local"]], src_n[["staged"]], src_n[["backfill"]], length(empty), length(held), MIN_AGE,
+    if (length(held)) paste(head(held, 10), collapse = ", ") else "-")
+if (length(no_start)) say("%d meet%s with no readable comp_start merged without the %d-day hold: %s",
+    length(no_start), if (length(no_start) == 1) "" else "s", MIN_AGE, paste(head(no_start, 10), collapse = ", "))
+if (n_renamed) say("renamed old-shape columns (tier -> race_code) in %d file%s", n_renamed, if (n_renamed == 1) "" else "s")
 if (length(read_fail)) cli::cli_abort("{length(read_fail)} meet{?s} failed the harvest->championship mapping -- fix before merging: {.val {read_fail}}")
 
 new <- rbindlist(Filter(Negate(is.null), mapped), fill = TRUE, use.names = TRUE)
+if (!nrow(new)) quit_nothing("nothing mapped to merge (all held, empty or missing)")
 say("mapped %s rows across %s meets", format(nrow(new), big.mark = ","), uniqueN(new$competition_id))
 
 # --- validate columns match exactly, not just "enough of them" --------------
@@ -95,6 +166,8 @@ need <- names(ch)
 missing_cols <- setdiff(need, names(new))
 if (length(missing_cols)) cli::cli_abort(
   "Batch is missing column{?s} {.field {missing_cols}} that championship_results.rds needs -- fix the mapping, do not fabricate them silently.")
+# Rows from events WA measures wind for, counted before the off-schema columns go.
+n_windy <- if ("with_wind" %in% names(new)) sum(new$with_wind %in% TRUE) else NA_integer_
 extra <- setdiff(names(new), need)
 if (length(extra)) { say("dropping columns not in championship_results.rds's schema: %s", paste(extra, collapse=", ")); new <- new[, ..need] } else { new <- new[, ..need] }
 
@@ -104,6 +177,13 @@ print(round(sort(cov), 3))
 # Same exempt list as append_meet_to_championship_results.R -- these are
 # genuinely absent from the direct-harvest API path, not a mapping bug.
 .exempt_zero <- c("comp_name", "comp_tier", "discipline_code", "value_raw", "birthdate_year_only")
+# An all-road (or all-throws) batch has no wind to record: WA flags every such row
+# with_wind = FALSE, so empty wind is then expected, not a mapping bug (2026-11-13:
+# three marathons, 87 rows, tripped this gate).
+if (isTRUE(n_windy == 0L)) {
+  say("no row in this batch is a wind-measured event (with_wind all FALSE); wind exempt from the empty-column gate")
+  .exempt_zero <- c(.exempt_zero, "wind")
+}
 zero <- names(cov)[cov == 0 & !(names(cov) %in% .exempt_zero)]
 if (length(zero)) cli::cli_abort(
   "column{?s} 100%% empty after mapping: {.field {zero}} -- fix the mapping rather than writing an empty column.")
@@ -169,17 +249,5 @@ tryCatch({
 
 if (SKIP_CHAIN) { say("CITIUS_MERGE_SKIP_CHAIN set -- stopping here."); quit(status = 0) }
 
-# --- rebuild chain: corpus -> catalogue -> stores, order is load-bearing -----
-say("=== build_athletics_corpus.R")
-rc <- system2("Rscript", shQuote(file.path(VERSE, "citiusdata", "scripts", "build_athletics_corpus.R")))
-if (!identical(rc, 0L)) cli::cli_abort("build_athletics_corpus.R exited {rc}; chain stopped. championship_results.rds is updated but athletics_corpus.rds is NOT.")
-
-say("=== run_catalogue_chain.ps1 (9 steps)")
-rc <- system2("powershell", c("-File", shQuote(file.path(VERSE, "citiusdata", "scripts", "run_catalogue_chain.ps1"))))
-if (!identical(rc, 0L)) cli::cli_abort("run_catalogue_chain.ps1 exited {rc}; chain stopped before build_stores.R. New meets have NO meet_tier yet.")
-
-say("=== build_stores.R")
-rc <- system2("Rscript", shQuote(file.path(VERSE, "citiusdata", "scripts", "build_stores.R")))
-if (!identical(rc, 0L)) cli::cli_abort("build_stores.R exited {rc}.")
-
+run_chain()
 say("chain complete. %s new competitions merged, corpus/catalogue/stores rebuilt.", uniqueN(new$competition_id))

@@ -193,6 +193,7 @@ cli::cli_alert_success("{nrow(q)} qualified slot{?s} across {uniqueN(q$event_id)
 # is an extraction, not a match: nothing is being guessed, so a failure here is
 # a real defect in the source, not an ambiguity to resolve.
 q[, athlete_id := sub("^.*-(\\d+)$", "\\1", url_slug)]
+q[, athlete_id := sub("^0+(?=[0-9])", "", athlete_id, perl = TRUE)]  # see harvest_wa_results.R
 bad <- q[is.na(url_slug) | !grepl("^\\d+$", athlete_id)]
 if (nrow(bad)) {
   print(bad[, .(athlete, event, url_slug)])

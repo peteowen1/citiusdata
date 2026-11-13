@@ -136,7 +136,10 @@ if (length(forced)) {
     cli_abort("CITIUS_HARVEST_REFRESH_DAYS must be a whole number of days, 0 or more.")
   }
   if (length(staged_ids)) {
-    settled <- done$cid %in% staged_ids & as.Date(done$start_date) < Sys.Date() - REFRESH
+    # A staged meet with no start_date is NOT settled: re-fetch it rather than let
+    # NA drop it from `done` silently (review 2026-11-10).
+    sd <- as.Date(done$start_date)
+    settled <- done$cid %in% staged_ids & !is.na(sd) & sd < Sys.Date() - REFRESH
     cli_alert_info("{TAG}: {sum(done$cid %in% staged_ids)} meet{?s} already staged; skipping {sum(settled)} that started over {REFRESH} days ago")
     done <- done[!settled]
   }

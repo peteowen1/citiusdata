@@ -50,6 +50,9 @@
   }
   out[, birthdate := .wa_date(birth_date)]
   out[, athlete_id := as.character(athlete_id)]
+  # Zero-padded WA ids ("014164603") are the same athlete as "14164603"; strip so
+  # championship_results.rds and the corpus share one form (2026-11-10).
+  out[, athlete_id := sub("^0+(?=[0-9])", "", athlete_id, perl = TRUE)]
   out[, sport := "Athletics"]
   out[, sex_code := gender]
   out[, comp_day := suppressWarnings(as.integer(day))]
