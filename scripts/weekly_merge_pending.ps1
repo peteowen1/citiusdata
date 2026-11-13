@@ -4,7 +4,8 @@
 # week because the daily harvest only STAGES meets and nobody ran the merge.
 #
 # Registered as the scheduled task "citius weekly merge" (Sundays 05:30, before the 07:30
-# blog refresh; the 13 Nov merge took 24 min). It SKIPS, logging why and exiting 0, when:
+# blog refresh; the 13 Nov merge took 24 min). It SKIPS, logging why (exit 0, but the second
+# skip in a row is a FAIL, exit 1), when:
 #   - a backtest or arm is running: the merge changes the corpus every backtest reads, and
 #     an arm whose data moves mid-run cannot be compared to its control;
 #   - under 7000 MB is free (the corpus build loads ~8M rows);
@@ -41,6 +42,8 @@ if ($busy) {
 $avail = $null
 try { $avail = (Get-Counter '\Memory\Available MBytes' -ErrorAction Stop).CounterSamples.CookedValue } catch { Skip "could not read free memory ($($_.Exception.Message))" }
 if ($avail -lt 7000) { Skip "only $avail MB free (need 7000)" }
+# Past the checks: this run is not a skip, so the skip streak ends here, whatever happens next.
+Remove-Item $SKIPS -ErrorAction SilentlyContinue
 
 # Fresh copies of every staged meet: a multi-day meet can be re-staged fuller later, so the
 # merge (CITIUS_MERGE_MIN_AGE_DAYS below) leaves meets that started within 7 days for next week.

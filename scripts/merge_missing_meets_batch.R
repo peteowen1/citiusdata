@@ -83,14 +83,17 @@ corpus_stale <- function() {
   co <- file.path(D, "athletics_corpus.rds")
   !file.exists(co) || file.mtime(co) < file.mtime(CH_F)
 }
-if (!length(ids)) {
-  say("nothing to merge: every id is already in championship_results.rds")
+# Every "nothing to merge" exit goes through here, so a stale corpus is rebuilt
+# whichever way the batch ran dry (round-2 review 2026-11-13).
+quit_nothing <- function(msg) {
+  say(msg)
   if (!DRY && !SKIP_CHAIN && corpus_stale()) {
     say("...but athletics_corpus.rds is older than championship_results.rds: an earlier chain did not finish. Rebuilding.")
     run_chain(); say("catch-up chain complete.")
   }
   quit(status = 0)
 }
+if (!length(ids)) quit_nothing("nothing to merge: every id is already in championship_results.rds")
 MIN_AGE <- as.integer(Sys.getenv("CITIUS_MERGE_MIN_AGE_DAYS", "0"))
 if (is.na(MIN_AGE) || MIN_AGE < 0L) cli::cli_abort("CITIUS_MERGE_MIN_AGE_DAYS must be a whole number of days, 0 or more.")
 .start_date <- function(x) {
@@ -107,7 +110,7 @@ missing_files <- character(0)
 read_fail <- character(0)
 mapped <- vector("list", length(ids))
 n_renamed <- 0L
-empty <- character(0); held <- character(0)
+empty <- character(0); held <- character(0); no_start <- character(0)
 src_n <- c(local = 0L, staged = 0L, backfill = 0L)
 for (i in seq_along(ids)) {
   cid <- ids[i]
@@ -123,9 +126,12 @@ for (i in seq_along(ids)) {
   if (!nrow(h)) { empty <- c(empty, cid); next }  # a genuinely empty meet is not an error
   # A meet that started within MIN_AGE days may still be re-staged fuller
   # (harvest_pending_meets.R's REFRESH window), and once merged it is never revisited.
+  # An unreadable start date is NOT held: holding it would hold it every week, for ever.
+  # Same boundary as harvest_pending_meets.R (re-staged while start >= today - REFRESH).
   if (MIN_AGE > 0L && "comp_start" %in% names(h)) {
     st <- .start_date(h$comp_start)
-    if (is.na(st) || st > Sys.Date() - MIN_AGE) { held <- c(held, cid); next }
+    if (is.na(st)) no_start <- c(no_start, cid)
+    else if (st >= Sys.Date() - MIN_AGE) { held <- c(held, cid); next }
   }
   src_n[[src]] <- src_n[[src]] + 1L
   # Files staged before 2026-09-16 carry `tier` / `comp_ranking_category`, now
@@ -146,11 +152,13 @@ if (length(missing_files)) say("WARNING: %d id%s had no raw file on disk (skippe
 say("files: %d local, %d staged, %d backfill | %d empty | %d held (started within %d days, merged next run): %s",
     src_n[["local"]], src_n[["staged"]], src_n[["backfill"]], length(empty), length(held), MIN_AGE,
     if (length(held)) paste(head(held, 10), collapse = ", ") else "-")
+if (length(no_start)) say("%d meet%s with no readable comp_start merged without the %d-day hold: %s",
+    length(no_start), if (length(no_start) == 1) "" else "s", MIN_AGE, paste(head(no_start, 10), collapse = ", "))
 if (n_renamed) say("renamed old-shape columns (tier -> race_code) in %d file%s", n_renamed, if (n_renamed == 1) "" else "s")
 if (length(read_fail)) cli::cli_abort("{length(read_fail)} meet{?s} failed the harvest->championship mapping -- fix before merging: {.val {read_fail}}")
 
 new <- rbindlist(Filter(Negate(is.null), mapped), fill = TRUE, use.names = TRUE)
-if (!nrow(new)) { say("nothing mapped to merge (all held, empty or missing)"); quit(status = 0) }
+if (!nrow(new)) quit_nothing("nothing mapped to merge (all held, empty or missing)")
 say("mapped %s rows across %s meets", format(nrow(new), big.mark = ","), uniqueN(new$competition_id))
 
 # --- validate columns match exactly, not just "enough of them" --------------
