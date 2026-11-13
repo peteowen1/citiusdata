@@ -12,7 +12,7 @@
 #   - another copy of this script or the merge script is already running.
 # A skipped week is caught up the next week: the merge takes every staged meet, not one week's.
 # Each merge writes a ~150 MB time-stamped rollback copy of championship_results.rds
-# (data/championship_results_premerge_missingmeets_*.rds). Nothing here deletes them.
+# (data/championship_results_premerge_missingmeets_*.rds); after a good run only the newest 3 are kept.
 #
 #   log: citiusdata\weekly_merge_log.txt
 $ErrorActionPreference = "Continue"
@@ -68,4 +68,8 @@ $ch = (Get-Item (Join-Path $D 'championship_results.rds')).LastWriteTime
 $co = (Get-Item (Join-Path $D 'athletics_corpus.rds')).LastWriteTime
 if ($co -lt $ch) { Say "FAIL: athletics_corpus.rds ($co) is older than championship_results.rds ($ch); the rebuild chain did not run"; exit 1 }
 Remove-Item $SKIPS -ErrorAction SilentlyContinue
+# Keep the newest 3 of the merge's own rollback copies (Pete 2026-11-13); only after a good run,
+# so a failed merge never costs a rollback point.
+$old = Get-ChildItem -Path $D -Filter 'championship_results_premerge_missingmeets_*.rds' | Sort-Object LastWriteTime -Descending | Select-Object -Skip 3
+foreach ($f in $old) { Remove-Item $f.FullName; Say "pruned rollback copy $($f.Name)" }
 Say "OK"
