@@ -73,7 +73,7 @@ for ($c = 1; $c -le $MAX_CHUNKS; $c++) {
   $now = (Get-ChildItem -Path $cacheDir -Filter "*.rds" -ErrorAction SilentlyContinue).Count
   "  chunk $c done: exit $rc, $now meets cached (was $prev)" | Out-File -Append -Encoding utf8 $LOG
   if ($rc -ne 0) { $reason = "Rscript exited $rc on chunk $c -- PARTIAL, not a stall"; break }
-  if ($now -eq $prev) { $stalled++; if ($stalled -ge 2) { $reason = "COMPLETE at $now meets"; break } } else { $stalled = 0 }
+  if ($now -eq $prev) { $stalled++; if ($stalled -ge 2) { $reason = if ($now -gt 0) { "COMPLETE at $now meets" } else { "no meets cached after 2 chunks -- PARTIAL (check CITIUS_BT_CACHE / the backtest log)" }; break } } else { $stalled = 0 }
   $prev = $now
 }
 "  control STOPPED: $reason" | Out-File -Append -Encoding utf8 $LOG
@@ -85,7 +85,11 @@ $env:CITIUS_TC_A = "bt_cache_blend_on_postfix"; $env:CITIUS_TC_B = "bt_cache_ble
 "--- compare (E vs E + 0.5/0), R1 races $(Get-Date -Format s) ---" | Out-File -Append -Encoding utf8 $LOG
 $env:CITIUS_TC_RACE = "R1"
 & Rscript "citiusdata\scripts\diagnostics\compare_thin_record_arms.R" 2>&1 | Out-File -Append -Encoding utf8 $LOG
+$rcR1 = $LASTEXITCODE
+if ($rcR1 -ne 0) { "!!! R1 compare exited $rcR1" | Out-File -Append -Encoding utf8 $LOG; exit 1 }
 "--- compare (E vs E + 0.5/0), every race $(Get-Date -Format s) ---" | Out-File -Append -Encoding utf8 $LOG
 Remove-Item "Env:\CITIUS_TC_RACE" -ErrorAction SilentlyContinue
 & Rscript "citiusdata\scripts\diagnostics\compare_thin_record_arms.R" 2>&1 | Out-File -Append -Encoding utf8 $LOG
-"=== ALL DONE $(Get-Date -Format s) (compare exit $LASTEXITCODE) ===" | Out-File -Append -Encoding utf8 $LOG
+$rcAll = $LASTEXITCODE
+"=== ALL DONE $(Get-Date -Format s) (compare exit $rcAll) ===" | Out-File -Append -Encoding utf8 $LOG
+if ($rcAll -ne 0) { exit 1 }

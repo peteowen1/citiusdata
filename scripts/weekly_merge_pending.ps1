@@ -21,26 +21,48 @@ $D   = "C:\dev\citiusverse\citiusdata\data"
 function Say([string]$m) { "[$(Get-Date -Format s)] $m" | Out-File -Append -Encoding utf8 $LOG }
 Say "START"
 
-$busy = Get-CimInstance Win32_Process -Filter "name='Rscript.exe' or name='powershell.exe'" |
-  Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match 'backtest_athletics|compare_thin_record_arms|compare_arm_fingerprints|_run_thin_|merge_missing_meets_batch|weekly_merge_pending|build_athletics_corpus|build_stores' }
-if ($busy) {
-  Say "SKIP: running job(s) that read or rebuild the corpus: $((($busy | ForEach-Object { ($_.CommandLine -split '\\')[-1] }) | Select-Object -Unique) -join '; ')"
-  exit 0
+$SKIPS = Join-Path $D 'weekly_merge_skips.txt'
+# A skip is fine once; skipping week after week is the silent freeze this job exists to
+# prevent (review 2026-11-13), so the second skip in a row fails loudly.
+function Skip([string]$why) {
+  $n = 1; if (Test-Path $SKIPS) { $n = 1 + [int](Get-Content $SKIPS -TotalCount 1) }
+  Set-Content -Path $SKIPS -Value $n
+  if ($n -ge 2) { Say "FAIL: skipped $n weeks running, latest because $why"; exit 1 }
+  Say "SKIP ($n in a row): $why"; exit 0
 }
-$avail = (Get-Counter '\Memory\Available MBytes').CounterSamples.CookedValue
-if ($avail -lt 7000) { Say "SKIP: only $avail MB free (need 7000)"; exit 0 }
 
-# Fresh copies of every staged meet: a multi-day meet can be re-staged fuller later.
+# Busy = any Rscript that reads or rebuilds the corpus, or ANY scripts\_run_*.ps1 runner:
+# arm runners sleep between chunks with no Rscript alive (review 2026-11-13).
+$busy = Get-CimInstance Win32_Process -Filter "name='Rscript.exe' or name='powershell.exe' or name='pwsh.exe'" |
+  Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match 'backtest_athletics|compare_thin_record_arms|compare_arm_fingerprints|scripts[^a-z]_run_|merge_missing_meets_batch|weekly_merge_pending|build_athletics_corpus|build_stores' }
+if ($busy) {
+  Skip "running job(s) that read or rebuild the corpus: $((($busy | ForEach-Object { ($_.CommandLine -split '[\\/]')[-1] }) | Select-Object -Unique) -join '; ')"
+}
+$avail = $null
+try { $avail = (Get-Counter '\Memory\Available MBytes' -ErrorAction Stop).CounterSamples.CookedValue } catch { Skip "could not read free memory ($($_.Exception.Message))" }
+if ($avail -lt 7000) { Skip "only $avail MB free (need 7000)" }
+
+# Fresh copies of every staged meet: a multi-day meet can be re-staged fuller later, so the
+# merge (CITIUS_MERGE_MIN_AGE_DAYS below) leaves meets that started within 7 days for next week.
 & gh release download pending-harvest --repo peteowen1/citiusdata --pattern 'meet_*_raw_results.rds' --dir $D --clobber 2>&1 | Out-File -Append -Encoding utf8 $LOG
 if ($LASTEXITCODE -ne 0) { Say "FAIL: gh release download exited $LASTEXITCODE; nothing merged"; exit 1 }
 $ids = Get-ChildItem -Path $D -Filter 'meet_*_raw_results.rds' | ForEach-Object { $_.Name -replace '^meet_', '' -replace '_raw_results\.rds$', '' }
-if (-not $ids) { Say "nothing staged"; exit 0 }
+if (-not $ids) { Say "nothing staged"; Remove-Item $SKIPS -ErrorAction SilentlyContinue; exit 0 }
 $ids | Set-Content -Encoding ascii (Join-Path $D 'pending_ids.txt')
 Say "$($ids.Count) staged ids (the merge skips those already in championship_results.rds)"
 
 Remove-Item Env:\CITIUS_MERGE_DRYRUN -ErrorAction SilentlyContinue
 Remove-Item Env:\CITIUS_MERGE_SKIP_CHAIN -ErrorAction SilentlyContinue
-& Rscript "citiusdata\scripts\merge_missing_meets_batch.R" pending_ids.txt 2>&1 | Out-File -Append -Encoding utf8 $LOG
+$env:CITIUS_MERGE_MIN_AGE_DAYS = "7"   # same window harvest_pending_meets.R re-stages within
+$out = Join-Path $env:TEMP "citius_weekly_merge_out.txt"
+& Rscript "citiusdata\scripts\merge_missing_meets_batch.R" pending_ids.txt 2>&1 | Out-File -Encoding utf8 $out
 $rc = $LASTEXITCODE
+Get-Content $out | Out-File -Append -Encoding utf8 $LOG
 if ($rc -ne 0) { Say "FAIL: merge_missing_meets_batch.R exited $rc (read the lines above; championship_results.rds may be updated with the corpus NOT rebuilt)"; exit 1 }
+if (Select-String -Path $out -Pattern 'DuckDB is now BEHIND' -Quiet) { Say "FAIL: the merge landed but citius.duckdb did not update (build_stores reads it)"; exit 1 }
+# The corpus must be at least as new as championship_results.rds, or the rebuild chain did not run.
+$ch = (Get-Item (Join-Path $D 'championship_results.rds')).LastWriteTime
+$co = (Get-Item (Join-Path $D 'athletics_corpus.rds')).LastWriteTime
+if ($co -lt $ch) { Say "FAIL: athletics_corpus.rds ($co) is older than championship_results.rds ($ch); the rebuild chain did not run"; exit 1 }
+Remove-Item $SKIPS -ErrorAction SilentlyContinue
 Say "OK"
