@@ -1,5 +1,6 @@
 # WEEKLY: merge every pending-harvest meet not yet in championship_results.rds, then
-# rebuild corpus -> catalogue -> stores (merge_missing_meets_batch.R's own chain).
+# rebuild corpus -> catalogue -> stores (merge_missing_meets_batch.R's own chain), then
+# publish corpus-data + catalogue-data (publish_release.R; CI's freshness check reads those).
 # Pete 2026-11-13: "weekly, auto-pausing", after live ratings sat frozen at 2026-11-06 for a
 # week because the daily harvest only STAGES meets and nobody ran the merge.
 #
@@ -12,7 +13,7 @@
 #   - another copy of this script or the merge script is already running.
 # A skipped week is caught up the next week: the merge takes every staged meet, not one week's.
 # Each merge writes a ~150 MB time-stamped rollback copy of championship_results.rds
-# (data/championship_results_premerge_missingmeets_*.rds). Nothing here deletes them.
+# (data/championship_results_premerge_missingmeets_*.rds); after a good run only the newest 3 are kept.
 #
 #   log: citiusdata\weekly_merge_log.txt
 $ErrorActionPreference = "Continue"
@@ -67,5 +68,24 @@ if (Select-String -Path $out -Pattern 'DuckDB is now BEHIND' -Quiet) { Say "FAIL
 $ch = (Get-Item (Join-Path $D 'championship_results.rds')).LastWriteTime
 $co = (Get-Item (Join-Path $D 'athletics_corpus.rds')).LastWriteTime
 if ($co -lt $ch) { Say "FAIL: athletics_corpus.rds ($co) is older than championship_results.rds ($ch); the rebuild chain did not run"; exit 1 }
+# Publish the rebuilt corpus + catalogue. citiusdata's CI freshness check reads the
+# corpus-data RELEASE, not this machine, so a merge that never publishes leaves CI red
+# ~10 days later (2026-11-17: release sat at 10 Nov while the local corpus was current).
+# publish_release.R uploads to a temp name, verifies, then swaps, and exits non-zero on
+# any failed verify; the parquet it uploads must be from this rebuild, not an older one.
+$pq = Join-Path $D 'athletics_corpus.parquet'
+if (-not (Test-Path $pq) -or (Get-Item $pq).LastWriteTime -lt $ch -or (Get-Item $pq).LastWriteTime -lt $co) { Say "FAIL: athletics_corpus.parquet is missing or older than championship_results.rds ($ch) or athletics_corpus.rds ($co); not publishing a stale corpus"; exit 1 }
+$env:CITIUS_PUBLISH_ALL = "1"
+$pub = Join-Path $env:TEMP "citius_weekly_publish_out.txt"
+& Rscript "citiusdata\scripts\publish_release.R" 2>&1 | Out-File -Encoding utf8 $pub
+$prc = $LASTEXITCODE
+Remove-Item Env:\CITIUS_PUBLISH_ALL -ErrorAction SilentlyContinue
+Get-Content $pub | Out-File -Append -Encoding utf8 $LOG
+if ($prc -ne 0) { Say "FAIL: publish_release.R exited $prc (the local corpus is rebuilt; the corpus-data release is NOT updated, so CI freshness will go red)"; exit 1 }
+Say "published corpus-data + catalogue-data"
 Remove-Item $SKIPS -ErrorAction SilentlyContinue
+# Keep the newest 3 of the merge's own rollback copies (Pete 2026-11-13); only after a good run,
+# so a failed merge never costs a rollback point.
+$old = Get-ChildItem -Path $D -Filter 'championship_results_premerge_missingmeets_*.rds' | Sort-Object LastWriteTime -Descending | Select-Object -Skip 3
+foreach ($f in $old) { Remove-Item $f.FullName; Say "pruned rollback copy $($f.Name)" }
 Say "OK"
