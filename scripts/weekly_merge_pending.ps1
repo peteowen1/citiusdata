@@ -74,7 +74,7 @@ if ($co -lt $ch) { Say "FAIL: athletics_corpus.rds ($co) is older than champions
 # publish_release.R uploads to a temp name, verifies, then swaps, and exits non-zero on
 # any failed verify; the parquet it uploads must be from this rebuild, not an older one.
 $pq = Join-Path $D 'athletics_corpus.parquet'
-if (-not (Test-Path $pq) -or (Get-Item $pq).LastWriteTime -lt $ch) { Say "FAIL: athletics_corpus.parquet is missing or older than championship_results.rds ($ch); not publishing a stale corpus"; exit 1 }
+if (-not (Test-Path $pq) -or (Get-Item $pq).LastWriteTime -lt $ch -or (Get-Item $pq).LastWriteTime -lt $co) { Say "FAIL: athletics_corpus.parquet is missing or older than championship_results.rds ($ch) or athletics_corpus.rds ($co); not publishing a stale corpus"; exit 1 }
 $env:CITIUS_PUBLISH_ALL = "1"
 $pub = Join-Path $env:TEMP "citius_weekly_publish_out.txt"
 & Rscript "citiusdata\scripts\publish_release.R" 2>&1 | Out-File -Encoding utf8 $pub
