@@ -10,7 +10,7 @@ Workflow: [`daily-harvest.yml`](https://github.com/peteowen1/citiusdata/blob/HEA
 
 One job, once a day. It finds every meet on the World Athletics calendar (last 21 days) that has results and is not already in our corpus or catalogue, fetches each one, and uploads the raw results to the pending-harvest release. How long it takes depends mostly on how many meets are pending that day (37 in the 24 Nov run) and on the upload. Only scheduled runs are counted.
 
-**What starts it, and what it starts:** GitHub's own schedule, 17:00 UTC (4am Sydney in summer); GitHub's cron is best-effort, so recent runs have started between about 7:30am and 2pm Sydney, 4 to 10 hours late. It can also be started by hand, naming meets to force and choosing whether to upload. Nothing reads what it publishes automatically.
+**What starts it, and what it starts:** GitHub's own schedule, 4am Sydney time in summer (3am in winter); GitHub's cron is best-effort, so recent runs have started between about 7:30am and 2pm Sydney, 4 to 10 hours late. It can also be started by hand, naming meets to force and choosing whether to upload. Nothing reads what it publishes automatically.
 
 ### The order jobs run in
 
