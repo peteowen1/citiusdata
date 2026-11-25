@@ -1,0 +1,302 @@
+{
+ "repo": "peteowen1/citiusdata",
+ "doc_path": "docs/PIPELINE.md",
+ "title": "citiusdata harvest pipeline",
+ "about": "What the daily athletics harvest does on GitHub Actions, in order, and how long each part takes: from asking World Athletics which recent meets have results we do not hold, to the fetched results waiting in the pending-harvest release. It stages results only. It never adds them to championship_results.rds, the corpus or the catalogue; that stays a deliberate step done by hand. Only the daily harvest is listed. meet-forecast.yml is left out because its last successful run was on 7 Sep 2026; daily-freshness.yml is a monitor.",
+ "newest_run_utc": "2026-11-24T03:05:54Z",
+ "newest_run_sydney": "24 Nov 2026, 2:05pm",
+ "pipelines": [
+  {
+   "name": "Daily harvest",
+   "workflow": "daily-harvest.yml",
+   "about": "One job, once a day. It finds every meet on the World Athletics calendar (last 21 days) that has results and is not already in our corpus or catalogue, fetches each one, and uploads the raw results to the pending-harvest release. How long it takes depends mostly on how many meets are pending that day (37 in the 24 Nov run) and on the upload. Only scheduled runs are counted.",
+   "triggers": "GitHub's own schedule, 4am Sydney time in summer (3am in winter); GitHub's cron is best-effort, so recent runs have started between about 7:30am and 2pm Sydney, 4 to 10 hours late. It can also be started by hand, naming meets to force and choosing whether to upload. Nothing reads what it publishes automatically.",
+   "median_s": 344.0,
+   "min_s": 260.0,
+   "max_s": 424.0,
+   "runs": [
+    {
+     "id": 45317081251,
+     "url": "https://github.com/peteowen1/citiusdata/actions/runs/45317081251",
+     "event": "schedule",
+     "branch": "dev",
+     "title": "Daily harvest",
+     "started_utc": "2026-11-24T03:05:54Z",
+     "started_sydney": "24 Nov 2026, 2:05pm",
+     "wall_s": 367.0,
+     "queued_s": 2.0
+    },
+    {
+     "id": 45076538758,
+     "url": "https://github.com/peteowen1/citiusdata/actions/runs/45076538758",
+     "event": "schedule",
+     "branch": "dev",
+     "title": "Daily harvest",
+     "started_utc": "2026-11-22T22:13:55Z",
+     "started_sydney": "23 Nov 2026, 9:13am",
+     "wall_s": 424.0,
+     "queued_s": 3.0
+    },
+    {
+     "id": 44954166418,
+     "url": "https://github.com/peteowen1/citiusdata/actions/runs/44954166418",
+     "event": "schedule",
+     "branch": "dev",
+     "title": "Daily harvest",
+     "started_utc": "2026-11-21T21:57:12Z",
+     "started_sydney": "22 Nov 2026, 8:57am",
+     "wall_s": 260.0,
+     "queued_s": 3.0
+    },
+    {
+     "id": 44832386001,
+     "url": "https://github.com/peteowen1/citiusdata/actions/runs/44832386001",
+     "event": "schedule",
+     "branch": "dev",
+     "title": "Daily harvest",
+     "started_utc": "2026-11-20T22:51:54Z",
+     "started_sydney": "21 Nov 2026, 9:51am",
+     "wall_s": 326.0,
+     "queued_s": 2.0
+    },
+    {
+     "id": 44636786272,
+     "url": "https://github.com/peteowen1/citiusdata/actions/runs/44636786272",
+     "event": "schedule",
+     "branch": "dev",
+     "title": "Daily harvest",
+     "started_utc": "2026-11-19T23:20:22Z",
+     "started_sydney": "20 Nov 2026, 10:20am",
+     "wall_s": 344.0,
+     "queued_s": 2.0
+    }
+   ],
+   "jobs": [
+    {
+     "name": "harvest",
+     "about": "Fetches the results of every recent completed meet we do not hold and stages them on the pending-harvest release",
+     "legs": 1,
+     "median_s": 344.0,
+     "min_s": 260.0,
+     "max_s": 424.0,
+     "leg_median_s": 344.0,
+     "slowest_leg_median_s": 344.0,
+     "runs_seen": 5,
+     "steps": [
+      {
+       "name": "Set up job",
+       "about": "GitHub starts the machine and downloads the actions this job uses",
+       "source": "builtin",
+       "median_s": 2.0,
+       "min_s": 2.0,
+       "max_s": 2.0,
+       "n": 5,
+       "of": 5
+      },
+      {
+       "name": "Check out citiusdata",
+       "about": "Downloads this repo (the harvest scripts and the data folder)",
+       "source": "config",
+       "median_s": 1.0,
+       "min_s": 1.0,
+       "max_s": 2.0,
+       "n": 5,
+       "of": 5
+      },
+      {
+       "name": "Check out citius",
+       "about": "Downloads the citius R package repo, which holds the World Athletics fetch code the scripts load",
+       "source": "config",
+       "median_s": 1.0,
+       "min_s": 1.0,
+       "max_s": 2.0,
+       "n": 5,
+       "of": 5
+      },
+      {
+       "name": "Mark the workspace root for here()",
+       "about": "Creates an empty .here file so the here package finds the right root folder",
+       "source": "config",
+       "median_s": 0.0,
+       "min_s": 0.0,
+       "max_s": 0.0,
+       "n": 5,
+       "of": 5
+      },
+      {
+       "name": "Setup R",
+       "about": "Installs R 4.5.0 (from the public package mirror)",
+       "source": "config",
+       "median_s": 31.0,
+       "min_s": 25.0,
+       "max_s": 37.0,
+       "n": 5,
+       "of": 5
+      },
+      {
+       "name": "Setup R dependencies",
+       "about": "Installs the R packages citius needs, plus devtools, here, cli, data.table, arrow, httr2, jsonlite, withr, piggyback and digest",
+       "source": "config",
+       "median_s": 47.0,
+       "min_s": 40.0,
+       "max_s": 49.0,
+       "n": 5,
+       "of": 5
+      },
+      {
+       "name": "Download the held-id inputs",
+       "about": "Downloads athletics_corpus.parquet (about 268 MB, from the corpus-data release) and competition_catalogue.parquet (from the catalogue-data release); together they are the list of competition ids we already hold. Fails the run if either download fails",
+       "source": "config",
+       "median_s": 5.0,
+       "min_s": 4.0,
+       "max_s": 8.0,
+       "n": 5,
+       "of": 5
+      },
+      {
+       "name": "Harvest pending meets",
+       "about": "Runs scripts/harvest_pending_meets.R: reads the held ids, fetches the World Athletics calendar for the last 21 days, picks meets with results that we do not hold (skipping ones already staged more than 7 days ago), fetches each with harvest_wa_results.R, then uploads the files to the pending-harvest release. Fails if the calendar fetch is incomplete, or if every meet failed",
+       "source": "config",
+       "median_s": 258.0,
+       "min_s": 180.0,
+       "max_s": 315.0,
+       "n": 5,
+       "of": 5
+      },
+      {
+       "name": "Collect the staged results",
+       "about": "Keeps the fetched *_raw_results.rds files and the harvest log as a downloadable bundle for 30 days, even if an earlier step failed",
+       "source": "config",
+       "median_s": 1.0,
+       "min_s": 1.0,
+       "max_s": 2.0,
+       "n": 5,
+       "of": 5
+      },
+      {
+       "name": "Post Setup R dependencies",
+       "about": "Clean-up for an earlier step (saves caches, removes credentials)",
+       "source": "builtin",
+       "median_s": 3.0,
+       "min_s": 0.0,
+       "max_s": 4.0,
+       "n": 5,
+       "of": 5
+      },
+      {
+       "name": "Post Check out citius",
+       "about": "Clean-up for an earlier step (saves caches, removes credentials)",
+       "source": "builtin",
+       "median_s": 1.0,
+       "min_s": 0.0,
+       "max_s": 1.0,
+       "n": 5,
+       "of": 5
+      },
+      {
+       "name": "Post Check out citiusdata",
+       "about": "Clean-up for an earlier step (saves caches, removes credentials)",
+       "source": "builtin",
+       "median_s": 0.0,
+       "min_s": 0.0,
+       "max_s": 0.0,
+       "n": 5,
+       "of": 5
+      },
+      {
+       "name": "Complete job",
+       "about": "GitHub closes the job and cleans up the machine",
+       "source": "builtin",
+       "median_s": 0.0,
+       "min_s": 0.0,
+       "max_s": 0.0,
+       "n": 5,
+       "of": 5
+      }
+     ],
+     "stages": {
+      "the stages of harvest_pending_meets.R": [
+       {
+        "name": "pending",
+        "median_s": 72.153987,
+        "min_s": 46.458736,
+        "max_s": 88.792608,
+        "n": 5
+       },
+       {
+        "name": "Summary",
+        "median_s": 0.007305,
+        "min_s": 0.006377,
+        "max_s": 0.012519,
+        "n": 5
+       },
+       {
+        "name": "Publishing to pending-harvest",
+        "median_s": 177.896088,
+        "min_s": 126.573836,
+        "max_s": 218.703029,
+        "n": 5
+       }
+      ]
+     },
+     "stage_notes": {
+      "the stages of harvest_pending_meets.R": "Each stage runs from its line in the log to the next one. The first part of the step (reading the held ids, fetching the calendar and choosing the pending meets, a few seconds) comes before the first line and is not timed here."
+     },
+     "stage_about": {
+      "pending": "From the log line \"N meets pending\": fetches each pending meet in turn (one World Athletics endpoint lookup and one results fetch per meet), saving a raw results file for each",
+      "Summary": "Prints how many meets were staged and how many failed",
+      "Publishing to pending-harvest": "Uploads the staged files to the pending-harvest release (runs to the end of the step)"
+     }
+    }
+   ],
+   "phases": [
+    {
+     "jobs": [
+      "harvest"
+     ],
+     "median_s": 344.0,
+     "min_s": 260.0,
+     "max_s": 424.0,
+     "slowest": "harvest",
+     "parallel": false
+    }
+   ],
+   "critical_path": [
+    "harvest"
+   ],
+   "slowest_steps": [
+    {
+     "job": "harvest",
+     "step": "Harvest pending meets",
+     "about": "Runs scripts/harvest_pending_meets.R: reads the held ids, fetches the World Athletics calendar for the last 21 days, picks meets with results that we do not hold (skipping ones already staged more than 7 days ago), fetches each with harvest_wa_results.R, then uploads the files to the pending-harvest release. Fails if the calendar fetch is incomplete, or if every meet failed",
+     "median_s": 258.0
+    },
+    {
+     "job": "harvest",
+     "step": "Setup R dependencies",
+     "about": "Installs the R packages citius needs, plus devtools, here, cli, data.table, arrow, httr2, jsonlite, withr, piggyback and digest",
+     "median_s": 47.0
+    },
+    {
+     "job": "harvest",
+     "step": "Setup R",
+     "about": "Installs R 4.5.0 (from the public package mirror)",
+     "median_s": 31.0
+    },
+    {
+     "job": "harvest",
+     "step": "Download the held-id inputs",
+     "about": "Downloads athletics_corpus.parquet (about 268 MB, from the corpus-data release) and competition_catalogue.parquet (from the catalogue-data release); together they are the list of competition ids we already hold. Fails the run if either download fails",
+     "median_s": 5.0
+    },
+    {
+     "job": "harvest",
+     "step": "Post Setup R dependencies",
+     "about": "Clean-up for an earlier step (saves caches, removes credentials)",
+     "median_s": 3.0
+    }
+   ]
+  }
+ ],
+ "warnings": []
+}

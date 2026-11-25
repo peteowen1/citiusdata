@@ -1,0 +1,51 @@
+{
+  "repo": "peteowen1/citiusdata",
+  "title": "citiusdata harvest pipeline",
+  "about": "What the daily athletics harvest does on GitHub Actions, in order, and how long each part takes: from asking World Athletics which recent meets have results we do not hold, to the fetched results waiting in the pending-harvest release. It stages results only. It never adds them to championship_results.rds, the corpus or the catalogue; that stays a deliberate step done by hand. Only the daily harvest is listed. meet-forecast.yml is left out because its last successful run was on 7 Sep 2026; daily-freshness.yml is a monitor.",
+  "runs": 5,
+  "pipelines": [
+    {
+      "name": "Daily harvest",
+      "workflow": "daily-harvest.yml",
+      "about": "One job, once a day. It finds every meet on the World Athletics calendar (last 21 days) that has results and is not already in our corpus or catalogue, fetches each one, and uploads the raw results to the pending-harvest release. How long it takes depends mostly on how many meets are pending that day (37 in the 24 Nov run) and on the upload. Only scheduled runs are counted.",
+      "triggers": "GitHub's own schedule, 4am Sydney time in summer (3am in winter); GitHub's cron is best-effort, so recent runs have started between about 7:30am and 2pm Sydney, 4 to 10 hours late. It can also be started by hand, naming meets to force and choosing whether to upload. Nothing reads what it publishes automatically.",
+      "select": {
+        "events": ["schedule"],
+        "require_jobs": ["^harvest$"]
+      },
+      "jobs": [
+        {
+          "name": "harvest",
+          "match": "^harvest$",
+          "about": "Fetches the results of every recent completed meet we do not hold and stages them on the pending-harvest release",
+          "steps": {
+            "Check out citiusdata": "Downloads this repo (the harvest scripts and the data folder)",
+            "Check out citius": "Downloads the citius R package repo, which holds the World Athletics fetch code the scripts load",
+            "Mark the workspace root for here()": "Creates an empty .here file so the here package finds the right root folder",
+            "Setup R": "Installs R 4.5.0 (from the public package mirror)",
+            "Setup R dependencies": "Installs the R packages citius needs, plus devtools, here, cli, data.table, arrow, httr2, jsonlite, withr, piggyback and digest",
+            "Download the held-id inputs": "Downloads athletics_corpus.parquet (about 268 MB, from the corpus-data release) and competition_catalogue.parquet (from the catalogue-data release); together they are the list of competition ids we already hold. Fails the run if either download fails",
+            "Harvest pending meets": "Runs scripts/harvest_pending_meets.R: reads the held ids, fetches the World Athletics calendar for the last 21 days, picks meets with results that we do not hold (skipping ones already staged more than 7 days ago), fetches each with harvest_wa_results.R, then uploads the files to the pending-harvest release. Fails if the calendar fetch is incomplete, or if every meet failed",
+            "Collect the staged results": "Keeps the fetched *_raw_results.rds files and the harvest log as a downloadable bundle for 30 days, even if an earlier step failed"
+          },
+          "log": {
+            "headers": [
+              {
+                "regex": "^(?:\\S+ \\d+ meets? |── )(?P<name>pending|Summary|Publishing to [A-Za-z-]+)\\b",
+                "label": "the stages of harvest_pending_meets.R"
+              }
+            ],
+            "about": {
+              "pending": "From the log line \"N meets pending\": fetches each pending meet in turn (one World Athletics endpoint lookup and one results fetch per meet), saving a raw results file for each",
+              "Summary": "Prints how many meets were staged and how many failed",
+              "Publishing to pending-harvest": "Uploads the staged files to the pending-harvest release (runs to the end of the step)"
+            }
+          },
+          "stage_notes": {
+            "the stages of harvest_pending_meets.R": "Each stage runs from its line in the log to the next one. The first part of the step (reading the held ids, fetching the calendar and choosing the pending meets, a few seconds) comes before the first line and is not timed here."
+          }
+        }
+      ]
+    }
+  ]
+}
